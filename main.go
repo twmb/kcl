@@ -1,19 +1,27 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
 	"github.com/twmb/kgo"
+	"github.com/twmb/kgo/kerr"
+	"github.com/twmb/kgo/kmsg"
 )
 
+func init()     { reinitTW() }
+func reinitTW() { tw = tabwriter.NewWriter(os.Stdout, 6, 4, 2, ' ', 0) }
+
 var (
-	tw = tabwriter.NewWriter(os.Stdout, 6, 4, 2, ' ', 0) // used for writing anything pretty
+	tw *tabwriter.Writer // used for nice output; init and reinit in util
 
 	reqTimeoutMillis int32 = 1000 // used for all requests, configurable by flag
+	asJSON           bool         // dump responses as JSON for commands that support it
 
 	client *kgo.Client // used for all requests
 
@@ -21,27 +29,13 @@ var (
 		Use:   "kcl",
 		Short: "Kafka Command Line command for commanding Kafka on the command line",
 	}
-
-	completionCmd = cobra.Command{
-		Use:   "autocomplete",
-		Short: "Generates bash completion scripts",
-		Long: `To load completion run
-
-. <(kcl autocomplete)
-
-To configure your bash shell to load completions for each session add to your bashrc
-
-# ~/.bashrc or ~/.profile
-. <(kcl autocomplete)
-`,
-		Run: func(_ *cobra.Command, _ []string) { root.GenBashCompletion(os.Stdout) },
-	}
 )
 
 func main() {
 	var seedBrokers []string
-	root.PersistentFlags().StringSliceVarP(&seedBrokers, "brokers", "b", []string{"127.0.0.1"}, "comma delimited list of seed brokers")
+	root.PersistentFlags().StringSliceVarP(&seedBrokers, "seed-brokers", "s", []string{"127.0.0.1"}, "comma delimited list of seed brokers")
 	root.PersistentFlags().Int32Var(&reqTimeoutMillis, "timeout-ms", 1000, "millisecond timeout for requests that have timeouts")
+	root.PersistentFlags().BoolVarP(&asJSON, "dump-json", "j", false, "dump response as json if supported")
 
 	cobra.OnInitialize(func() {
 		var err error
@@ -51,10 +45,74 @@ func main() {
 			os.Exit(1)
 		}
 	})
-	root.AddCommand(&completionCmd)
 
 	if err := root.Execute(); err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}
+}
+
+// requestor can either be a kgo.Client or kgo.Broker.
+type requestor interface {
+	Request(kmsg.Request) (kmsg.Response, error)
+}
+
+type kv struct{ k, v string }
+
+func parseKVs(in string) ([]kv, error) {
+	var kvs []kv
+	in = strings.TrimSpace(in)
+	if len(in) == 0 {
+		return nil, nil
+	}
+	for _, pair := range strings.Split(in, ",") {
+		if strings.IndexByte(pair, '=') == -1 {
+			return nil, fmt.Errorf("pair %q missing comma key,val delim", pair)
+		}
+		rawKV := strings.Split(pair, "=")
+		if len(rawKV) != 2 {
+			return nil, fmt.Errorf("pair %q contains too many commas", pair)
+		}
+		k, v := strings.TrimSpace(rawKV[0]), strings.TrimSpace(rawKV[1])
+		if len(k) == 0 || len(v) == 0 {
+			return nil, fmt.Errorf("pair %q contains an empty key or val", pair)
+		}
+		kvs = append(kvs, kv{k, v})
+	}
+	return kvs, nil
+}
+
+func maybeDie(err error, msg string, args ...interface{}) {
+	if err != nil {
+		die(msg, args...)
+	}
+}
+
+func die(msg string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, msg+"\n", args...)
+	os.Exit(1)
+}
+
+func dumpAndDie(d interface{}, msg string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, msg+"\n", args...)
+	dumpJSON(d)
+	os.Exit(1)
+}
+
+func dumpJSON(resp interface{}) {
+	out, err := json.MarshalIndent(resp, "", "  ")
+	maybeDie(err, "unable to json marshal response: %v", err)
+	fmt.Printf("%s\n", out)
+}
+
+func errAndMsg(code int16, msg *string) {
+	if err := kerr.ErrorForCode(code); err != nil {
+		additional := ""
+		if msg != nil {
+			additional = ": " + *msg
+		}
+		fmt.Fprintf(os.Stderr, "%s%s\n", err, additional)
+		return
+	}
+	fmt.Println("OK")
 }
