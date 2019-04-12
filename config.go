@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
 	"github.com/twmb/kgo"
 )
 
@@ -52,6 +53,43 @@ func init() {
 	cfg.SeedBrokers = []string{"localhost"}
 	cfg.TimeoutMillis = 1000
 }
+
+const configHelp = `kcl takes configuration options by default from $HOME/.config/kcl/config.toml.
+The config path can be set with --config-path, and --no-config (-Z) can be used
+to disable loading a config file entirely.
+
+To show the configuration that kcl is running with, run 'kcl misc dump-config'.
+
+The repeatable -X flag allows for specifying config options directly. Any flag
+set option has higher precedence over config file options.
+
+Options are described below, with examples being how they would look in a
+config.toml. Overrides generally look the same, but quotes can be dropped and
+arrays do not use brackets (-X foo=bar,baz).
+
+OPTIONS
+
+  seed_brokers=["localhost", "127.0.0.1:9092"]
+     An inital set of brokers to use for connecting to your Kafka cluster.
+
+  timeout_ms=1000
+     Timeout to use for any command that takes a timeout.
+
+  tls_ca_cert_path="/path/to/my/ca.cert"
+     Path to a CA cert to load and use for connecting to brokers over TLS.
+
+  tls_client_cert_path="/path/to/my/ca.cert"
+     Path to a client cert to load and use for connecting to brokers over TLS.
+     This must be paired with tls_client_key_path.
+
+  tls_client_key_path="/path/to/my/ca.cert"
+     Path to a client key to load and use for connecting to brokers over TLS.
+     This must be paired with tls_client_cert_path.
+
+  tls_server_name="127.0.0.1"
+     Server name to use for connecting to brokers over TLS.
+
+`
 
 func load() error {
 	if !noCfgFile {

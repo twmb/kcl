@@ -26,6 +26,7 @@ func miscCmd() *cobra.Command {
 	cmd.AddCommand(metadataCmd())
 	cmd.AddCommand(genAutocompleteCmd())
 	cmd.AddCommand(dumpCfgCmd())
+	cmd.AddCommand(helpCfgCmd())
 
 	return cmd
 }
@@ -100,6 +101,16 @@ func dumpCfgCmd() *cobra.Command {
 		Short: "dump the loaded configuration",
 		Run: func(_ *cobra.Command, _ []string) {
 			toml.NewEncoder(os.Stdout).Encode(cfg)
+		},
+	}
+}
+
+func helpCfgCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "help-config",
+		Short: "describe kcl config semantics",
+		Run: func(_ *cobra.Command, _ []string) {
+			fmt.Println(configHelp)
 		},
 	}
 }

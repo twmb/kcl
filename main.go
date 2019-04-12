@@ -25,6 +25,16 @@ var (
 	root = cobra.Command{
 		Use:   "kcl",
 		Short: "Kafka Command Line command for commanding Kafka on the command line",
+		Long: `Kafka Command Line command for commanding Kafka on the command line.
+
+kcl is a Kafka swiss army knife that aims to enable Kafka administration,
+message producing, and message consuming.
+
+For help about configuration, run 'kcl misc help-config'.
+
+To enable bash autocompletion, add '. <(kcl misc gen-autocomplete)'
+to your bash profile.
+`,
 	}
 )
 
