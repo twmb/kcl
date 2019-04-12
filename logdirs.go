@@ -48,7 +48,7 @@ func logdirsDescribeCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&topic, "topic", "t", "", "topic to describe the log dirs of; otherwise all topics")
-	cmd.Flags().Int32SliceVarP(&partitions, "partitions", "p", nil, "partitions within an individual topic to describe the logs dirs of")
+	cmd.Flags().Int32SliceVarP(&partitions, "partitions", "p", nil, "partitions within an individual topic to describe the logs dirs of (comma separated or repeated flag)")
 
 	return cmd
 }
@@ -85,7 +85,7 @@ func logdirsAlterReplicasCmd() *cobra.Command {
 
 	cmd.Flags().StringVarP(&destDir, "dest", "d", "", "destination directory to move a topic's partitions to")
 	cmd.Flags().StringVarP(&topic, "topic", "t", "", "topic whose partitions need moving")
-	cmd.Flags().Int32SliceVarP(&partitions, "partitions", "p", nil, "partitions to move")
+	cmd.Flags().Int32SliceVarP(&partitions, "partitions", "p", nil, "partitions to move (comma separated or repeated flag)")
 
 	return cmd
 }

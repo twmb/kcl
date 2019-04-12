@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
 
 	"github.com/twmb/kgo/kerr"
@@ -24,6 +25,7 @@ func miscCmd() *cobra.Command {
 	cmd.AddCommand(code2errCmd())
 	cmd.AddCommand(metadataCmd())
 	cmd.AddCommand(genAutocompleteCmd())
+	cmd.AddCommand(dumpCfgCmd())
 
 	return cmd
 }
@@ -70,7 +72,7 @@ func metadataCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&noTopics, "no-topics", false, "fetch only broker metadata, no topics")
-	cmd.Flags().StringSliceVarP(&req.Topics, "topics", "t", nil, "comma separated list of topics to fetch")
+	cmd.Flags().StringSliceVarP(&req.Topics, "topics", "t", nil, "list of topics to fetch (comma separated or repeated flag)")
 
 	return cmd
 }
@@ -89,5 +91,15 @@ To configure your bash shell to load completions for each session add to your ba
 . <(kcl misc gen-autocomplete)
 `,
 		Run: func(_ *cobra.Command, _ []string) { root.GenBashCompletion(os.Stdout) },
+	}
+}
+
+func dumpCfgCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "dump-config",
+		Short: "dump the loaded configuration",
+		Run: func(_ *cobra.Command, _ []string) {
+			toml.NewEncoder(os.Stdout).Encode(cfg)
+		},
 	}
 }

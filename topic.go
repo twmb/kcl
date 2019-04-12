@@ -76,10 +76,10 @@ func topicListCommand() *cobra.Command {
 }
 
 func topicCreateCmd() *cobra.Command {
-	req := kmsg.CreateTopicsRequest{Timeout: reqTimeoutMillis}
+	req := kmsg.CreateTopicsRequest{Timeout: cfg.TimeoutMillis}
 
 	var topicReq kmsg.CreateTopicsRequestTopic
-	var configKVs string
+	var configKVs []string
 
 	cmd := &cobra.Command{
 		Use:   "create TOPIC",
@@ -87,7 +87,7 @@ func topicCreateCmd() *cobra.Command {
 		ValidArgs: []string{
 			"--num-partitions",
 			"--replication-factor",
-			"--config-kvs",
+			"--kv",
 			"--validate",
 		},
 		Args: cobra.ExactArgs(1),
@@ -107,6 +107,7 @@ func topicCreateCmd() *cobra.Command {
 			req.Topics = append(req.Topics, topicReq)
 
 			kresp, err := client.Request(&req)
+			maybeDie(err, "unable to create topic %q: %v", args[0], err)
 			if asJSON {
 				dumpJSON(kresp)
 				return
@@ -122,7 +123,7 @@ func topicCreateCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&req.ValidateOnly, "validate", "v", false, "(v)alidate the topic creation request; do not create topics (dry run)")
 	cmd.Flags().Int32VarP(&topicReq.NumPartitions, "num-partitions", "p", 1, "number of (p)artitions to create")
 	cmd.Flags().Int16VarP(&topicReq.ReplicationFactor, "replication-factor", "r", 1, "number of (r)eplicas to have of each partition")
-	cmd.Flags().StringVar(&configKVs, "config-kvs", "", "comma delimited list of key value config pairs corresponding to Kafka topic configuration kvs (e.g. cleanup.policy=compact,preallocate=true)")
+	cmd.Flags().StringSliceVarP(&configKVs, "kv", "k", nil, "list of (k)ey value config parameters (comma separated or repeated flag; e.g. cleanup.policy=compact,preallocate=true)")
 
 	return cmd
 }
@@ -133,7 +134,7 @@ func topicDeleteCmd() *cobra.Command {
 		Short: "Delete all listed topics",
 		Run: func(_ *cobra.Command, args []string) {
 			resp, err := client.Request(&kmsg.DeleteTopicsRequest{
-				Timeout: reqTimeoutMillis,
+				Timeout: cfg.TimeoutMillis,
 				Topics:  args,
 			})
 			maybeDie(err, "unable to delete topics: %v", err)
@@ -145,12 +146,12 @@ func topicDeleteCmd() *cobra.Command {
 			if len(resps) != len(args) {
 				dumpAndDie(resp, "quitting; %d topic deletions requested but received %d responses", len(resps))
 			}
-			for i := 0; i < len(args); i++ {
+			for i := 0; i < len(resps); i++ {
 				msg := "OK"
 				if err := kerr.ErrorForCode(resps[i].ErrorCode); err != nil {
 					msg = err.Error()
 				}
-				fmt.Fprintf(tw, "%s\t%s\n", args[i], msg)
+				fmt.Fprintf(tw, "%s\t%s\n", resps[i].Topic, msg)
 			}
 			tw.Flush()
 		},
@@ -259,7 +260,7 @@ This command supports JSON output.
 						},
 					},
 				},
-				Timeout: reqTimeoutMillis,
+				Timeout: cfg.TimeoutMillis,
 			})
 			maybeDie(err, "unable to create topic partitions: %v", err)
 

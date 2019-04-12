@@ -24,7 +24,7 @@ func alterConfigsCmd(
 	}
 	cfg := &req.Resources[0]
 
-	var configKVs string
+	var configKVs []string
 
 	cmd := &cobra.Command{
 		Use:   use,
@@ -37,7 +37,7 @@ func alterConfigsCmd(
 			return cobra.ExactArgs(1)
 		}(),
 		ValidArgs: []string{
-			"--kvs",
+			"--kv",
 			"--validate",
 		},
 		Run: func(_ *cobra.Command, args []string) {
@@ -84,7 +84,7 @@ func alterConfigsCmd(
 		},
 	}
 
-	cmd.Flags().StringVar(&configKVs, "kvs", "", "comma delimited list of key value config pairs to alter (e.g. cleanup.policy=compact,preallocate=true)")
+	cmd.Flags().StringSliceVarP(&configKVs, "kv", "k", nil, "list of (k)ey value config parameters to set (comma separtaed or repeated flag; e.g. cleanup.policy=compact,preallocate=true)")
 	cmd.Flags().BoolVarP(&req.ValidateOnly, "validate", "v", false, "(v)alidate the config alter request, but do not apply (dry run)")
 
 	return cmd

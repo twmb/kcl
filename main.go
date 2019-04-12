@@ -20,9 +20,6 @@ func reinitTW() { tw = tabwriter.NewWriter(os.Stdout, 6, 4, 2, ' ', 0) }
 var (
 	tw *tabwriter.Writer // used for nice output; init and reinit in util
 
-	reqTimeoutMillis int32 = 1000 // used for all requests, configurable by flag
-	asJSON           bool         // dump responses as JSON for commands that support it
-
 	client *kgo.Client // used for all requests
 
 	root = cobra.Command{
@@ -32,16 +29,9 @@ var (
 )
 
 func main() {
-	var seedBrokers []string
-	root.PersistentFlags().StringSliceVarP(&seedBrokers, "seed-brokers", "s", []string{"127.0.0.1"}, "comma delimited list of seed brokers")
-	root.PersistentFlags().Int32Var(&reqTimeoutMillis, "timeout-ms", 1000, "millisecond timeout for requests that have timeouts")
-	root.PersistentFlags().BoolVarP(&asJSON, "dump-json", "j", false, "dump response as json if supported")
-
 	cobra.OnInitialize(func() {
-		var err error
-		client, err = kgo.NewClient(seedBrokers)
-		if err != nil {
-			fmt.Printf("unable to create client: %v", err)
+		if err := load(); err != nil {
+			fmt.Printf("unable to load: %v", err)
 			os.Exit(1)
 		}
 	})
@@ -59,19 +49,16 @@ type requestor interface {
 
 type kv struct{ k, v string }
 
-func parseKVs(in string) ([]kv, error) {
+func parseKVs(in []string) ([]kv, error) {
 	var kvs []kv
-	in = strings.TrimSpace(in)
-	if len(in) == 0 {
-		return nil, nil
-	}
-	for _, pair := range strings.Split(in, ",") {
+	for _, pair := range in {
+		pair = strings.TrimSpace(pair)
 		if strings.IndexByte(pair, '=') == -1 {
-			return nil, fmt.Errorf("pair %q missing comma key,val delim", pair)
+			return nil, fmt.Errorf("pair %q missing '=' delim", pair)
 		}
 		rawKV := strings.Split(pair, "=")
 		if len(rawKV) != 2 {
-			return nil, fmt.Errorf("pair %q contains too many commas", pair)
+			return nil, fmt.Errorf("pair %q contains too many '='s", pair)
 		}
 		k, v := strings.TrimSpace(rawKV[0]), strings.TrimSpace(rawKV[1])
 		if len(k) == 0 || len(v) == 0 {
