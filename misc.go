@@ -45,7 +45,8 @@ func code2errCmd() *cobra.Command {
 				fmt.Println("NONE")
 				return
 			}
-			fmt.Println(kerr.ErrorForCode(int16(code)))
+			kerr := kerr.ErrorForCode(int16(code)).(*kerr.Error)
+			fmt.Printf("%s\n%s\n", kerr.Message, kerr.Description)
 		},
 	}
 }
