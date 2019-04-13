@@ -9,6 +9,7 @@ import (
 	"math"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -23,6 +24,9 @@ var (
 	cfgOverrides []string
 
 	asJSON bool // dump responses as JSON for commands that support it
+
+	defaultCfgPath    = ""
+	defaultCfgPathErr error
 )
 
 var cfg struct {
@@ -37,13 +41,13 @@ var cfg struct {
 }
 
 func init() {
-	defaultPath := ""
-	home, err := os.UserHomeDir()
-	if err == nil {
-		defaultPath = home + "/.config/kcl/config.toml"
+	var home string
+	home, defaultCfgPathErr = os.UserHomeDir()
+	if defaultCfgPathErr == nil {
+		defaultCfgPath = filepath.Join(home, ".config", "kcl", "config.toml")
 	}
 
-	root.PersistentFlags().StringVar(&cfgPath, "config-path", defaultPath, "path to confile file (lowest priority)")
+	root.PersistentFlags().StringVar(&cfgPath, "config-path", defaultCfgPath, "path to confile file (lowest priority)")
 	root.PersistentFlags().BoolVarP(&noCfgFile, "no-config", "Z", false, "do not load any config file")
 	root.PersistentFlags().StringArrayVarP(&cfgOverrides, "config-opt", "X", nil, "flag provided config option (highest priority)")
 
@@ -54,7 +58,7 @@ func init() {
 	cfg.TimeoutMillis = 1000
 }
 
-const configHelp = `kcl takes configuration options by default from $HOME/.config/kcl/config.toml.
+var configHelp = `kcl takes configuration options by default from ` + defaultCfgPath + `.
 The config path can be set with --config-path, and --no-config (-Z) can be used
 to disable loading a config file entirely.
 

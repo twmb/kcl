@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,6 +35,8 @@ func topicCmd() *cobra.Command {
 }
 
 func topicListCommand() *cobra.Command {
+	var detailed bool
+
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List all topics",
@@ -42,37 +46,75 @@ func topicListCommand() *cobra.Command {
 			maybeDie(err, "unable to get metadata: %v", err)
 			resp := kresp.(*kmsg.MetadataResponse)
 
-			type topicData struct {
-				name       string
-				partitions int
-				replicas   int
+			if asJSON {
+				dumpJSON(resp.TopicMetadata)
+				return
 			}
 
-			topics := make([]topicData, 0, len(resp.TopicMetadata))
-			for _, topicMeta := range resp.TopicMetadata {
-				td := topicData{
-					name: topicMeta.Topic,
-				}
-				if len(topicMeta.PartitionMetadata) > 0 {
-					td.partitions = len(topicMeta.PartitionMetadata)
-					td.replicas = len(topicMeta.PartitionMetadata[0].Replicas)
-				}
-				topics = append(topics, td)
-			}
-
-			sort.Slice(topics, func(i, j int) bool {
-				return topics[i].name < topics[j].name
-			})
-			fmt.Fprintf(tw, "NAME\tPARTITIONS\tREPLICAS\n")
-			for _, topic := range topics {
-				fmt.Fprintf(tw, "%s\t%d\t%d\n",
-					topic.name, topic.partitions, topic.replicas)
-			}
-			tw.Flush()
+			printTopics(resp.TopicMetadata, detailed)
 		},
 	}
 
+	cmd.Flags().BoolVarP(&detailed, "detailed", "d", false, "include detailed information about all topic partitions")
 	return cmd
+}
+
+func printTopics(topics []kmsg.MetadataResponseTopicMetadata, detailed bool) {
+	sort.Slice(topics, func(i, j int) bool {
+		return topics[i].Topic < topics[j].Topic
+	})
+
+	if !detailed {
+		fmt.Fprintf(tw, "NAME\tPARTITIONS\tREPLICAS\n")
+		for _, topic := range topics {
+			parts := len(topic.PartitionMetadata)
+			replicas := 0
+			if parts > 0 {
+				replicas = len(topic.PartitionMetadata[0].Replicas)
+			}
+			fmt.Fprintf(tw, "%s\t%d\t%d\n",
+				topic.Topic, parts, replicas)
+		}
+		tw.Flush()
+		return
+	}
+
+	buf := new(bytes.Buffer)
+	buf.Grow(10 << 10)
+	defer func() { os.Stdout.Write(buf.Bytes()) }()
+
+	for _, topic := range topics {
+		fmt.Fprintf(buf, "%s", topic.Topic)
+		if topic.IsInternal {
+			fmt.Fprint(buf, " (internal)")
+		}
+
+		parts := topic.PartitionMetadata
+		fmt.Fprintf(buf, ", %d partition", len(parts))
+		if len(parts) > 1 {
+			buf.WriteByte('s')
+		}
+		buf.WriteString("\n")
+
+		sort.Slice(parts, func(i, j int) bool {
+			return parts[i].Partition < parts[j].Partition
+		})
+		for _, part := range topic.PartitionMetadata {
+			fmt.Fprintf(buf, "  %4d  leader %d replicas %v isr %v",
+				part.Partition,
+				part.Leader,
+				part.Replicas,
+				part.ISR,
+			)
+			if len(part.OfflineReplicas) > 0 {
+				fmt.Fprintf(buf, ", offline replicas %v", part.OfflineReplicas)
+			}
+			if err := kerr.ErrorForCode(part.ErrorCode); err != nil {
+				fmt.Fprintf(buf, " (%s)", err)
+			}
+			fmt.Fprintln(buf)
+		}
+	}
 }
 
 func topicCreateCmd() *cobra.Command {

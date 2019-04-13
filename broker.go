@@ -34,30 +34,38 @@ func brokerListCmd() *cobra.Command {
 			maybeDie(err, "unable to get metadata: %v", err)
 			resp := kresp.(*kmsg.MetadataResponse)
 
-			brokers := resp.Brokers
-			sort.Slice(brokers, func(i, j int) bool {
-				return brokers[i].NodeID < brokers[j].NodeID
-			})
-
-			fmt.Fprintf(tw, "ID\tHOST\tPORT\tRACK\n")
-			for _, broker := range brokers {
-				var controllerStar string
-				if broker.NodeID == resp.ControllerID {
-					controllerStar = "*"
-				}
-
-				var rack string
-				if broker.Rack != nil {
-					rack = *broker.Rack
-				}
-
-				fmt.Fprintf(tw, "%d%s\t%s\t%d\t%s\n",
-					broker.NodeID, controllerStar, broker.Host, broker.Port, rack)
+			if asJSON {
+				dumpJSON(resp.Brokers)
+				return
 			}
 
-			tw.Flush()
+			printBrokers(resp.ControllerID, resp.Brokers)
 		},
 	}
+}
+
+func printBrokers(controllerID int32, brokers []kmsg.MetadataResponseBroker) {
+	sort.Slice(brokers, func(i, j int) bool {
+		return brokers[i].NodeID < brokers[j].NodeID
+	})
+
+	fmt.Fprintf(tw, "ID\tHOST\tPORT\tRACK\n")
+	for _, broker := range brokers {
+		var controllerStar string
+		if broker.NodeID == controllerID {
+			controllerStar = "*"
+		}
+
+		var rack string
+		if broker.Rack != nil {
+			rack = *broker.Rack
+		}
+
+		fmt.Fprintf(tw, "%d%s\t%s\t%d\t%s\n",
+			broker.NodeID, controllerStar, broker.Host, broker.Port, rack)
+	}
+
+	tw.Flush()
 }
 
 func brokerDescribeConfigCmd() *cobra.Command {
