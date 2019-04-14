@@ -2,13 +2,11 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
-	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 
-	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
 
 	"github.com/twmb/kgo/kerr"
@@ -28,9 +26,7 @@ func miscCmd() *cobra.Command {
 	cmd.AddCommand(code2errCmd())
 	cmd.AddCommand(metadataCmd())
 	cmd.AddCommand(genAutocompleteCmd())
-	cmd.AddCommand(dumpCfgCmd())
-	cmd.AddCommand(helpCfgCmd())
-	cmd.AddCommand(useCfgCmd())
+	cmd.AddCommand(apiVersionsCmd())
 
 	return cmd
 }
@@ -66,6 +62,7 @@ func metadataCmd() *cobra.Command {
 			"--no-topics",
 			"--topics",
 		},
+		Args: cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
 			if noTopics { // nil means everything, empty means nothing
 				req.Topics = []string{}
@@ -110,111 +107,38 @@ To configure your bash shell to load completions for each session add to your ba
 # ~/.bashrc or ~/.profile
 . <(kcl misc gen-autocomplete)
 `,
-		Run: func(_ *cobra.Command, _ []string) { root.GenBashCompletion(os.Stdout) },
+		Args: cobra.ExactArgs(0),
+		Run:  func(_ *cobra.Command, _ []string) { root.GenBashCompletion(os.Stdout) },
 	}
 }
 
-func dumpCfgCmd() *cobra.Command {
+func apiVersionsCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "dump-config",
-		Short: "dump the loaded configuration",
+		Use:   "api-versions",
+		Short: "Print broker API versions for each Kafka request type",
+		Args:  cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
-			toml.NewEncoder(os.Stdout).Encode(cfg)
-		},
-	}
-}
+			kresp, err := client.Request(new(kmsg.ApiVersionsRequest))
+			maybeDie(err, "unable to request API versions: %v", err)
 
-func helpCfgCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "help-config",
-		Short: "describe kcl config semantics",
-		Run: func(_ *cobra.Command, _ []string) {
-			fmt.Println(configHelp)
-		},
-	}
-}
-
-func useCfgCmd() *cobra.Command {
-	dir := filepath.Dir(defaultCfgPath)
-
-	return &cobra.Command{
-		Use:   "use-config NAME",
-		Short: "link a config in " + dir + " to " + defaultCfgPath,
-		Long: `Link a config in ` + dir + ` to ` + defaultCfgPath + `.
-
-This command allows you to easily swap kcl configs. It will look for
-any file NAME or NAME.toml (favoring .toml) in the config directory
-and link it to the default config path.
-
-This dies if NAME does not yet exist or on any other os errors.
-
-If asked to use config "clear", this simply remove an existing symlink.
-`,
-		Args: cobra.ExactArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
-			if defaultCfgPath == "" {
-				die("cannot use a config; unable to determine home dir: %v", defaultCfgPathErr)
+			if asJSON {
+				dumpJSON(kresp)
+				return
 			}
 
-			existing, err := os.Lstat(defaultCfgPath)
-			if err != nil {
-				if !os.IsNotExist(err) {
-					die("stat err for existing config path %q: %v", defaultCfgPath, err)
-				}
-				// not exists: we can create symlink
-			} else {
-				if existing.Mode()&os.ModeSymlink == 0 {
-					die("stat shows that existing config at %q is not a symlink", defaultCfgPath)
+			resp := kresp.(*kmsg.ApiVersionsResponse)
+			fmt.Fprintf(tw, "NAME\tMAX\n")
+			for _, k := range resp.ApiVersions {
+				kind := "Unknown"
+				req := kmsg.RequestForKey(k.ApiKey)
+				if req != nil {
+					kind = reflect.Indirect(reflect.ValueOf(req)).Type().Name()
+					kind = strings.TrimSuffix(kind, "Request")
 				}
 
-				if args[0] == "clear" {
-					if err := os.Remove(defaultCfgPath); err != nil {
-						die("unable to remove old symlink at %q: %v", defaultCfgPath, err)
-					}
-					fmt.Printf("cleared old config symlink %q", defaultCfgPath)
-					return
-				}
+				fmt.Fprintf(tw, "%s\t%d\n", kind, k.MaxVersion)
 			}
-
-			dirents, err := ioutil.ReadDir(dir)
-			maybeDie(err, "unable to read config dir %q: %v", dir, err)
-
-			use := args[0]
-			exact := strings.HasSuffix(use, ".toml")
-			found := false
-			for _, dirent := range dirents {
-				if exact && dirent.Name() == use {
-					found = true
-					break
-				}
-
-				// With inexact matching, we favor
-				// foo.toml over foo if both exist.
-				noExt := strings.TrimSuffix(dirent.Name(), ".toml")
-				if noExt == use {
-					found = true
-					if len(dirent.Name()) > len(use) {
-						use = dirent.Name()
-					}
-				}
-			}
-
-			if !found {
-				die("could not find requested config %q", args[0])
-			}
-
-			if existing != nil {
-				if err := os.Remove(defaultCfgPath); err != nil {
-					die("unable to remove old symlink at %q: %v", defaultCfgPath, err)
-				}
-			}
-
-			src := filepath.Join(dir, use)
-			if err := os.Symlink(src, defaultCfgPath); err != nil {
-				die("unable to create symlink from %q to %q: %v", src, defaultCfgPath, err)
-			}
-
-			fmt.Printf("linked %q to %q\n", src, defaultCfgPath)
+			tw.Flush()
 		},
 	}
 }

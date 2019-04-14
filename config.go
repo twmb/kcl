@@ -14,9 +14,13 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/spf13/cobra"
 
 	"github.com/twmb/kgo"
 )
+
+// The top half of this file is loading config.
+// The bottom half is config commands.
 
 var (
 	cfgPath      string
@@ -256,4 +260,126 @@ func loadTLSCfg() (*tls.Config, error) {
 	}
 
 	return tlsCfg, nil
+}
+
+func init() {
+	root.AddCommand(configCmd())
+}
+
+func configCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "config",
+		Short: "kcl configuration commands",
+	}
+
+	cmd.AddCommand(cfgDumpCmd())
+	cmd.AddCommand(cfgHelpCmd())
+	cmd.AddCommand(cfgUseCmd())
+
+	return cmd
+}
+
+func cfgDumpCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "dump",
+		Short: "dump the loaded configuration",
+		Run: func(_ *cobra.Command, _ []string) {
+			toml.NewEncoder(os.Stdout).Encode(cfg)
+		},
+	}
+}
+
+func cfgHelpCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "help",
+		Short: "describe kcl config semantics",
+		Run: func(_ *cobra.Command, _ []string) {
+			fmt.Println(configHelp)
+		},
+	}
+}
+
+func cfgUseCmd() *cobra.Command {
+	dir := filepath.Dir(defaultCfgPath)
+
+	return &cobra.Command{
+		Use:   "use NAME",
+		Short: "link a config in " + dir + " to " + defaultCfgPath,
+		Long: `Link a config in ` + dir + ` to ` + defaultCfgPath + `.
+
+This command allows you to easily swap kcl configs. It will look for
+any file NAME or NAME.toml (favoring .toml) in the config directory
+and link it to the default config path.
+
+This dies if NAME does not yet exist or on any other os errors.
+
+If asked to use config "clear", this simply remove an existing symlink.
+`,
+		Args: cobra.ExactArgs(1),
+		Run: func(_ *cobra.Command, args []string) {
+			if defaultCfgPath == "" {
+				die("cannot use a config; unable to determine home dir: %v", defaultCfgPathErr)
+			}
+
+			existing, err := os.Lstat(defaultCfgPath)
+			if err != nil {
+				if !os.IsNotExist(err) {
+					die("stat err for existing config path %q: %v", defaultCfgPath, err)
+				}
+				// not exists: we can create symlink
+			} else {
+				if existing.Mode()&os.ModeSymlink == 0 {
+					die("stat shows that existing config at %q is not a symlink", defaultCfgPath)
+				}
+
+				if args[0] == "clear" {
+					if err := os.Remove(defaultCfgPath); err != nil {
+						die("unable to remove old symlink at %q: %v", defaultCfgPath, err)
+					}
+					fmt.Printf("cleared old config symlink %q", defaultCfgPath)
+					return
+				}
+			}
+
+			dirents, err := ioutil.ReadDir(dir)
+			maybeDie(err, "unable to read config dir %q: %v", dir, err)
+
+			use := args[0]
+			exact := strings.HasSuffix(use, ".toml")
+			found := false
+			for _, dirent := range dirents {
+				if exact && dirent.Name() == use {
+					found = true
+					break
+				}
+
+				// With inexact matching, we favor
+				// foo.toml over foo if both exist.
+				noExt := strings.TrimSuffix(dirent.Name(), ".toml")
+				if noExt == use {
+					found = true
+					if len(dirent.Name()) > len(use) {
+						use = dirent.Name()
+					}
+				}
+			}
+
+			if !found {
+				die("could not find requested config %q", args[0])
+			}
+
+			if existing != nil {
+				if err := os.Remove(defaultCfgPath); err != nil {
+					die("unable to remove old symlink at %q: %v", defaultCfgPath, err)
+				}
+			}
+
+			src := filepath.Join(dir, use)
+			if err := os.Symlink(src, defaultCfgPath); err != nil {
+				die("unable to create symlink from %q to %q: %v", src, defaultCfgPath, err)
+			}
+
+			fmt.Printf("linked %q to %q\n", src, defaultCfgPath)
+		},
+	}
 }
