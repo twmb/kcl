@@ -275,6 +275,7 @@ func configCmd() *cobra.Command {
 	cmd.AddCommand(cfgDumpCmd())
 	cmd.AddCommand(cfgHelpCmd())
 	cmd.AddCommand(cfgUseCmd())
+	cmd.AddCommand(cfgClearCmd())
 
 	return cmd
 }
@@ -304,7 +305,7 @@ func cfgUseCmd() *cobra.Command {
 
 	return &cobra.Command{
 		Use:   "use NAME",
-		Short: "link a config in " + dir + " to " + defaultCfgPath,
+		Short: "Link a config in " + dir + " to " + defaultCfgPath,
 		Long: `Link a config in ` + dir + ` to ` + defaultCfgPath + `.
 
 This command allows you to easily swap kcl configs. It will look for
@@ -313,7 +314,7 @@ and link it to the default config path.
 
 This dies if NAME does not yet exist or on any other os errors.
 
-If asked to use config "clear", this simply remove an existing symlink.
+If asked to use config "none", this simply remove an existing symlink.
 `,
 		Args: cobra.ExactArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
@@ -330,14 +331,6 @@ If asked to use config "clear", this simply remove an existing symlink.
 			} else {
 				if existing.Mode()&os.ModeSymlink == 0 {
 					die("stat shows that existing config at %q is not a symlink", defaultCfgPath)
-				}
-
-				if args[0] == "clear" {
-					if err := os.Remove(defaultCfgPath); err != nil {
-						die("unable to remove old symlink at %q: %v", defaultCfgPath, err)
-					}
-					fmt.Printf("cleared old config symlink %q", defaultCfgPath)
-					return
 				}
 			}
 
@@ -380,6 +373,37 @@ If asked to use config "clear", this simply remove an existing symlink.
 			}
 
 			fmt.Printf("linked %q to %q\n", src, defaultCfgPath)
+		},
+	}
+}
+
+func cfgClearCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "clear",
+		Short: "Remove " + defaultCfgPath + " if it is a symlink",
+		Args:  cobra.ExactArgs(0),
+		Run: func(_ *cobra.Command, _ []string) {
+			if defaultCfgPath == "" {
+				die("cannot use a config; unable to determine home dir: %v", defaultCfgPathErr)
+			}
+
+			existing, err := os.Lstat(defaultCfgPath)
+			if err != nil {
+				if !os.IsNotExist(err) {
+					die("stat err for existing config path %q: %v", defaultCfgPath, err)
+				}
+				fmt.Printf("no symlink found at %q\n", defaultCfgPath)
+				return
+			}
+
+			if existing.Mode()&os.ModeSymlink == 0 {
+				die("stat shows that existing config at %q is not a symlink", defaultCfgPath)
+			}
+
+			if err := os.Remove(defaultCfgPath); err != nil {
+				die("unable to remove symlink at %q: %v", defaultCfgPath, err)
+			}
+			fmt.Printf("cleared config symlink %q\n", defaultCfgPath)
 		},
 	}
 }
