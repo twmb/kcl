@@ -6,6 +6,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/spf13/cobra"
@@ -100,14 +101,24 @@ Example:
 				die("no matching topic partitions to consume")
 			}
 
-			var koffset int64
-			switch offset {
-			case "start":
-				koffset = kgo.ConsumeEarliestOffset
-			case "end":
-				koffset = kgo.ConsumeLatestOffset
+			var koffset kgo.Offset
+			switch {
+			case offset == "start":
+				koffset = kgo.ConsumeStartOffset()
+			case offset == "end":
+				koffset = kgo.ConsumeEndOffset()
+			case strings.HasPrefix(offset, "end-"):
+				v, err := strconv.Atoi(offset[4:])
+				maybeDie(err, "unable to parse relative offset number in %q: %v", offset, err)
+				koffset = kgo.ConsumeEndRelativeOffset(v)
+			case strings.HasPrefix(offset, "start+"):
+				v, err := strconv.Atoi(offset[6:])
+				maybeDie(err, "unable to parse relative offset number in %q: %v", offset, err)
+				koffset = kgo.ConsumeStartRelativeOffset(v)
 			default:
-				die("unknown offset %q", offset)
+				v, err := strconv.Atoi(offset)
+				maybeDie(err, "unable to parse exact offset number in %q: %v", offset, err)
+				koffset = kgo.ConsumeExactOffset(int64(v))
 			}
 
 			co := &consumeOutput{
@@ -149,10 +160,11 @@ Example:
 	}
 
 	cmd.Flags().Int32SliceVarP(&partitions, "partitions", "p", nil, "comma delimited list of specific partitions to consume")
-	cmd.Flags().StringVarP(&offset, "offset", "o", "start", "offset to start consuming from (start, end)")
+	cmd.Flags().StringVarP(&offset, "offset", "o", "start", "offset to start consuming from (start, end, 47, start+2, end-3)")
 	cmd.Flags().IntVarP(&num, "num", "n", 0, "quit after consuming this number of records; 0 is unbounded")
 	cmd.Flags().StringVarP(&format, "format", "f", `%s\n`, "output format")
 	cmd.Flags().BoolVarP(&regex, "regex", "r", false, "parse topics as regex; consume any topic that matches any expression")
+	// TODO: wait millis, size
 
 	return cmd
 }
@@ -245,7 +257,7 @@ func (co *consumeOutput) buildFormatFn(format string) {
 				out = append(out, 'd')
 
 			case 'T':
-				argFns = append(argFns, func(r *kgo.Record) interface{} { return r.Timestamp.UnixNano() / 1e6 })
+				argFns = append(argFns, func(r *kgo.Record) interface{} { return r.Timestamp.UnixNano() })
 				out = append(out, 'd')
 
 			default:
