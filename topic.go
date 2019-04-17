@@ -203,7 +203,7 @@ func topicDeleteCmd() *cobra.Command {
 func topicDescribeConfigCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "describe TOPIC",
-		Short: "Describe a topic",
+		Short: "Describe a topic's configuration",
 		Long: `Print key/value config pairs for a topic.
 
 This command prints all key/value config values for a topic, as well
