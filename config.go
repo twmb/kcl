@@ -23,6 +23,11 @@ import (
 // The bottom half is config commands.
 
 var (
+	// clientOpts is used when initializing a client. Commands can stuff
+	// opts into this slice before creating the client for the first time
+	// as necessary.
+	clientOpts []kgo.Opt
+
 	cfgPath      string
 	noCfgFile    bool
 	cfgOverrides []string
@@ -168,12 +173,10 @@ func load() (*kgo.Client, error) {
 		}
 	}
 
-	var opts []kgo.Opt
-
 	if tlsCfg, err := loadTLSCfg(); err != nil {
 		return nil, err
 	} else if tlsCfg != nil {
-		opts = append(opts,
+		clientOpts = append(clientOpts,
 			kgo.WithDialFn(func(host string) (net.Conn, error) {
 				cloned := tlsCfg.Clone()
 				if cfg.TLSServerName != "" {
@@ -185,7 +188,7 @@ func load() (*kgo.Client, error) {
 			}))
 	}
 
-	c, err := kgo.NewClient(cfg.SeedBrokers, opts...)
+	c, err := kgo.NewClient(cfg.SeedBrokers, clientOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create client: %v", err)
 	}

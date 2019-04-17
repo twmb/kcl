@@ -17,10 +17,13 @@ func init() {
 }
 
 func produceCmd() *cobra.Command {
-	var recDelim string
-	var keyDelim string
-	var maxBuf int
-	var verbose bool
+	var (
+		recDelim    string
+		keyDelim    string
+		maxBuf      int
+		verbose     bool
+		compression string
+	)
 
 	cmd := &cobra.Command{
 		Use:   "produce TOPIC",
@@ -52,6 +55,22 @@ The input delimiter understands \n, \r, \t, and \xXX (hex) escape sequences.
 			}
 
 			delim := parseDelim(recDelim)
+
+			var codec kgo.CompressionCodec
+			switch compression {
+			case "none":
+				codec = kgo.NoCompression()
+			case "gzip":
+				codec = kgo.GzipCompression(5)
+			case "snappy":
+				codec = kgo.SnappyCompression()
+			case "lz4":
+				codec = kgo.Lz4Compression(2)
+			case "zstd":
+				codec = kgo.ZstdCompression(9)
+			}
+			clientOpts = append(clientOpts,
+				kgo.WithProduceCompression(codec))
 
 			scanner := bufio.NewScanner(os.Stdin)
 			scanner.Buffer(nil, maxBuf)
@@ -92,6 +111,7 @@ The input delimiter understands \n, \r, \t, and \xXX (hex) escape sequences.
 	cmd.Flags().StringVarP(&keyDelim, "keyed-record-delim", "K", "", "key and record delimiter")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "verbose information of the producing of records")
 	cmd.Flags().IntVar(&maxBuf, "max-read-buf", bufio.MaxScanTokenSize, "maximum input to buffer before a delimiter is required")
+	cmd.Flags().StringVarP(&compression, "compression", "z", "snappy", "compression to use for producing batches (none, gzip, snappy, lz4, zstd)")
 
 	return cmd
 }
