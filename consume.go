@@ -38,6 +38,8 @@ The input topics can be regular expressions with the --regex (-r) flag.
 Format options:
   %s    record value
   %S    length of a record
+  %v    alias for %s (record value)
+  %V    alias for %S (length of a record)
   %R    length of a record (8 byte big endian)
   %k    record key
   %K    length of a record key
@@ -220,11 +222,11 @@ func (co *consumeOutput) buildFormatFn(format string) {
 
 			out = append(out, '%')
 			switch format[0] {
-			case 's':
+			case 's', 'v':
 				argFns = append(argFns, func(r *kgo.Record) interface{} { return r.Value })
 				out = append(out, 's')
 
-			case 'S':
+			case 'S', 'V':
 				argFns = append(argFns, func(r *kgo.Record) interface{} { return len(r.Value) })
 				out = append(out, 'd')
 
