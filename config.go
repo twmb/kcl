@@ -99,15 +99,15 @@ OPTIONS
 
 `
 
-func load() error {
+func load() (*kgo.Client, error) {
 	if !noCfgFile {
 		md, err := toml.DecodeFile(cfgPath, &cfg)
 		if !os.IsNotExist(err) {
 			if err != nil {
-				return fmt.Errorf("unable to decode config file %q: %v", cfgPath, err)
+				return nil, fmt.Errorf("unable to decode config file %q: %v", cfgPath, err)
 			}
 			if len(md.Undecoded()) > 0 {
-				return fmt.Errorf("unknown keys in toml cfg: %v", md.Undecoded())
+				return nil, fmt.Errorf("unknown keys in toml cfg: %v", md.Undecoded())
 			}
 		}
 	}
@@ -142,7 +142,7 @@ func load() error {
 	for _, opt := range cfgOverrides {
 		kv := strings.Split(opt, "=")
 		if len(kv) != 2 {
-			return fmt.Errorf("opt %q not a key=value", opt)
+			return nil, fmt.Errorf("opt %q not a key=value", opt)
 		}
 		k, v := kv[0], kv[1]
 
@@ -164,14 +164,14 @@ func load() error {
 		}
 
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
 	var opts []kgo.Opt
 
 	if tlsCfg, err := loadTLSCfg(); err != nil {
-		return err
+		return nil, err
 	} else if tlsCfg != nil {
 		opts = append(opts,
 			kgo.WithDialFn(func(host string) (net.Conn, error) {
@@ -185,11 +185,11 @@ func load() error {
 			}))
 	}
 
-	client, err = kgo.NewClient(cfg.SeedBrokers, opts...)
+	c, err := kgo.NewClient(cfg.SeedBrokers, opts...)
 	if err != nil {
-		return fmt.Errorf("unable to create client: %v", err)
+		return nil, fmt.Errorf("unable to create client: %v", err)
 	}
-	return nil
+	return c, nil
 }
 
 func loadTLSCfg() (*tls.Config, error) {

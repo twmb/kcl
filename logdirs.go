@@ -40,7 +40,7 @@ func logdirsDescribeCmd() *cobra.Command {
 				})
 			}
 
-			kresp, err := client.Request(&req)
+			kresp, err := client().Request(&req)
 			maybeDie(err, "unable to describe log dirs: %v", err)
 
 			dumpJSON(kresp)
@@ -68,7 +68,7 @@ func logdirsAlterReplicasCmd() *cobra.Command {
 		},
 		Args: cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
-			resp, err := client.Request(&kmsg.AlterReplicaLogDirsRequest{
+			resp, err := client().Request(&kmsg.AlterReplicaLogDirsRequest{
 				LogDirs: []kmsg.AlterReplicaLogDirsRequestLogDir{{
 					LogDir: destDir,
 					Topics: []kmsg.AlterReplicaLogDirsRequestLogDirTopic{{

@@ -52,7 +52,7 @@ func alterConfigsCmd(
 					})
 			}
 
-			var r requestor = client
+			var r requestor = client()
 
 			if len(args) > 0 { // topic can have no args
 				cfg.ResourceName = args[0]
@@ -64,7 +64,7 @@ func alterConfigsCmd(
 					if bid, err := strconv.Atoi(cfg.ResourceName); err != nil {
 						die("unable to parse broker ID: %v", err)
 					} else {
-						r = client.Broker(bid)
+						r = client().Broker(bid)
 					}
 				}
 			}
@@ -115,7 +115,7 @@ func describeConfig(maybeName []string, isBroker bool) {
 	}
 
 	resourceType := int8(2)
-	var r requestor = client
+	var r requestor = client()
 
 	if isBroker {
 		resourceType = 4
@@ -123,7 +123,7 @@ func describeConfig(maybeName []string, isBroker bool) {
 			if bid, err := strconv.Atoi(name); err != nil {
 				die("unable to parse broker ID: %v", err)
 			} else {
-				r = client.Broker(bid)
+				r = client().Broker(bid)
 			}
 		}
 	}

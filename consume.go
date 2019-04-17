@@ -70,9 +70,9 @@ Example:
 						die("unable to compile regexp %q: %v", arg, err)
 					}
 				}
-				topicParts, err = client.TopicPartitions()
+				topicParts, err = client().TopicPartitions()
 			} else {
-				topicParts, err = client.TopicPartitions(args...)
+				topicParts, err = client().TopicPartitions(args...)
 			}
 			maybeDie(err, "unable to request topic partitions: %v", err)
 
@@ -143,7 +143,7 @@ Example:
 						}
 					}
 
-					partConsumer, err := client.ConsumePartition(topicPart.Topic, part, koffset)
+					partConsumer, err := client().ConsumePartition(topicPart.Topic, part, koffset)
 					maybeDie(err, "unable to consume topic %q partition %d: %v", topicPart.Topic, part, err)
 
 					wg.Add(1)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -20,8 +21,6 @@ func reinitTW() { tw = tabwriter.NewWriter(os.Stdout, 6, 4, 2, ' ', 0) }
 var (
 	tw *tabwriter.Writer // used for nice output; init and reinit in util
 
-	client *kgo.Client // used for all requests
-
 	root = cobra.Command{
 		Use:   "kcl",
 		Short: "Kafka Command Line command for commanding Kafka on the command line",
@@ -36,16 +35,23 @@ To enable bash autocompletion, add '. <(kcl misc gen-autocomplete)'
 to your bash profile.
 `,
 	}
+
+	// client is loaded on the first call to client(), allowing commands to
+	// add initialization functions as necessary before creating the client.
+	c     *kgo.Client
+	cOnce sync.Once
 )
 
-func main() {
-	cobra.OnInitialize(func() {
-		if err := load(); err != nil {
-			fmt.Printf("unable to load: %v", err)
-			os.Exit(1)
-		}
+func client() *kgo.Client {
+	cOnce.Do(func() {
+		var err error
+		c, err = load()
+		maybeDie(err, "unable to load client: %v", err)
 	})
+	return c
+}
 
+func main() {
 	if err := root.Execute(); err != nil {
 		fmt.Println(err)
 		os.Exit(1)

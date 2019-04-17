@@ -21,7 +21,7 @@ This command supports JSON output.
 				GroupIDs: args,
 			}
 
-			kresp, err := client.Request(&req)
+			kresp, err := client().Request(&req)
 			maybeDie(err, "unable to describe groups: %v", err)
 
 			if asJSON {
@@ -63,7 +63,7 @@ This command supports JSON output.
 				GroupIDs: args,
 			}
 
-			kresp, err := client.Request(&req)
+			kresp, err := client().Request(&req)
 			maybeDie(err, "unable to describe groups: %v", err)
 
 			if asJSON {

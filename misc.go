@@ -68,7 +68,7 @@ func metadataCmd() *cobra.Command {
 				req.Topics = []string{}
 			}
 
-			kresp, err := client.Request(&req)
+			kresp, err := client().Request(&req)
 			maybeDie(err, "unable to get metadata: %v", err)
 			if asJSON {
 				dumpJSON(kresp)
@@ -118,7 +118,7 @@ func apiVersionsCmd() *cobra.Command {
 		Short: "Print broker API versions for each Kafka request type",
 		Args:  cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
-			kresp, err := client.Request(new(kmsg.ApiVersionsRequest))
+			kresp, err := client().Request(new(kmsg.ApiVersionsRequest))
 			maybeDie(err, "unable to request API versions: %v", err)
 
 			if asJSON {

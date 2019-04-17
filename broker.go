@@ -30,7 +30,7 @@ func brokerListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List all brokers (the controller is marked with *)",
 		Run: func(_ *cobra.Command, _ []string) {
-			kresp, err := client.Request(new(kmsg.MetadataRequest))
+			kresp, err := client().Request(new(kmsg.MetadataRequest))
 			maybeDie(err, "unable to get metadata: %v", err)
 			resp := kresp.(*kmsg.MetadataResponse)
 

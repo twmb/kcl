@@ -71,7 +71,7 @@ The input delimiter understands \n, \r, \t, and \xXX (hex) escape sequences.
 				r.Value = append([]byte(nil), scanner.Bytes()...)
 
 				wg.Add(1)
-				client.Produce(r, func(r *kgo.Record, err error) {
+				client().Produce(r, func(r *kgo.Record, err error) {
 					defer wg.Done()
 					maybeDie(err, "unable to produce record: %v", err)
 					if verbose {
@@ -130,9 +130,10 @@ func parseDelim(in string) []byte {
 			in = in[1:]
 		}
 	}
+	return out
 }
 
-func splitDelimFn(delim []byte) bufio.ScanFunc {
+func splitDelimFn(delim []byte) bufio.SplitFunc {
 	return func(data []byte, atEOF bool) (advance int, token []byte, err error) {
 		if atEOF && len(data) == 0 {
 			return 0, nil, nil
