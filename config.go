@@ -288,6 +288,7 @@ func cfgDumpCmd() *cobra.Command {
 		Use:   "dump",
 		Short: "dump the loaded configuration",
 		Run: func(_ *cobra.Command, _ []string) {
+			client() // force a load of the config
 			toml.NewEncoder(os.Stdout).Encode(cfg)
 		},
 	}
