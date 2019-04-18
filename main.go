@@ -29,7 +29,7 @@ var (
 kcl is a Kafka swiss army knife that aims to enable Kafka administration,
 message producing, and message consuming.
 
-For help about configuration, run 'kcl misc help-config'.
+For help about configuration, run 'kcl config help'.
 
 To enable bash autocompletion, add '. <(kcl misc gen-autocomplete)'
 to your bash profile.
