@@ -87,7 +87,6 @@ func metadataCmd() *cobra.Command {
 		},
 	}
 
-	// TODO --broker to query a specific broker?
 	cmd.Flags().BoolVar(&noTopics, "no-topics", false, "fetch only broker metadata, no topics")
 	cmd.Flags().StringSliceVarP(&req.Topics, "topics", "t", nil, "list of topics to fetch (comma separated or repeated flag)")
 
