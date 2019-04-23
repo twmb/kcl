@@ -25,7 +25,7 @@ func topicCmd() *cobra.Command {
 		Short: "Perform topic relation actions",
 	}
 
-	cmd.AddCommand(topicListCommand())
+	cmd.AddCommand(topicListCmd())
 	cmd.AddCommand(topicCreateCmd())
 	cmd.AddCommand(topicDeleteCmd())
 	cmd.AddCommand(topicDescribeConfigCmd())
@@ -34,7 +34,7 @@ func topicCmd() *cobra.Command {
 	return cmd
 }
 
-func topicListCommand() *cobra.Command {
+func topicListCmd() *cobra.Command {
 	var detailed bool
 
 	cmd := &cobra.Command{
@@ -185,15 +185,12 @@ func topicDeleteCmd() *cobra.Command {
 				return
 			}
 			resps := resp.(*kmsg.DeleteTopicsResponse).TopicErrorCodes
-			if len(resps) != len(args) {
-				dumpAndDie(resp, "quitting; %d topic deletions requested but received %d responses", len(resps))
-			}
-			for i := 0; i < len(resps); i++ {
+			for _, topicResp := range resps {
 				msg := "OK"
-				if err := kerr.ErrorForCode(resps[i].ErrorCode); err != nil {
+				if err := kerr.ErrorForCode(topicResp.ErrorCode); err != nil {
 					msg = err.Error()
 				}
-				fmt.Fprintf(tw, "%s\t%s\n", resps[i].Topic, msg)
+				fmt.Fprintf(tw, "%s\t%s\n", topicResp.Topic, msg)
 			}
 			tw.Flush()
 		},
