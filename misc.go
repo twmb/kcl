@@ -23,7 +23,7 @@ func miscCmd() *cobra.Command {
 		Short: "Miscellaneous utilities",
 	}
 
-	cmd.AddCommand(code2errCmd())
+	cmd.AddCommand(errcodeCmd())
 	cmd.AddCommand(metadataCmd())
 	cmd.AddCommand(genAutocompleteCmd())
 	cmd.AddCommand(apiVersionsCmd())
@@ -31,10 +31,10 @@ func miscCmd() *cobra.Command {
 	return cmd
 }
 
-func code2errCmd() *cobra.Command {
+func errcodeCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "code2err CODE",
-		Short: "Print the name for an error code",
+		Use:   "errcode CODE",
+		Short: "Print the name and message for an error code",
 		Args:  cobra.ExactArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
 			code, err := strconv.Atoi(args[0])
