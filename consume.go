@@ -236,7 +236,7 @@ func (co *consumeOutput) buildFormatFn(format string) {
 					binary.BigEndian.PutUint64(buf, uint64(len(r.Value)))
 					return buf
 				})
-				out = append(out, 'd')
+				out = append(out, 's')
 
 			case 'k':
 				argFns = append(argFns, func(r *kgo.Record) interface{} { return r.Key })
