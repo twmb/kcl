@@ -221,6 +221,15 @@ func topicAlterConfigCmd() *cobra.Command {
 		"Alter a topic's configuration",
 		`Alter a topic's configuration.
 
+Altering configs requires listing all dynamic config options for any alter.
+The incremental alter, added in Kafka 2.3.0, allows adding or removing
+individual values.
+
+Since an alter may inadvertently lose existing config values, this command
+by default checks for existing config key/value pairs that may be lost in
+the alter and prompts if it is OK to lose those values. To skip this check,
+use the --no-confirm flag.
+
 This command supports JSON output.
 `,
 		false,

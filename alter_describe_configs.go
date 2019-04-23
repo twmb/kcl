@@ -25,6 +25,7 @@ func alterConfigsCmd(
 	cfg := &req.Resources[0]
 
 	var configKVs []string
+	var noConfirm bool
 
 	cmd := &cobra.Command{
 		Use:   use,
@@ -39,10 +40,15 @@ func alterConfigsCmd(
 		ValidArgs: []string{
 			"--kv",
 			"--validate",
+			"--no-confirm",
 		},
 		Run: func(_ *cobra.Command, args []string) {
 			kvs, err := parseKVs(configKVs)
 			maybeDie(err, "unable to parse KVs: %v", err)
+
+			if !noConfirm {
+				confirmAlterLoss(args, isBroker, kvs)
+			}
 
 			for _, kv := range kvs {
 				cfg.ConfigEntries = append(cfg.ConfigEntries,
@@ -86,8 +92,62 @@ func alterConfigsCmd(
 
 	cmd.Flags().StringSliceVarP(&configKVs, "kv", "k", nil, "list of (k)ey value config parameters to set (comma separtaed or repeated flag; e.g. cleanup.policy=compact,preallocate=true)")
 	cmd.Flags().BoolVarP(&req.ValidateOnly, "validate", "v", false, "(v)alidate the config alter request, but do not apply (dry run)")
+	cmd.Flags().BoolVar(&noConfirm, "no-confirm", false, "skip confirmation of to-be-lost unspecified existing dynamic config keys")
 
 	return cmd
+}
+
+func confirmAlterLoss(args []string, isBroker bool, kvs []kv) {
+	existing := make(map[string]string, 10)
+	_, describeResource := issueDescribeConfig(args, isBroker)
+	for _, entry := range describeResource.ConfigEntries {
+		switch entry.ConfigSource {
+		case 4, 5: // static, default
+			continue
+		}
+		val := "(null)"
+		if entry.ConfigValue != nil {
+			val = *entry.ConfigValue
+		}
+		if entry.IsSensitive {
+			val = "(sensitive)"
+		}
+		existing[entry.ConfigName] = val
+	}
+
+	for _, kv := range kvs {
+		delete(existing, kv.k)
+	}
+
+	if len(existing) > 0 {
+		losing := make([]kv, 0, len(existing))
+		for k, v := range existing {
+			losing = append(losing, kv{k, v})
+		}
+		sort.Slice(losing, func(i, j int) bool {
+			return losing[i].k < losing[j].k
+		})
+		fmt.Println("THIS ALTER WILL LOSE THE FOLLOWING CONFIG KEY/VALUES, IS THAT OK?")
+		fmt.Println()
+		for _, toLose := range losing {
+			fmt.Printf("%s=%s\n", toLose.k, toLose.v)
+		}
+		fmt.Println()
+
+		for {
+			fmt.Print("[y]es|[n]o > ")
+			var s string
+			fmt.Scanf("%s", &s)
+			switch s {
+			case "y", "yes":
+				return
+			case "n", "no":
+				die("aborting.")
+			default:
+				fmt.Printf("unrecognized input %q, valid options are y, yes, n, no\n", s)
+			}
+		}
+	}
 }
 
 func configSourceForInt8(i int8) string {
@@ -108,7 +168,15 @@ func configSourceForInt8(i int8) string {
 	return ""
 }
 
-func describeConfig(maybeName []string, isBroker bool) {
+// issues a describe config for a single resource and returns
+// the response and that resource.
+//
+// This dies if the response fails or the response has an ErrorCode
+// or there is not just one resource in the response.
+func issueDescribeConfig(maybeName []string, isBroker bool) (
+	*kmsg.DescribeConfigsResponse,
+	*kmsg.DescribeConfigsResponseResource,
+) {
 	name := ""
 	if len(maybeName) == 1 {
 		name = maybeName[0]
@@ -139,13 +207,8 @@ func describeConfig(maybeName []string, isBroker bool) {
 
 	kresp, err := r.Request(&req)
 	maybeDie(err, "unable to describe config: %v", err)
-
-	if asJSON {
-		dumpJSON(kresp)
-		return
-	}
-
 	resp := kresp.(*kmsg.DescribeConfigsResponse)
+
 	if len(resp.Resources) != 1 {
 		die("quitting; one resource requested but received %d", len(resp.Resources))
 	}
@@ -156,6 +219,16 @@ func describeConfig(maybeName []string, isBroker bool) {
 			msg = " (" + *resource.ErrorMessage + ")"
 		}
 		die("%s%s", err, msg)
+	}
+
+	return resp, &resource
+}
+
+func describeConfig(maybeName []string, isBroker bool) {
+	resp, resource := issueDescribeConfig(maybeName, isBroker)
+	if asJSON {
+		dumpJSON(resp)
+		return
 	}
 
 	kvs := resource.ConfigEntries

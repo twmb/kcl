@@ -99,6 +99,15 @@ func brokerAlterConfigCmd() *cobra.Command {
 Updating an individual broker allows for reloading the broker's password
 files (even if the file path has not changed) and for setting password fields.
 Broker-wide updates do neither of these.
+
+Altering configs requires listing all dynamic config options for any alter.
+The incremental alter, added in Kafka 2.3.0, allows adding or removing
+individual values.
+
+Since an alter may inadvertently lose existing config values, this command
+by default checks for existing config key/value pairs that may be lost in
+the alter and prompts if it is OK to lose those values. To skip this check,
+use the --no-confirm flag.
 `,
 		true,
 	)
