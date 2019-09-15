@@ -61,13 +61,13 @@ The input delimiter understands \n, \r, \t, and \xXX (hex) escape sequences.
 			case "none":
 				codec = kgo.NoCompression()
 			case "gzip":
-				codec = kgo.GzipCompression(5)
+				codec = kgo.GzipCompression()
 			case "snappy":
 				codec = kgo.SnappyCompression()
 			case "lz4":
-				codec = kgo.Lz4Compression(2)
+				codec = kgo.Lz4Compression()
 			case "zstd":
-				codec = kgo.ZstdCompression(9)
+				codec = kgo.ZstdCompression()
 			}
 			clientOpts = append(clientOpts,
 				kgo.WithProduceCompression(codec))
@@ -82,15 +82,15 @@ The input delimiter understands \n, \r, \t, and \xXX (hex) escape sequences.
 					Topic: args[0],
 				}
 				if keyDelim != "" {
-					r.Key = append([]byte(nil), scanner.Bytes()...)
+					r.Key = append(make([]byte, len(scanner.Bytes())), scanner.Bytes()...)
 					if !scanner.Scan() {
 						die("missing final value delim")
 					}
 				}
-				r.Value = append([]byte(nil), scanner.Bytes()...)
+				r.Value = append(make([]byte, len(scanner.Bytes())), scanner.Bytes()...)
 
 				wg.Add(1)
-				client().Produce(r, func(r *kgo.Record, err error) {
+				err := client().Produce(r, func(r *kgo.Record, err error) {
 					defer wg.Done()
 					maybeDie(err, "unable to produce record: %v", err)
 					if verbose {
@@ -98,6 +98,7 @@ The input delimiter understands \n, \r, \t, and \xXX (hex) escape sequences.
 							r.Topic, r.Partition, r.Offset)
 					}
 				})
+				maybeDie(err, "unable to produce record: %v", err)
 			}
 			wg.Wait()
 
