@@ -301,11 +301,9 @@ This command supports JSON output.
 			createResp, err := client().Request(&kmsg.CreatePartitionsRequest{
 				TopicPartitions: []kmsg.CreatePartitionsRequestTopicPartition{
 					{
-						Topic: args[0],
-						NewPartitions: kmsg.CreatePartitionsRequestTopicPartitionNewPartitions{
-							Count:      int32(currentPartitionCount + len(assignments)),
-							Assignment: assignments,
-						},
+						Topic:      args[0],
+						Count:      int32(currentPartitionCount + len(assignments)),
+						Assignment: assignments,
 					},
 				},
 				Timeout: cfg.TimeoutMillis,
