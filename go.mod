@@ -9,3 +9,5 @@ require (
 	github.com/twmb/kgo v0.0.0-20190412221104-4ef2a3ca30f4
 	golang.org/x/exp v0.0.0-20190411193353-0480eff6dd7c // indirect
 )
+
+replace github.com/twmb/kgo => ../kgo
