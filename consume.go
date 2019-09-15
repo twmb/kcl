@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/twmb/go-strftime"
 	"github.com/twmb/kgo"
 )
 
@@ -47,13 +49,28 @@ Format options:
   %t    record topic
   %p    record partition
   %o    record offset
+  %%    percent sign
   \n    newline
   \r    carriage return
   \t    tab
   \xXX  any ASCII character (input must be hex)
 
-Example:
-  -f 'Topic %t [%p] at offset %o: key %k: %s\n'
+%T supports enhanced time formatting through opening inside {}.
+The one current enhanced option is strftime.
+
+To use strftime formatting, open with "%T{strftime" and close with "}".
+After "%T{strftime", you can use any delimiter to open the strftime
+format and subsequently close it; the delimiter can be repeated.
+If your delimiter is {, [, (, the closing delimiter is ), ], or }.
+
+For example
+
+  %T{strftime[[[%F]]]}
+
+will output the timestamp with strftime's %F option.
+
+Putting it all together:
+  -f 'Topic %t [%p] at offset %o (%T{strftime[%F %T]}): key %k: %s\n'
 `,
 		ValidArgs: []string{
 			"--partitions",
@@ -86,12 +103,9 @@ Example:
 					}
 
 					re := regexp.MustCompile(arg)
-					for i := 0; i < len(topicParts); i++ {
-						if re.MatchString(topicParts[i].Topic) {
-							keep = append(keep, topicParts[i])
-							topicParts[i] = topicParts[len(topicParts)-1]
-							topicParts = topicParts[:len(topicParts)-1]
-							i--
+					for _, topicPart := range topicParts {
+						if re.MatchString(topicPart.Topic) {
+							keep = append(keep, topicPart)
 						}
 					}
 				}
@@ -148,14 +162,11 @@ Example:
 							continue
 						}
 					}
-
 					topicOffsets[part] = koffset
-
 				}
 			}
 
-			err = client().AssignPartitions(offsets)
-			maybeDie(err, "unable to assign partitions: %v", err)
+			client().AssignPartitions(offsets)
 			co.consume()
 
 		},
@@ -179,15 +190,16 @@ type consumeOutput struct {
 }
 
 func (co *consumeOutput) buildFormatFn(format string) {
-	out := make([]byte, 0, len(format))
-	var argFns []func(*kgo.Record) interface{}
+	var argFns []func([]byte, *kgo.Record) []byte
+	var pieces [][]byte
+	var piece []byte
 	for len(format) > 0 {
 		b := format[0]
 		format = format[1:]
 
 		switch b {
 		default:
-			out = append(out, b)
+			piece = append(piece, b)
 
 		case '\\':
 			if len(format) == 0 {
@@ -195,11 +207,11 @@ func (co *consumeOutput) buildFormatFn(format string) {
 			}
 			switch format[0] {
 			case 't':
-				out = append(out, '\t')
+				piece = append(piece, '\t')
 			case 'n':
-				out = append(out, '\n')
+				piece = append(piece, '\n')
 			case 'r':
-				out = append(out, '\r')
+				piece = append(piece, '\r')
 			case 'x':
 				if len(format) < 3 { // on x, need two more
 					die("invalid non-terminated hex escape sequence at end of format string")
@@ -207,7 +219,7 @@ func (co *consumeOutput) buildFormatFn(format string) {
 				hex := format[1:3]
 				n, err := strconv.ParseInt(hex, 16, 8)
 				maybeDie(err, "unable to parse hex escape sequence %q: %v", hex, err)
-				out = append(out, byte(n))
+				piece = append(piece, byte(n))
 				format = format[2:] // two here, one below
 			default:
 				die("unknown slash escape sequence %q", format[:1])
@@ -218,72 +230,121 @@ func (co *consumeOutput) buildFormatFn(format string) {
 			if len(format) == 0 {
 				die("invalid percent escape sequence at end of format string")
 			}
+			if format[0] == '%' {
+				piece = append(piece, '%')
+				format = format[1:]
+				continue
+			}
 
-			out = append(out, '%')
-			switch format[0] {
+			// Always cut the piece, even if it is empty. We alternate piece, argFn.
+			pieces = append(pieces, piece)
+			piece = []byte{}
+
+			next := format[0]
+			format = format[1:]
+			switch next {
 			case 's', 'v':
-				argFns = append(argFns, func(r *kgo.Record) interface{} { return r.Value })
-				out = append(out, 's')
+				argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return append(out, r.Value...) })
 
 			case 'S', 'V':
-				argFns = append(argFns, func(r *kgo.Record) interface{} { return len(r.Value) })
-				out = append(out, 'd')
+				argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return strconv.AppendInt(out, int64(len(r.Value)), 10) })
 
 			case 'R':
-				argFns = append(argFns, func(r *kgo.Record) interface{} {
-					buf := make([]byte, 8)
-					binary.BigEndian.PutUint64(buf, uint64(len(r.Value)))
-					return buf
+				argFns = append(argFns, func(out []byte, r *kgo.Record) []byte {
+					out = append(out, 0, 0, 0, 0, 0, 0, 0, 0)
+					binary.BigEndian.PutUint64(out[len(out)-8:], uint64(len(r.Value)))
+					return out
 				})
-				out = append(out, 's')
 
 			case 'k':
-				argFns = append(argFns, func(r *kgo.Record) interface{} { return r.Key })
-				out = append(out, 's')
+				argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return append(out, r.Key...) })
 
 			case 'K':
-				argFns = append(argFns, func(r *kgo.Record) interface{} { return len(r.Key) })
-				out = append(out, 'd')
+				argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return strconv.AppendInt(out, int64(len(r.Key)), 10) })
 
 			case 't':
-				argFns = append(argFns, func(r *kgo.Record) interface{} { return r.Topic })
-				out = append(out, 's')
+				argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return append(out, r.Topic...) })
 
 			case 'p':
-				argFns = append(argFns, func(r *kgo.Record) interface{} { return r.Partition })
-				out = append(out, 'd')
+				argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return strconv.AppendInt(out, int64(r.Partition), 10) })
 
 			case 'o':
-				argFns = append(argFns, func(r *kgo.Record) interface{} { return r.Offset })
-				out = append(out, 'd')
+				argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return strconv.AppendInt(out, r.Offset, 10) })
 
 			case 'T':
-				argFns = append(argFns, func(r *kgo.Record) interface{} { return r.Timestamp.UnixNano() })
-				out = append(out, 'd')
+				if len(format) > 0 && format[0] == '{' {
+					format = format[1:]
+					switch {
+					case strings.HasPrefix(format, "strftime"):
+						tfmt, rem, err := nomOpenClose(format[len("strftime"):])
+						if err != nil {
+							die("strftime parse err: %v", err)
+						}
+						if len(rem) == 0 || rem[0] != '}' {
+							die("%%T{strftime missing closing }")
+						}
+						format = rem[1:]
+						argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return strftime.AppendFormat(out, tfmt, r.Timestamp) })
+					default:
+						die("unknown %%T{ time qualifier name")
+					}
+				} else {
+					argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return strconv.AppendInt(out, r.Timestamp.UnixNano(), 10) })
+				}
 
 			default:
 				die("unknown percent escape sequence %q", format[:1])
 			}
-
-			format = format[1:]
 		}
 	}
 
-	format = string(out)
-	args := make([]interface{}, 0, len(argFns))
+	if len(piece) > 0 {
+		pieces = append(pieces, piece)
+		argFns = append(argFns, func(out []byte, _ *kgo.Record) []byte { return out })
+	}
+	var out []byte
 	co.format = func(r *kgo.Record) {
-		args = args[:0]
-		for _, argFn := range argFns {
-			args = append(args, argFn(r))
+		out = out[:0]
+		for i, piece := range pieces {
+			out = append(out, piece...)
+			out = argFns[i](out, r)
 		}
-		fmt.Printf(format, args...)
+		os.Stdout.Write(out)
 	}
+}
+
+func nomOpenClose(src string) (string, string, error) {
+	if len(src) == 0 {
+		return "", "", errors.New("empty format")
+	}
+	delim := src[0]
+	openers := 1
+	for openers < len(src) && src[openers] == delim {
+		openers++
+	}
+	switch delim {
+	case '{':
+		delim = '}'
+	case '[':
+		delim = ']'
+	case '(':
+		delim = ')'
+	}
+	src = src[openers:]
+	end := strings.Repeat(string([]byte{delim}), openers)
+	idx := strings.Index(src, end)
+	if idx < 0 {
+		return "", "", fmt.Errorf("missing end delim %q", end)
+	}
+	middle := src[:idx]
+	return middle, src[idx+len(end):], nil
 }
 
 func (co *consumeOutput) consume() {
 	for {
 		fetches := client().PollConsumer(context.Background())
 
+		// TODO Errors(), print to stderr
 		iter := fetches.RecordIter()
 		for !iter.Done() {
 			record := iter.Next()
