@@ -2,13 +2,13 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"os"
-	"reflect"
 	"strconv"
-	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/twmb/kgo"
 	"github.com/twmb/kgo/kerr"
 	"github.com/twmb/kgo/kmsg"
 )
@@ -27,6 +27,7 @@ func miscCmd() *cobra.Command {
 	cmd.AddCommand(metadataCmd())
 	cmd.AddCommand(genAutocompleteCmd())
 	cmd.AddCommand(apiVersionsCmd())
+	cmd.AddCommand(probeVersionCmd())
 
 	return cmd
 }
@@ -128,16 +129,85 @@ func apiVersionsCmd() *cobra.Command {
 			resp := kresp.(*kmsg.ApiVersionsResponse)
 			fmt.Fprintf(tw, "NAME\tMAX\n")
 			for _, k := range resp.ApiVersions {
-				kind := "Unknown"
-				req := kmsg.RequestForKey(k.ApiKey)
-				if req != nil {
-					kind = reflect.Indirect(reflect.ValueOf(req)).Type().Name()
-					kind = strings.TrimSuffix(kind, "Request")
+				kind := kmsg.NameForKey(k.ApiKey)
+				if kind == "" {
+					kind = "Unknown"
 				}
-
 				fmt.Fprintf(tw, "%s\t%d\n", kind, k.MaxVersion)
 			}
 			tw.Flush()
+		},
+	}
+}
+
+func probeVersionCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "probe-version",
+		Short: "Probe and print the version of Kafka running",
+		Args:  cobra.ExactArgs(0),
+		Run: func(_ *cobra.Command, _ []string) {
+			// If we request against a Kafka older than ApiVersions,
+			// Kafka will close the connection. ErrConnDead is
+			// retried automatically, so we must stop that.
+			clientOpts = append(clientOpts,
+				kgo.WithRetries(0),
+			)
+			kresp, err := client().Request(new(kmsg.ApiVersionsRequest))
+			if err != nil {
+				// pre 0.10.0 had no api versions
+				// 0.9.0 has list groups
+				// 0.8.2 has find coordinator
+				// 0.8.1 has offset fetch
+				if _, err = client().Request(new(kmsg.ListGroupsRequest)); err == nil {
+					fmt.Println("Kafka 0.9.0")
+					return
+				}
+				if _, err = client().Request(new(kmsg.FindCoordinatorRequest)); err == nil {
+					fmt.Println("Kafka 0.8.2")
+					return
+				}
+				// OffsetFetch triggers FindCoordinator, which does not
+				// exist and will fail. We need to directly ask a broker.
+				// kgo's seed brokers start at MinInt32, so we know we are
+				// getting a broker with this number.
+				// TODO maybe not make specific to impl...
+				if _, err = client().Broker(math.MinInt32).Request(new(kmsg.OffsetFetchRequest)); err == nil {
+					fmt.Println("Kafka 0.8.1")
+					return
+				}
+				fmt.Println("Kafka 0.8.0")
+				return
+			}
+
+			resp := kresp.(*kmsg.ApiVersionsResponse)
+			keys := resp.ApiVersions
+			num := len(resp.ApiVersions)
+			switch {
+			case num == 18:
+				fmt.Println("Kafka 0.10.0")
+			case num == 20 && keys[6].MaxVersion == 2:
+				fmt.Println("Kafka 0.10.1")
+			case num == 20 && keys[6].MaxVersion == 3:
+				fmt.Println("Kafka 0.10.2")
+			case num == 33:
+				fmt.Println("Kafka 0.11.1")
+			case num == 37:
+				fmt.Println("Kafka 1.0.0")
+			case num == 42 && keys[0].MaxVersion == 5:
+				fmt.Println("Kafka 1.1.0")
+			case num == 42 && keys[0].MaxVersion == 6:
+				fmt.Println("Kafka 2.0.0")
+			case num == 42 && keys[0].MaxVersion == 7:
+				fmt.Println("Kafka 2.1.0")
+			case num == 43:
+				fmt.Println("Kafka 2.2.0")
+			case num == 44:
+				fmt.Println("Kafka 2.3.0")
+			case num == 46:
+				fmt.Println("Kafka 2.4.0")
+			default:
+				fmt.Println("Unknown version: either tip or between releases")
+			}
 		},
 	}
 }

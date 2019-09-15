@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/twmb/kgo"
+	"github.com/twmb/kgo/kversion"
 )
 
 // The top half of this file is loading config.
@@ -32,10 +33,12 @@ var (
 	noCfgFile    bool
 	cfgOverrides []string
 
+	asVersion string // which version of Kafka api versions to use
+
 	asJSON bool // dump responses as JSON for commands that support it
 
-	defaultCfgPath    = ""
-	defaultCfgPathErr error
+	defaultCfgPath = ""
+	configDirErr   error
 )
 
 var cfg struct {
@@ -50,15 +53,16 @@ var cfg struct {
 }
 
 func init() {
-	var home string
-	home, defaultCfgPathErr = os.UserHomeDir()
-	if defaultCfgPathErr == nil {
-		defaultCfgPath = filepath.Join(home, ".config", "kcl", "config.toml")
+	var configDir string
+	configDir, configDirErr = os.UserConfigDir()
+	if configDirErr == nil {
+		defaultCfgPath = filepath.Join(configDir, "kcl", "config.toml")
 	}
 
 	root.PersistentFlags().StringVar(&cfgPath, "config-path", defaultCfgPath, "path to confile file (lowest priority)")
 	root.PersistentFlags().BoolVarP(&noCfgFile, "no-config", "Z", false, "do not load any config file")
 	root.PersistentFlags().StringArrayVarP(&cfgOverrides, "config-opt", "X", nil, "flag provided config option (highest priority)")
+	root.PersistentFlags().StringVar(&asVersion, "as-version", "", "if nonempty, which version of Kafka versions to use (e.g. '0.8.0', '0.10.0', '1.0.0'; dots optional)")
 
 	root.PersistentFlags().BoolVarP(&asJSON, "dump-json", "j", false, "dump response as json if supported")
 
@@ -67,44 +71,44 @@ func init() {
 	cfg.TimeoutMillis = 1000
 }
 
-var configHelp = `kcl takes configuration options by default from ` + defaultCfgPath + `.
-The config path can be set with --config-path, and --no-config (-Z) can be used
-to disable loading a config file entirely.
-
-To show the configuration that kcl is running with, run 'kcl misc dump-config'.
-
-The repeatable -X flag allows for specifying config options directly. Any flag
-set option has higher precedence over config file options.
-
-Options are described below, with examples being how they would look in a
-config.toml. Overrides generally look the same, but quotes can be dropped and
-arrays do not use brackets (-X foo=bar,baz).
-
-OPTIONS
-
-  seed_brokers=["localhost", "127.0.0.1:9092"]
-     An inital set of brokers to use for connecting to your Kafka cluster.
-
-  timeout_ms=1000
-     Timeout to use for any command that takes a timeout.
-
-  tls_ca_cert_path="/path/to/my/ca.cert"
-     Path to a CA cert to load and use for connecting to brokers over TLS.
-
-  tls_client_cert_path="/path/to/my/ca.cert"
-     Path to a client cert to load and use for connecting to brokers over TLS.
-     This must be paired with tls_client_key_path.
-
-  tls_client_key_path="/path/to/my/ca.cert"
-     Path to a client key to load and use for connecting to brokers over TLS.
-     This must be paired with tls_client_cert_path.
-
-  tls_server_name="127.0.0.1"
-     Server name to use for connecting to brokers over TLS.
-
-`
-
 func load() (*kgo.Client, error) {
+	if asVersion != "" {
+		var versions kversion.Versions
+		switch asVersion {
+		case "0.8.0":
+			versions = kversion.V0_8_0()
+		case "0.8.1":
+			versions = kversion.V0_8_1()
+		case "0.8.2":
+			versions = kversion.V0_8_2()
+		case "0.9.0":
+			versions = kversion.V0_9_0()
+		case "0.10.0":
+			versions = kversion.V0_10_0()
+		case "0.10.1":
+			versions = kversion.V0_10_1()
+		case "0.10.2":
+			versions = kversion.V0_10_2()
+		case "0.11.0":
+			versions = kversion.V0_11_0()
+		case "1.0.0":
+			versions = kversion.V1_0_0()
+		case "1.1.0":
+			versions = kversion.V1_1_0()
+		case "2.0.0":
+			versions = kversion.V2_0_0()
+		case "2.1.0":
+			versions = kversion.V2_1_0()
+		case "2.2.0":
+			versions = kversion.V2_2_0()
+		case "2.3.0":
+			versions = kversion.V2_3_0()
+		default:
+			return nil, fmt.Errorf("unknown Kafka version %s", asVersion)
+		}
+		clientOpts = append(clientOpts, kgo.WithMaxVersions(versions))
+	}
+
 	if !noCfgFile {
 		md, err := toml.DecodeFile(cfgPath, &cfg)
 		if !os.IsNotExist(err) {
@@ -188,7 +192,10 @@ func load() (*kgo.Client, error) {
 			}))
 	}
 
-	c, err := kgo.NewClient(cfg.SeedBrokers, clientOpts...)
+	clientOpts = append(clientOpts,
+		kgo.WithSeedBrokers(cfg.SeedBrokers...),
+	)
+	c, err := kgo.NewClient(clientOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create client: %v", err)
 	}
@@ -279,6 +286,7 @@ func configCmd() *cobra.Command {
 	cmd.AddCommand(cfgHelpCmd())
 	cmd.AddCommand(cfgUseCmd())
 	cmd.AddCommand(cfgClearCmd())
+	cmd.AddCommand(cfgListCmd())
 
 	return cmd
 }
@@ -295,6 +303,42 @@ func cfgDumpCmd() *cobra.Command {
 }
 
 func cfgHelpCmd() *cobra.Command {
+	var configHelp = `kcl takes configuration options by default from ` + defaultCfgPath + `.
+The config path can be set with --config-path, and --no-config (-Z) can be used
+to disable loading a config file entirely.
+
+To show the configuration that kcl is running with, run 'kcl misc dump-config'.
+
+The repeatable -X flag allows for specifying config options directly. Any flag
+set option has higher precedence over config file options.
+
+Options are described below, with examples being how they would look in a
+config.toml. Overrides generally look the same, but quotes can be dropped and
+arrays do not use brackets (-X foo=bar,baz).
+
+OPTIONS
+
+  seed_brokers=["localhost", "127.0.0.1:9092"]
+     An inital set of brokers to use for connecting to your Kafka cluster.
+
+  timeout_ms=1000
+     Timeout to use for any command that takes a timeout.
+
+  tls_ca_cert_path="/path/to/my/ca.cert"
+     Path to a CA cert to load and use for connecting to brokers over TLS.
+
+  tls_client_cert_path="/path/to/my/ca.cert"
+     Path to a client cert to load and use for connecting to brokers over TLS.
+     This must be paired with tls_client_key_path.
+
+  tls_client_key_path="/path/to/my/ca.cert"
+     Path to a client key to load and use for connecting to brokers over TLS.
+     This must be paired with tls_client_cert_path.
+
+  tls_server_name="127.0.0.1"
+     Server name to use for connecting to brokers over TLS.
+
+`
 	return &cobra.Command{
 		Use:   "help",
 		Short: "describe kcl config semantics",
@@ -323,7 +367,7 @@ If asked to use config "none", this simply remove an existing symlink.
 		Args: cobra.ExactArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
 			if defaultCfgPath == "" {
-				die("cannot use a config; unable to determine home dir: %v", defaultCfgPathErr)
+				die("cannot use a config; unable to determine home dir: %v", configDirErr)
 			}
 
 			existing, err := os.Lstat(defaultCfgPath)
@@ -388,7 +432,7 @@ func cfgClearCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
 			if defaultCfgPath == "" {
-				die("cannot use a config; unable to determine home dir: %v", defaultCfgPathErr)
+				die("cannot use a config; unable to determine config dir: %v", configDirErr)
 			}
 
 			existing, err := os.Lstat(defaultCfgPath)
@@ -408,6 +452,23 @@ func cfgClearCmd() *cobra.Command {
 				die("unable to remove symlink at %q: %v", defaultCfgPath, err)
 			}
 			fmt.Printf("cleared config symlink %q\n", defaultCfgPath)
+		},
+	}
+}
+
+func cfgListCmd() *cobra.Command {
+	dir := filepath.Dir(defaultCfgPath)
+
+	return &cobra.Command{
+		Use:   "lsdir",
+		Short: "List all files in configuration directory" + defaultCfgPath,
+		Args:  cobra.ExactArgs(0),
+		Run: func(_ *cobra.Command, _ []string) {
+			dirents, err := ioutil.ReadDir(dir)
+			maybeDie(err, "unable to read config dir %q: %v", dir, err)
+			for _, dirent := range dirents {
+				fmt.Println(dirent.Name())
+			}
 		},
 	}
 }
