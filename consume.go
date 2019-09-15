@@ -1,13 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/spf13/cobra"
 	"github.com/twmb/kgo"
@@ -128,9 +128,13 @@ Example:
 			}
 			co.buildFormatFn(format)
 
-			var wg sync.WaitGroup
-
+			offsets := make(map[string]map[int32]kgo.Offset)
 			for _, topicPart := range topicParts {
+				topicOffsets := offsets[topicPart.Topic]
+				if topicOffsets == nil {
+					topicOffsets = make(map[int32]kgo.Offset)
+					offsets[topicPart.Topic] = topicOffsets
+				}
 				for _, part := range topicPart.Partitions {
 					if len(partitions) > 0 {
 						var requested bool
@@ -145,18 +149,14 @@ Example:
 						}
 					}
 
-					partConsumer, err := client().ConsumePartition(topicPart.Topic, part, koffset)
-					maybeDie(err, "unable to consume topic %q partition %d: %v", topicPart.Topic, part, err)
+					topicOffsets[part] = koffset
 
-					wg.Add(1)
-					go func() {
-						defer wg.Done()
-						co.consume(partConsumer)
-					}()
 				}
 			}
 
-			wg.Wait()
+			err = client().AssignPartitions(offsets)
+			maybeDie(err, "unable to assign partitions: %v", err)
+			co.consume()
 
 		},
 	}
@@ -172,7 +172,6 @@ Example:
 }
 
 type consumeOutput struct {
-	mu  sync.Mutex
 	num int
 	max int
 
@@ -281,37 +280,19 @@ func (co *consumeOutput) buildFormatFn(format string) {
 	}
 }
 
-func (co *consumeOutput) consume(pc *kgo.PartitionConsumer) {
-	errs := pc.Errors()
-	recs := pc.Records()
-
+func (co *consumeOutput) consume() {
 	for {
-		select {
-		case _, ok := <-errs:
-			if !ok {
-				errs = nil
+		fetches := client().PollConsumer(context.Background())
+
+		iter := fetches.RecordIter()
+		for !iter.Done() {
+			record := iter.Next()
+			co.num++
+			co.format(record)
+
+			if co.num == co.max {
+				os.Exit(0)
 			}
-
-		case rs, ok := <-recs:
-			if !ok {
-				recs = nil
-			}
-
-			co.mu.Lock()
-			for _, r := range rs {
-				co.num++
-
-				co.format(r)
-
-				if co.num == co.max {
-					os.Exit(0)
-				}
-			}
-			co.mu.Unlock()
-		}
-
-		if errs == nil && recs == nil {
-			return
 		}
 	}
 }
