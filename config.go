@@ -62,7 +62,7 @@ func init() {
 	root.PersistentFlags().StringVar(&cfgPath, "config-path", defaultCfgPath, "path to confile file (lowest priority)")
 	root.PersistentFlags().BoolVarP(&noCfgFile, "no-config", "Z", false, "do not load any config file")
 	root.PersistentFlags().StringArrayVarP(&cfgOverrides, "config-opt", "X", nil, "flag provided config option (highest priority)")
-	root.PersistentFlags().StringVar(&asVersion, "as-version", "", "if nonempty, which version of Kafka versions to use (e.g. '0.8.0', '0.10.0', '1.0.0'; dots optional)")
+	root.PersistentFlags().StringVar(&asVersion, "as-version", "", "if nonempty, which version of Kafka versions to use (e.g. '0.8.0', '2.3.0')")
 
 	root.PersistentFlags().BoolVarP(&asJSON, "dump-json", "j", false, "dump response as json if supported")
 
