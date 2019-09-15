@@ -163,7 +163,7 @@ func topicCreateCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVarP(&req.ValidateOnly, "validate", "v", false, "(v)alidate the topic creation request; do not create topics (dry run)")
-	cmd.Flags().Int32VarP(&topicReq.NumPartitions, "num-partitions", "p", 1, "number of (p)artitions to create")
+	cmd.Flags().Int32VarP(&topicReq.NumPartitions, "num-partitions", "p", 20, "number of (p)artitions to create")
 	cmd.Flags().Int16VarP(&topicReq.ReplicationFactor, "replication-factor", "r", 1, "number of (r)eplicas to have of each partition")
 	cmd.Flags().StringSliceVarP(&configKVs, "kv", "k", nil, "list of (k)ey value config parameters (comma separated or repeated flag; e.g. cleanup.policy=compact,preallocate=true)")
 
