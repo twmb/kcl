@@ -19,6 +19,7 @@ func (c *consumption) command() *cobra.Command {
 			c.run(args)
 		},
 	}
+	cmd.Flags().StringVarP(&c.group, "group", "G", "", "group to assign")
 	cmd.Flags().Int32SliceVarP(&c.partitions, "partitions", "p", nil, "comma delimited list of specific partitions to consume")
 	cmd.Flags().StringVarP(&c.offset, "offset", "o", "start", "offset to start consuming from (start, end, 47, start+2, end-3)")
 	cmd.Flags().IntVarP(&c.num, "num", "n", 0, "quit after consuming this number of records; 0 is unbounded")

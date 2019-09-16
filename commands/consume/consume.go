@@ -22,6 +22,7 @@ import (
 type consumption struct {
 	cl *client.Client
 
+	group      string
 	regex      bool
 	partitions []int32
 	offset     string
@@ -36,10 +37,15 @@ func Command(cl *client.Client) *cobra.Command {
 
 func (c *consumption) run(topics []string) {
 	var consumeOpts []kgo.ConsumeOpt
+	var groupOpts []kgo.GroupOpt
 	offset := c.parseOffset()
 	if len(c.partitions) == 0 {
 		consumeOpts = append(consumeOpts, kgo.ConsumeTopics(offset, topics...))
+		groupOpts = append(groupOpts, kgo.GroupTopics(topics...))
 	} else {
+		if len(c.group) != 0 {
+			out.Die("incompatible flag assignment: group consuming cannot be used with direct partition consuming")
+		}
 		offsets := make(map[string]map[int32]kgo.Offset)
 		for _, topic := range topics {
 			partOffsets := make(map[int32]kgo.Offset, len(c.partitions))
@@ -55,7 +61,11 @@ func (c *consumption) run(topics []string) {
 	}
 
 	cl := c.cl.Client()
-	cl.AssignPartitions(consumeOpts...)
+	if len(c.group) > 0 {
+		cl.AssignGroup(c.group, groupOpts...)
+	} else {
+		cl.AssignPartitions(consumeOpts...)
+	}
 	co := &consumeOutput{
 		cl:  cl,
 		max: c.num,
