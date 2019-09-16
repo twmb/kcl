@@ -1,53 +1,60 @@
-package main
+// Package broker contains broker related utilities and subcommands.
+package broker
 
 import (
 	"fmt"
 	"sort"
 
 	"github.com/spf13/cobra"
+
+	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/commands/altdescconf"
+	"github.com/twmb/kcl/out"
+
 	"github.com/twmb/kgo/kmsg"
 )
 
-func init() {
-	root.AddCommand(brokerCmd())
-}
-
-func brokerCmd() *cobra.Command {
+func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "broker",
 		Short: "Perform broker related actions",
 	}
 
-	cmd.AddCommand(brokerListCmd())
-	cmd.AddCommand(brokerDescribeConfigCmd())
-	cmd.AddCommand(brokerAlterConfigCmd())
+	cmd.AddCommand(brokerListCommand(cl))
+	cmd.AddCommand(brokerDescribeConfigCommand(cl))
+	cmd.AddCommand(brokerAlterConfigCommand(cl))
 
 	return cmd
 }
 
-func brokerListCmd() *cobra.Command {
+func brokerListCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
 		Short: "List all brokers (the controller is marked with *)",
+		Args:  cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
-			kresp, err := client().Request(new(kmsg.MetadataRequest))
-			maybeDie(err, "unable to get metadata: %v", err)
+			kresp, err := cl.Client().Request(new(kmsg.MetadataRequest))
+			out.MaybeDie(err, "unable to get metadata: %v", err)
 			resp := kresp.(*kmsg.MetadataResponse)
 
-			if asJSON {
-				dumpJSON(resp.Brokers)
+			if cl.AsJSON() {
+				out.DumpJSON(resp.Brokers)
 				return
 			}
 
-			printBrokers(resp.ControllerID, resp.Brokers)
+			PrintBrokers(resp.ControllerID, resp.Brokers)
 		},
 	}
 }
 
-func printBrokers(controllerID int32, brokers []kmsg.MetadataResponseBroker) {
+// PrintBrokers prints tab written brokers to stdout.
+func PrintBrokers(controllerID int32, brokers []kmsg.MetadataResponseBroker) {
 	sort.Slice(brokers, func(i, j int) bool {
 		return brokers[i].NodeID < brokers[j].NodeID
 	})
+
+	tw := out.BeginTabWrite()
+	defer tw.Flush()
 
 	fmt.Fprintf(tw, "ID\tHOST\tPORT\tRACK\n")
 	for _, broker := range brokers {
@@ -64,11 +71,11 @@ func printBrokers(controllerID int32, brokers []kmsg.MetadataResponseBroker) {
 		fmt.Fprintf(tw, "%d%s\t%s\t%d\t%s\n",
 			broker.NodeID, controllerStar, broker.Host, broker.Port, rack)
 	}
-
-	tw.Flush()
 }
 
-func brokerDescribeConfigCmd() *cobra.Command {
+// brokerDescribeConfigCommand returns a describe configs command specific for
+// brokers. See the altdescconf package for more documentation.
+func brokerDescribeConfigCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "describe [BROKER_ID]",
 		Short: "Describe a broker",
@@ -85,13 +92,16 @@ The JSON output option includes all config synonyms
 `,
 		Args: cobra.MaximumNArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
-			describeConfig(args, true)
+			altdescconf.DescribeConfigs(cl, args, true)
 		},
 	}
 }
 
-func brokerAlterConfigCmd() *cobra.Command {
-	return alterConfigsCmd(
+// brokerAlterConfigCommand returns an alter configs command specific for
+// brokers. See the altdescconf package for more documentation.
+func brokerAlterConfigCommand(cl *client.Client) *cobra.Command {
+	return altdescconf.AlterConfigsCommand(
+		cl,
 		"alter-config [BROKER_ID]",
 		"Alter all broker configurations or a single broker configuration",
 		`Alter all broker configurations or a single broker configuration.

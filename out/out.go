@@ -4,10 +4,27 @@ package out
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"text/tabwriter"
 
 	"github.com/twmb/kgo/kerr"
 )
+
+// BeginTabWrite returns a new tabwriter that prints to stdout.
+func BeginTabWrite() *tabwriter.Writer {
+	return BeginTabWriteTo(os.Stdout)
+}
+
+// BeginTabWriteTo returns a new tabwriter that prints to w.
+func BeginTabWriteTo(w io.Writer) *tabwriter.Writer {
+	return tabwriter.NewWriter(w, 6, 4, 2, ' ', 0)
+}
+
+// Exit calls os.Exit(1).
+func Exit() {
+	os.Exit(1)
+}
 
 // MaybeDie, if err is non-nil, prints the message and exits with 1.
 func MaybeDie(err error, msg string, args ...interface{}) {
@@ -22,15 +39,15 @@ func Die(msg string, args ...interface{}) {
 	os.Exit(1)
 }
 
-// DieJSON prints a message to stderr, dumps json to stdout, and exits with 1.
-func DieJSON(j interface{}, msg string, args ...interface{}) {
+// ExitErrJSON prints a message to stderr, dumps json to stdout, and exits with 1.
+func ExitErrJSON(j interface{}, msg string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, msg+"\n", args...)
 	DumpJSON(j)
 	os.Exit(1)
 }
 
-// QuitJSON dumps json to stdout and exits with 0.
-func QuitJSON(j interface{}) {
+// ExitJSON dumps json to stdout and exits with 0.
+func ExitJSON(j interface{}) {
 	DumpJSON(j)
 	os.Exit(0)
 }
@@ -44,14 +61,17 @@ func DumpJSON(j interface{}) {
 
 // ErrAndMsg prints OK to stdout if code is 0, otherwise the error name to
 // stderr as well as a message if non-nil.
-func ErrAndMsg(code int16, msg *string) {
+//
+// This returns true if the code was an error.
+func ErrAndMsg(code int16, msg *string) bool {
 	if err := kerr.ErrorForCode(code); err != nil {
 		additional := ""
 		if msg != nil {
 			additional = ": " + *msg
 		}
 		fmt.Fprintf(os.Stderr, "%s%s\n", err, additional)
-		return
+		return true
 	}
 	fmt.Println("OK")
+	return false
 }

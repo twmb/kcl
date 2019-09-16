@@ -15,12 +15,12 @@ import (
 	"github.com/twmb/go-strftime"
 	"github.com/twmb/kgo"
 
-	"github.com/twmb/kcl/internal/client"
-	"github.com/twmb/kcl/internal/out"
+	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/out"
 )
 
 type consumption struct {
-	client *client.Client
+	cl *client.Client
 
 	regex      bool
 	partitions []int32
@@ -30,8 +30,8 @@ type consumption struct {
 }
 
 // Command returns a consume command.
-func Command(client *client.Client) *cobra.Command {
-	return (&consumption{client: client}).command()
+func Command(cl *client.Client) *cobra.Command {
+	return (&consumption{cl: cl}).command()
 }
 
 func (c *consumption) run(topics []string) {
@@ -54,11 +54,11 @@ func (c *consumption) run(topics []string) {
 		consumeOpts = append(consumeOpts, kgo.ConsumeTopicsRegex())
 	}
 
-	client := c.client.Client()
-	client.AssignPartitions(consumeOpts...)
+	cl := c.cl.Client()
+	cl.AssignPartitions(consumeOpts...)
 	co := &consumeOutput{
-		client: client,
-		max:    c.num,
+		cl:  cl,
+		max: c.num,
 	}
 	co.buildFormatFn(c.format)
 
@@ -90,7 +90,7 @@ func (c *consumption) parseOffset() kgo.Offset {
 }
 
 type consumeOutput struct {
-	client *kgo.Client
+	cl *kgo.Client
 
 	num int
 	max int
@@ -265,7 +265,7 @@ func nomOpenClose(src string) (string, string, error) {
 
 func (co *consumeOutput) consume() {
 	for {
-		fetches := co.client.PollConsumer(context.Background())
+		fetches := co.cl.PollConsumer(context.Background())
 
 		// TODO Errors(), print to stderr
 		iter := fetches.RecordIter()

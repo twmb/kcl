@@ -1,28 +1,27 @@
-package main
+// Package logdirs contains logdir related subcommands.
+package logdirs
 
 import (
 	"github.com/spf13/cobra"
 
+	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/out"
 	"github.com/twmb/kgo/kmsg"
 )
 
-func init() {
-	root.AddCommand(logdirsCmd())
-}
-
-func logdirsCmd() *cobra.Command {
+func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "logdirs",
 		Short: "Perform log directory related actions",
 	}
 
-	cmd.AddCommand(logdirsDescribeCmd())
-	cmd.AddCommand(logdirsAlterReplicasCmd())
+	cmd.AddCommand(logdirsDescribeCommand(cl))
+	cmd.AddCommand(logdirsAlterReplicasCommand(cl))
 
 	return cmd
 }
 
-func logdirsDescribeCmd() *cobra.Command {
+func logdirsDescribeCommand(cl *client.Client) *cobra.Command {
 	var topic string
 	var partitions []int32
 
@@ -40,10 +39,10 @@ func logdirsDescribeCmd() *cobra.Command {
 				})
 			}
 
-			kresp, err := client().Request(&req)
-			maybeDie(err, "unable to describe log dirs: %v", err)
+			kresp, err := cl.Client().Request(&req)
+			out.MaybeDie(err, "unable to describe log dirs: %v", err)
 
-			dumpJSON(kresp)
+			out.DumpJSON(kresp)
 		},
 	}
 
@@ -53,7 +52,7 @@ func logdirsDescribeCmd() *cobra.Command {
 	return cmd
 }
 
-func logdirsAlterReplicasCmd() *cobra.Command {
+func logdirsAlterReplicasCommand(cl *client.Client) *cobra.Command {
 	var destDir string
 	var topic string
 	var partitions []int32
@@ -68,7 +67,7 @@ func logdirsAlterReplicasCmd() *cobra.Command {
 		},
 		Args: cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
-			resp, err := client().Request(&kmsg.AlterReplicaLogDirsRequest{
+			resp, err := cl.Client().Request(&kmsg.AlterReplicaLogDirsRequest{
 				LogDirs: []kmsg.AlterReplicaLogDirsRequestLogDir{{
 					LogDir: destDir,
 					Topics: []kmsg.AlterReplicaLogDirsRequestLogDirTopic{{
@@ -78,8 +77,8 @@ func logdirsAlterReplicasCmd() *cobra.Command {
 				}},
 			})
 
-			maybeDie(err, "unable to alter replica log dirs: %v", err)
-			dumpJSON(resp)
+			out.MaybeDie(err, "unable to alter replica log dirs: %v", err)
+			out.DumpJSON(resp)
 		},
 	}
 

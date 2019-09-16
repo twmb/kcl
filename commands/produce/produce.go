@@ -1,4 +1,4 @@
-package main
+package produce
 
 import (
 	"bufio"
@@ -9,14 +9,13 @@ import (
 	"sync"
 
 	"github.com/spf13/cobra"
+
+	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/out"
 	"github.com/twmb/kgo"
 )
 
-func init() {
-	root.AddCommand(produceCmd())
-}
-
-func produceCmd() *cobra.Command {
+func Command(cl *client.Client) *cobra.Command {
 	var (
 		recDelim    string
 		keyDelim    string
@@ -69,8 +68,7 @@ The input delimiter understands \n, \r, \t, and \xXX (hex) escape sequences.
 			case "zstd":
 				codec = kgo.ZstdCompression()
 			}
-			clientOpts = append(clientOpts,
-				kgo.WithProduceCompression(codec))
+			cl.AddOpt(kgo.WithProduceCompression(codec))
 
 			scanner := bufio.NewScanner(os.Stdin)
 			scanner.Buffer(nil, maxBuf)
@@ -84,26 +82,26 @@ The input delimiter understands \n, \r, \t, and \xXX (hex) escape sequences.
 				if keyDelim != "" {
 					r.Key = append(make([]byte, len(scanner.Bytes())), scanner.Bytes()...)
 					if !scanner.Scan() {
-						die("missing final value delim")
+						out.Die("missing final value delim")
 					}
 				}
 				r.Value = append(make([]byte, len(scanner.Bytes())), scanner.Bytes()...)
 
 				wg.Add(1)
-				err := client().Produce(r, func(r *kgo.Record, err error) {
+				err := cl.Client().Produce(r, func(r *kgo.Record, err error) {
 					defer wg.Done()
-					maybeDie(err, "unable to produce record: %v", err)
+					out.MaybeDie(err, "unable to produce record: %v", err)
 					if verbose {
 						fmt.Printf("Successful send to topic %s partition %d offset %d\n",
 							r.Topic, r.Partition, r.Offset)
 					}
 				})
-				maybeDie(err, "unable to produce record: %v", err)
+				out.MaybeDie(err, "unable to produce record: %v", err)
 			}
 			wg.Wait()
 
 			if scanner.Err() != nil {
-				die("final scan error: %v", scanner.Err())
+				out.Die("final scan error: %v", scanner.Err())
 			}
 		},
 	}
@@ -118,40 +116,40 @@ The input delimiter understands \n, \r, \t, and \xXX (hex) escape sequences.
 }
 
 func parseDelim(in string) []byte {
-	out := make([]byte, 0, len(in))
+	parsed := make([]byte, 0, len(in))
 	for len(in) > 0 {
 		b := in[0]
 		in = in[1:]
 		switch b {
 		default:
-			out = append(out, b)
+			parsed = append(parsed, b)
 		case '\\':
 			if len(in) == 0 {
-				die("invalid slash escape at end of delim string")
+				out.Die("invalid slash escape at end of delim string")
 			}
 			switch in[0] {
 			case 't':
-				out = append(out, '\t')
+				parsed = append(parsed, '\t')
 			case 'n':
-				out = append(out, '\n')
+				parsed = append(parsed, '\n')
 			case 'r':
-				out = append(out, '\r')
+				parsed = append(parsed, '\r')
 			case 'x':
 				if len(in) < 3 { // on x, need two more
-					die("invalid non-terminated hex escape sequence at end of delim string")
+					out.Die("invalid non-terminated hex escape sequence at end of delim string")
 				}
 				hex := in[1:3]
 				n, err := strconv.ParseInt(hex, 16, 8)
-				maybeDie(err, "unable to parse hex escape sequence %q: %v", hex, err)
-				out = append(out, byte(n))
+				out.MaybeDie(err, "unable to parse hex escape sequence %q: %v", hex, err)
+				parsed = append(parsed, byte(n))
 				in = in[2:] // two here, one below
 			default:
-				die("unknown slash escape sequence %q", in[:1])
+				out.Die("unknown slash escape sequence %q", in[:1])
 			}
 			in = in[1:]
 		}
 	}
-	return out
+	return parsed
 }
 
 func splitDelimFn(delim []byte) bufio.SplitFunc {

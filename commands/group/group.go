@@ -1,34 +1,34 @@
-package main
+// Package group contains group related subcommands.
+package group
 
 import (
 	"fmt"
 	"sort"
 	"strings"
-	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+
 	"github.com/twmb/kgo/kerr"
 	"github.com/twmb/kgo/kmsg"
+
+	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/out"
 )
 
-func init() {
-	root.AddCommand(groupCmd())
-}
-
-func groupCmd() *cobra.Command {
+func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "group",
 		Short: "Perform group related actions",
 	}
 
-	cmd.AddCommand(groupListCmd())
-	cmd.AddCommand(groupDescribeCmd())
-	cmd.AddCommand(groupDeleteCmd())
+	cmd.AddCommand(groupListCommand(cl))
+	cmd.AddCommand(groupDescribeCommand(cl))
+	cmd.AddCommand(groupDeleteCommand(cl))
 
 	return cmd
 }
 
-func groupListCmd() *cobra.Command {
+func groupListCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
 		Short: "List all groups",
@@ -41,30 +41,31 @@ To get a lot more information about groups, use the describe command.
 `,
 		Args: cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
-			kresp, err := client().Request(new(kmsg.ListGroupsRequest))
-			maybeDie(err, "unable to list groups: %v", err)
+			kresp, err := cl.Client().Request(new(kmsg.ListGroupsRequest))
+			out.MaybeDie(err, "unable to list groups: %v", err)
 			resp := kresp.(*kmsg.ListGroupsResponse)
 
-			if asJSON {
-				dumpJSON(kresp)
+			if cl.AsJSON() {
+				out.DumpJSON(kresp)
 				return
 			}
 
 			if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
-				die("%s", err)
+				out.Die("%s", err)
 				return
 			}
 
+			tw := out.BeginTabWrite()
+			defer tw.Flush()
 			fmt.Fprintf(tw, "GROUP ID\tPROTO TYPE\n")
 			for _, group := range resp.Groups {
 				fmt.Fprintf(tw, "%s\t%s\n", group.GroupID, group.ProtocolType)
 			}
-			tw.Flush()
 		},
 	}
 }
 
-func groupDescribeCmd() *cobra.Command {
+func groupDescribeCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "describe GROUPS...",
 		Short: "Describe Kafka groups",
@@ -81,12 +82,12 @@ This command supports JSON output.
 				GroupIDs: args,
 			}
 
-			kresp, err := client().Request(&req)
-			maybeDie(err, "unable to describe groups: %v", err)
+			kresp, err := cl.Client().Request(&req)
+			out.MaybeDie(err, "unable to describe groups: %v", err)
 			resp := unbinaryGroupDescribeMembers(kresp.(*kmsg.DescribeGroupsResponse))
 
-			if asJSON {
-				dumpJSON(resp)
+			if cl.AsJSON() {
+				out.DumpJSON(resp)
 				return
 			}
 
@@ -95,6 +96,8 @@ This command supports JSON output.
 				return
 			}
 
+			tw := out.BeginTabWrite()
+			defer tw.Flush()
 			fmt.Fprintf(tw, "GROUP ID\tSTATE\tPROTO TYPE\tPROTO\tERROR\n")
 			for _, group := range resp.Groups {
 				errMsg := ""
@@ -109,16 +112,16 @@ This command supports JSON output.
 					errMsg,
 				)
 			}
-			tw.Flush()
 		},
 	}
 }
 
 func describeGroupDetailed(group *consumerGroup) {
 	if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
-		die("%s", err)
+		out.Die("%s", err)
 	}
 
+	tw := out.BeginTabWrite()
 	fmt.Fprintf(tw, "ID\t%s\n", group.GroupID)
 	fmt.Fprintf(tw, "STATE\t%s\n", group.State)
 	fmt.Fprintf(tw, "PROTO TYPE\t%s\n", group.ProtocolType)
@@ -129,18 +132,17 @@ func describeGroupDetailed(group *consumerGroup) {
 
 	// TODO watermarks?
 
-	sb := new(strings.Builder)
-	groupTW := tabwriter.NewWriter(sb, 6, 4, 2, ' ', 0)
-	fmt.Fprintf(groupTW, "MEMBER ID\tCLIENT ID\tCLIENT HOST\tUSER DATA\n")
-
+	var sb strings.Builder
+	tw = out.BeginTabWriteTo(&sb)
+	fmt.Fprintf(tw, "MEMBER ID\tCLIENT ID\tCLIENT HOST\tUSER DATA\n")
 	for _, member := range group.Members {
-		fmt.Fprintf(groupTW, "%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n",
 			member.MemberID,
 			member.ClientID,
 			member.ClientHost,
 			string(member.MemberAssignment.UserData))
 	}
-	groupTW.Flush()
+	tw.Flush()
 
 	lines := strings.Split(sb.String(), "\n")
 	lines = lines[:len(lines)-1] // trim trailing empty line
@@ -219,21 +221,23 @@ func unbinaryGroupDescribeMembers(resp *kmsg.DescribeGroupsResponse) *consumerGr
 	return cresp
 }
 
-func groupDeleteCmd() *cobra.Command {
+func groupDeleteCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "delete GROUPS...",
 		Short: "Delete all listed Kafka groups",
 		Args:  cobra.MinimumNArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
-			kresp, err := client().Request(&kmsg.DeleteGroupsRequest{
+			kresp, err := cl.Client().Request(&kmsg.DeleteGroupsRequest{
 				Groups: args,
 			})
-			maybeDie(err, "unable to delete groups: %v", err)
+			out.MaybeDie(err, "unable to delete groups: %v", err)
 			resp := kresp.(*kmsg.DeleteGroupsResponse)
-			if asJSON {
-				dumpJSON(resp)
+			if cl.AsJSON() {
+				out.DumpJSON(resp)
 				return
 			}
+			tw := out.BeginTabWrite()
+			defer tw.Flush()
 			for _, resp := range resp.GroupErrorCodes {
 				msg := "OK"
 				if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
@@ -241,7 +245,6 @@ func groupDeleteCmd() *cobra.Command {
 				}
 				fmt.Fprintf(tw, "%s\t%s\n", resp.GroupID, msg)
 			}
-			tw.Flush()
 		},
 	}
 }

@@ -1,4 +1,5 @@
-package main
+// Package topic contains topic related utilities and subcommands.
+package topic
 
 import (
 	"bytes"
@@ -13,58 +14,61 @@ import (
 
 	"github.com/twmb/kgo/kerr"
 	"github.com/twmb/kgo/kmsg"
+
+	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/commands/altdescconf"
+	"github.com/twmb/kcl/kv"
+	"github.com/twmb/kcl/out"
 )
 
-func init() {
-	root.AddCommand(topicCmd())
-}
-
-func topicCmd() *cobra.Command {
+func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "topic",
 		Short: "Perform topic relation actions",
 	}
 
-	cmd.AddCommand(topicListCmd())
-	cmd.AddCommand(topicCreateCmd())
-	cmd.AddCommand(topicDeleteCmd())
-	cmd.AddCommand(topicDescribeConfigCmd())
-	cmd.AddCommand(topicAlterConfigCmd())
-	cmd.AddCommand(topicAddPartitionsCmd())
+	cmd.AddCommand(topicListCommand(cl))
+	cmd.AddCommand(topicCreateCommand(cl))
+	cmd.AddCommand(topicDeleteCommand(cl))
+	cmd.AddCommand(topicDescribeConfigCommand(cl))
+	cmd.AddCommand(topicAlterConfigCommand(cl))
+	cmd.AddCommand(topicAddPartitionsCommand(cl))
 	return cmd
 }
 
-func topicListCmd() *cobra.Command {
+func topicListCommand(cl *client.Client) *cobra.Command {
 	var detailed bool
-
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List all topics",
 		Args:  cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
-			kresp, err := client().Request(new(kmsg.MetadataRequest))
-			maybeDie(err, "unable to get metadata: %v", err)
+			kresp, err := cl.Client().Request(new(kmsg.MetadataRequest))
+			out.MaybeDie(err, "unable to get metadata: %v", err)
 			resp := kresp.(*kmsg.MetadataResponse)
-
-			if asJSON {
-				dumpJSON(resp.TopicMetadata)
+			if cl.AsJSON() {
+				out.DumpJSON(resp.TopicMetadata)
 				return
 			}
-
-			printTopics(resp.TopicMetadata, detailed)
+			PrintTopics(resp.TopicMetadata, detailed)
 		},
 	}
-
 	cmd.Flags().BoolVarP(&detailed, "detailed", "d", false, "include detailed information about all topic partitions")
 	return cmd
 }
 
-func printTopics(topics []kmsg.MetadataResponseTopicMetadata, detailed bool) {
+// PrintBrokers prints tab written topic information to stdout.
+//
+// If detailed is true, this prints per partition metadata as well.
+func PrintTopics(topics []kmsg.MetadataResponseTopicMetadata, detailed bool) {
 	sort.Slice(topics, func(i, j int) bool {
 		return topics[i].Topic < topics[j].Topic
 	})
 
 	if !detailed {
+		tw := out.BeginTabWrite()
+		defer tw.Flush()
+
 		fmt.Fprintf(tw, "NAME\tPARTITIONS\tREPLICAS\n")
 		for _, topic := range topics {
 			parts := len(topic.PartitionMetadata)
@@ -117,8 +121,8 @@ func printTopics(topics []kmsg.MetadataResponseTopicMetadata, detailed bool) {
 	}
 }
 
-func topicCreateCmd() *cobra.Command {
-	req := kmsg.CreateTopicsRequest{Timeout: cfg.TimeoutMillis}
+func topicCreateCommand(cl *client.Client) *cobra.Command {
+	req := kmsg.CreateTopicsRequest{Timeout: cl.TimeoutMillis()}
 
 	var topicReq kmsg.CreateTopicsRequestTopic
 	var configKVs []string
@@ -130,39 +134,39 @@ func topicCreateCmd() *cobra.Command {
 			"--num-partitions",
 			"--replication-factor",
 			"--kv",
-			"--validate",
+			"--dry",
 		},
 		Args: cobra.ExactArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
 			topicReq.Topic = args[0]
 
-			kvs, err := parseKVs(configKVs)
-			maybeDie(err, "unable to parse KVs: %v", err)
+			kvs, err := kv.Parse(configKVs)
+			out.MaybeDie(err, "unable to parse KVs: %v", err)
 			for _, kv := range kvs {
 				topicReq.ConfigEntries = append(topicReq.ConfigEntries,
 					kmsg.CreateTopicsRequestTopicConfigEntry{
-						ConfigName:  kv.k,
-						ConfigValue: kmsg.StringPtr(kv.v),
+						ConfigName:  kv.K,
+						ConfigValue: kmsg.StringPtr(kv.V),
 					})
 			}
 
 			req.Topics = append(req.Topics, topicReq)
 
-			kresp, err := client().Request(&req)
-			maybeDie(err, "unable to create topic %q: %v", args[0], err)
-			if asJSON {
-				dumpJSON(kresp)
+			kresp, err := cl.Client().Request(&req)
+			out.MaybeDie(err, "unable to create topic %q: %v", args[0], err)
+			if cl.AsJSON() {
+				out.DumpJSON(kresp)
 				return
 			}
 			resps := kresp.(*kmsg.CreateTopicsResponse).TopicErrors
 			if len(resps) != 1 {
-				dumpAndDie(kresp, "quitting; one topic create requested but received %d responses", len(resps))
+				out.ExitErrJSON(kresp, "quitting; one topic create requested but received %d responses", len(resps))
 			}
-			errAndMsg(resps[0].ErrorCode, resps[0].ErrorMessage)
+			out.ErrAndMsg(resps[0].ErrorCode, resps[0].ErrorMessage)
 		},
 	}
 
-	cmd.Flags().BoolVarP(&req.ValidateOnly, "validate", "v", false, "(v)alidate the topic creation request; do not create topics (dry run)")
+	cmd.Flags().BoolVarP(&req.ValidateOnly, "dry", "d", false, "dry run: validate the topic creation request; do not create topics")
 	cmd.Flags().Int32VarP(&topicReq.NumPartitions, "num-partitions", "p", 20, "number of (p)artitions to create")
 	cmd.Flags().Int16VarP(&topicReq.ReplicationFactor, "replication-factor", "r", 1, "number of (r)eplicas to have of each partition")
 	cmd.Flags().StringSliceVarP(&configKVs, "kv", "k", nil, "list of (k)ey value config parameters (comma separated or repeated flag; e.g. cleanup.policy=compact,preallocate=true)")
@@ -170,21 +174,23 @@ func topicCreateCmd() *cobra.Command {
 	return cmd
 }
 
-func topicDeleteCmd() *cobra.Command {
+func topicDeleteCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "delete TOPICS...",
 		Short: "Delete all listed topics",
 		Run: func(_ *cobra.Command, args []string) {
-			resp, err := client().Request(&kmsg.DeleteTopicsRequest{
-				Timeout: cfg.TimeoutMillis,
+			resp, err := cl.Client().Request(&kmsg.DeleteTopicsRequest{
+				Timeout: cl.TimeoutMillis(),
 				Topics:  args,
 			})
-			maybeDie(err, "unable to delete topics: %v", err)
-			if asJSON {
-				dumpJSON(resp)
+			out.MaybeDie(err, "unable to delete topics: %v", err)
+			if cl.AsJSON() {
+				out.DumpJSON(resp)
 				return
 			}
 			resps := resp.(*kmsg.DeleteTopicsResponse).TopicErrorCodes
+			tw := out.BeginTabWrite()
+			defer tw.Flush()
 			for _, topicResp := range resps {
 				msg := "OK"
 				if err := kerr.ErrorForCode(topicResp.ErrorCode); err != nil {
@@ -192,12 +198,11 @@ func topicDeleteCmd() *cobra.Command {
 				}
 				fmt.Fprintf(tw, "%s\t%s\n", topicResp.Topic, msg)
 			}
-			tw.Flush()
 		},
 	}
 }
 
-func topicDescribeConfigCmd() *cobra.Command {
+func topicDescribeConfigCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "describe TOPIC",
 		Short: "Describe a topic's configuration",
@@ -210,13 +215,14 @@ The JSON output option includes all config synonyms.
 `,
 		Args: cobra.ExactArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
-			describeConfig(args, false)
+			altdescconf.DescribeConfigs(cl, args, false)
 		},
 	}
 }
 
-func topicAlterConfigCmd() *cobra.Command {
-	return alterConfigsCmd(
+func topicAlterConfigCommand(cl *client.Client) *cobra.Command {
+	return altdescconf.AlterConfigsCommand(
+		cl,
 		"alter-config TOPIC",
 		"Alter a topic's configuration",
 		`Alter a topic's configuration.
@@ -236,7 +242,7 @@ This command supports JSON output.
 	)
 }
 
-func topicAddPartitionsCmd() *cobra.Command {
+func topicAddPartitionsCommand(cl *client.Client) *cobra.Command {
 	var assignmentFlag string
 
 	cmd := &cobra.Command{
@@ -269,36 +275,36 @@ This command supports JSON output.
 		Args: cobra.ExactArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
 			assignments, err := parseAssignments(assignmentFlag)
-			maybeDie(err, "parse assignments failure: %v", err)
+			out.MaybeDie(err, "parse assignments failure: %v", err)
 			if len(assignments) == 0 {
-				die("no new partitions requested")
+				out.Die("no new partitions requested")
 			}
 
-			kmetaResp, err := client().Request(&kmsg.MetadataRequest{
+			kmetaResp, err := cl.Client().Request(&kmsg.MetadataRequest{
 				Topics: args,
 			})
-			maybeDie(err, "unable to get topic metadata: %v", err)
+			out.MaybeDie(err, "unable to get topic metadata: %v", err)
 			metas := kmetaResp.(*kmsg.MetadataResponse).TopicMetadata
 			if len(metas) != 1 {
-				die("quitting; one metadata topic requested but received %d responses", len(metas))
+				out.Die("quitting; one metadata topic requested but received %d responses", len(metas))
 			}
 			if metas[0].Topic != args[0] {
-				die("quitting; metadata responded with non-requested topic %s", metas[0].Topic)
+				out.Die("quitting; metadata responded with non-requested topic %s", metas[0].Topic)
 			}
 			if err := kerr.ErrorForCode(metas[0].ErrorCode); err != nil {
-				die("quitting; metadata responded with topic error %s", err)
+				out.Die("quitting; metadata responded with topic error %s", err)
 			}
 
 			currentPartitionCount := len(metas[0].PartitionMetadata)
 			if currentPartitionCount > 0 {
 				currentReplicaCount := len(metas[0].PartitionMetadata[0].Replicas)
 				if currentReplicaCount != len(assignments[0]) {
-					die("cannot create partitions with %d when existing partitions have %d replicas",
+					out.Die("cannot create partitions with %d when existing partitions have %d replicas",
 						len(assignments[0]), currentReplicaCount)
 				}
 			}
 
-			createResp, err := client().Request(&kmsg.CreatePartitionsRequest{
+			createResp, err := cl.Client().Request(&kmsg.CreatePartitionsRequest{
 				TopicPartitions: []kmsg.CreatePartitionsRequestTopicPartition{
 					{
 						Topic:      args[0],
@@ -306,19 +312,19 @@ This command supports JSON output.
 						Assignment: assignments,
 					},
 				},
-				Timeout: cfg.TimeoutMillis,
+				Timeout: cl.TimeoutMillis(),
 			})
-			maybeDie(err, "unable to create topic partitions: %v", err)
+			out.MaybeDie(err, "unable to create topic partitions: %v", err)
 
-			if asJSON {
-				dumpJSON(createResp)
+			if cl.AsJSON() {
+				out.DumpJSON(createResp)
 				return
 			}
 			resps := createResp.(*kmsg.CreatePartitionsResponse).TopicErrors
 			if len(resps) != 1 {
-				dumpAndDie(createResp, "quitting; one topic partition creation requested but received %d responses", len(resps))
+				out.ExitErrJSON(createResp, "quitting; one topic partition creation requested but received %d responses", len(resps))
 			}
-			errAndMsg(resps[0].ErrorCode, resps[0].ErrorMessage)
+			out.ErrAndMsg(resps[0].ErrorCode, resps[0].ErrorMessage)
 		},
 	}
 
