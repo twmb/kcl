@@ -2,6 +2,7 @@
 package broker
 
 import (
+	"context"
 	"fmt"
 	"sort"
 
@@ -33,7 +34,7 @@ func brokerListCommand(cl *client.Client) *cobra.Command {
 		Short: "List all brokers (the controller is marked with *)",
 		Args:  cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
-			kresp, err := cl.Client().Request(new(kmsg.MetadataRequest))
+			kresp, err := cl.Client().Request(context.Background(), new(kmsg.MetadataRequest))
 			out.MaybeDie(err, "unable to get metadata: %v", err)
 			resp := kresp.(*kmsg.MetadataResponse)
 

@@ -2,6 +2,7 @@
 package altdescconf
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strconv"
@@ -113,7 +114,7 @@ func (cfger *cfger) alter(args []string) {
 		}
 	}
 
-	kresp, err := r.Request(&req)
+	kresp, err := r.Request(context.Background(), &req)
 	out.MaybeDie(err, "unable to alter config: %v", err)
 
 	if cfger.querier.cl.AsJSON() {
@@ -219,7 +220,7 @@ func (querier querier) issueDescribeConfig(maybeName []string) (
 		},
 	}
 
-	kresp, err := r.Request(&req)
+	kresp, err := r.Request(context.Background(), &req)
 	out.MaybeDie(err, "unable to describe config: %v", err)
 	resp := kresp.(*kmsg.DescribeConfigsResponse)
 

@@ -2,6 +2,7 @@
 package misc
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
@@ -71,7 +72,7 @@ func metadataCommand(cl *client.Client) *cobra.Command {
 				req.Topics = []string{}
 			}
 
-			kresp, err := cl.Client().Request(&req)
+			kresp, err := cl.Client().Request(context.Background(), &req)
 			out.MaybeDie(err, "unable to get metadata: %v", err)
 			if cl.AsJSON() {
 				out.DumpJSON(kresp)
@@ -121,7 +122,7 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 		Short: "Print broker API versions for each Kafka request type",
 		Args:  cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
-			kresp, err := cl.Client().Request(new(kmsg.ApiVersionsRequest))
+			kresp, err := cl.Client().Request(context.Background(), new(kmsg.ApiVersionsRequest))
 			out.MaybeDie(err, "unable to request API versions: %v", err)
 
 			if cl.AsJSON() {
@@ -162,15 +163,15 @@ func probeVersion(cl *client.Client) {
 	// Kafka will close the connection. ErrConnDead is
 	// retried automatically, so we must stop that.
 	cl.AddOpt(kgo.WithRetries(0))
-	kresp, err := cl.Client().Request(new(kmsg.ApiVersionsRequest))
+	kresp, err := cl.Client().Request(context.Background(), new(kmsg.ApiVersionsRequest))
 	if err != nil { // pre 0.10.0 had no api versions
 		// 0.9.0 has list groups
-		if _, err = cl.Client().Request(new(kmsg.ListGroupsRequest)); err == nil {
+		if _, err = cl.Client().Request(context.Background(), new(kmsg.ListGroupsRequest)); err == nil {
 			fmt.Println("Kafka 0.9.0")
 			return
 		}
 		// 0.8.2 has find coordinator
-		if _, err = cl.Client().Request(new(kmsg.FindCoordinatorRequest)); err == nil {
+		if _, err = cl.Client().Request(context.Background(), new(kmsg.FindCoordinatorRequest)); err == nil {
 			fmt.Println("Kafka 0.8.2")
 			return
 		}
@@ -180,7 +181,7 @@ func probeVersion(cl *client.Client) {
 		// kgo's seed brokers start at MinInt32, so we know we are
 		// getting a broker with this number.
 		// TODO maybe not make specific to impl...
-		if _, err = cl.Client().Broker(math.MinInt32).Request(new(kmsg.OffsetFetchRequest)); err == nil {
+		if _, err = cl.Client().Broker(math.MinInt32).Request(context.Background(), new(kmsg.OffsetFetchRequest)); err == nil {
 			fmt.Println("Kafka 0.8.1")
 			return
 		}

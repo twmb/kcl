@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -60,6 +62,9 @@ func (c *consumption) run(topics []string) {
 		consumeOpts = append(consumeOpts, kgo.ConsumeTopicsRegex())
 	}
 
+	sigs := make(chan os.Signal, 2)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+
 	cl := c.cl.Client()
 	if len(c.group) > 0 {
 		cl.AssignGroup(c.group, groupOpts...)
@@ -72,8 +77,20 @@ func (c *consumption) run(topics []string) {
 	}
 	co.buildFormatFn(c.format)
 
-	co.consume()
+	go co.consume()
 
+	<-sigs
+	if len(c.group) > 0 {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			cl.AssignGroup("")
+		}()
+		select {
+		case <-sigs:
+		case <-done:
+		}
+	}
 }
 
 func (c *consumption) parseOffset() kgo.Offset {
@@ -275,8 +292,7 @@ func nomOpenClose(src string) (string, string, error) {
 
 func (co *consumeOutput) consume() {
 	for {
-		fetches := co.cl.PollConsumer(context.Background())
-
+		fetches := co.cl.PollFetches(context.Background())
 		// TODO Errors(), print to stderr
 		iter := fetches.RecordIter()
 		for !iter.Done() {

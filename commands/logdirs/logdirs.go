@@ -2,6 +2,8 @@
 package logdirs
 
 import (
+	"context"
+
 	"github.com/spf13/cobra"
 
 	"github.com/twmb/kcl/client"
@@ -39,7 +41,7 @@ func logdirsDescribeCommand(cl *client.Client) *cobra.Command {
 				})
 			}
 
-			kresp, err := cl.Client().Request(&req)
+			kresp, err := cl.Client().Request(context.Background(), &req)
 			out.MaybeDie(err, "unable to describe log dirs: %v", err)
 
 			out.DumpJSON(kresp)
@@ -67,7 +69,7 @@ func logdirsAlterReplicasCommand(cl *client.Client) *cobra.Command {
 		},
 		Args: cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
-			resp, err := cl.Client().Request(&kmsg.AlterReplicaLogDirsRequest{
+			resp, err := cl.Client().Request(context.Background(), &kmsg.AlterReplicaLogDirsRequest{
 				LogDirs: []kmsg.AlterReplicaLogDirsRequestLogDir{{
 					LogDir: destDir,
 					Topics: []kmsg.AlterReplicaLogDirsRequestLogDirTopic{{

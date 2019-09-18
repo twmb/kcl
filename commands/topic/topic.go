@@ -3,6 +3,7 @@ package topic
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -43,7 +44,7 @@ func topicListCommand(cl *client.Client) *cobra.Command {
 		Short: "List all topics",
 		Args:  cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
-			kresp, err := cl.Client().Request(new(kmsg.MetadataRequest))
+			kresp, err := cl.Client().Request(context.Background(), new(kmsg.MetadataRequest))
 			out.MaybeDie(err, "unable to get metadata: %v", err)
 			resp := kresp.(*kmsg.MetadataResponse)
 			if cl.AsJSON() {
@@ -152,7 +153,7 @@ func topicCreateCommand(cl *client.Client) *cobra.Command {
 
 			req.Topics = append(req.Topics, topicReq)
 
-			kresp, err := cl.Client().Request(&req)
+			kresp, err := cl.Client().Request(context.Background(), &req)
 			out.MaybeDie(err, "unable to create topic %q: %v", args[0], err)
 			if cl.AsJSON() {
 				out.DumpJSON(kresp)
@@ -179,7 +180,7 @@ func topicDeleteCommand(cl *client.Client) *cobra.Command {
 		Use:   "delete TOPICS...",
 		Short: "Delete all listed topics",
 		Run: func(_ *cobra.Command, args []string) {
-			resp, err := cl.Client().Request(&kmsg.DeleteTopicsRequest{
+			resp, err := cl.Client().Request(context.Background(), &kmsg.DeleteTopicsRequest{
 				Timeout: cl.TimeoutMillis(),
 				Topics:  args,
 			})
@@ -280,7 +281,7 @@ This command supports JSON output.
 				out.Die("no new partitions requested")
 			}
 
-			kmetaResp, err := cl.Client().Request(&kmsg.MetadataRequest{
+			kmetaResp, err := cl.Client().Request(context.Background(), &kmsg.MetadataRequest{
 				Topics: args,
 			})
 			out.MaybeDie(err, "unable to get topic metadata: %v", err)
@@ -304,7 +305,7 @@ This command supports JSON output.
 				}
 			}
 
-			createResp, err := cl.Client().Request(&kmsg.CreatePartitionsRequest{
+			createResp, err := cl.Client().Request(context.Background(), &kmsg.CreatePartitionsRequest{
 				TopicPartitions: []kmsg.CreatePartitionsRequestTopicPartition{
 					{
 						Topic:      args[0],

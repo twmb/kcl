@@ -2,6 +2,7 @@
 package group
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -41,7 +42,7 @@ To get a lot more information about groups, use the describe command.
 `,
 		Args: cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
-			kresp, err := cl.Client().Request(new(kmsg.ListGroupsRequest))
+			kresp, err := cl.Client().Request(context.Background(), new(kmsg.ListGroupsRequest))
 			out.MaybeDie(err, "unable to list groups: %v", err)
 			resp := kresp.(*kmsg.ListGroupsResponse)
 
@@ -82,7 +83,7 @@ This command supports JSON output.
 				GroupIDs: args,
 			}
 
-			kresp, err := cl.Client().Request(&req)
+			kresp, err := cl.Client().Request(context.Background(), &req)
 			out.MaybeDie(err, "unable to describe groups: %v", err)
 			resp := unbinaryGroupDescribeMembers(kresp.(*kmsg.DescribeGroupsResponse))
 
@@ -227,7 +228,7 @@ func groupDeleteCommand(cl *client.Client) *cobra.Command {
 		Short: "Delete all listed Kafka groups",
 		Args:  cobra.MinimumNArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
-			kresp, err := cl.Client().Request(&kmsg.DeleteGroupsRequest{
+			kresp, err := cl.Client().Request(context.Background(), &kmsg.DeleteGroupsRequest{
 				Groups: args,
 			})
 			out.MaybeDie(err, "unable to delete groups: %v", err)

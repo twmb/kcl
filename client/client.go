@@ -3,6 +3,7 @@
 package client
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -27,7 +28,7 @@ import (
 
 // Requestor can either be a kgo.Client or kgo.Broker.
 type Requestor interface {
-	Request(kmsg.Request) (kmsg.Response, error)
+	Request(context.Context, kmsg.Request) (kmsg.Response, error)
 }
 
 // cfg contains kcl options that can be defined in a file.
