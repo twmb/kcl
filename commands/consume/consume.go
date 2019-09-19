@@ -80,16 +80,14 @@ func (c *consumption) run(topics []string) {
 	go co.consume()
 
 	<-sigs
-	if len(c.group) > 0 {
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			cl.AssignGroup("")
-		}()
-		select {
-		case <-sigs:
-		case <-done:
-		}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		cl.Close() // leaves group
+	}()
+	select {
+	case <-sigs:
+	case <-done:
 	}
 }
 
