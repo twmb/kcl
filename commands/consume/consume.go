@@ -60,6 +60,7 @@ func (c *consumption) run(topics []string) {
 	}
 	if c.regex {
 		consumeOpts = append(consumeOpts, kgo.ConsumeTopicsRegex())
+		groupOpts = append(groupOpts, kgo.GroupTopicsRegex())
 	}
 
 	sigs := make(chan os.Signal, 2)

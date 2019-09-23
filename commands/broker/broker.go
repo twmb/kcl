@@ -85,7 +85,7 @@ func brokerDescribeConfigCommand(cl *client.Client) *cobra.Command {
 This command prints all key/value config values for a broker, as well
 as the value's source. Read only keys are suffixed with *.
 
-If no broker ID is used, only dynamic (manually sete) key/value pairs are
+If no broker ID is used, only dynamic (manually set) key/value pairs are
 printed. If you wish to describe the full config for a specific broker,
 be sure to pass a broker ID.
 
