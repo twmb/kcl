@@ -10,12 +10,14 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/spf13/cobra"
 
 	"github.com/twmb/go-strftime"
 	"github.com/twmb/kgo"
+	"github.com/twmb/kgo/kmsg"
 
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/out"
@@ -73,9 +75,11 @@ func (c *consumption) run(topics []string) {
 		cl.AssignPartitions(consumeOpts...)
 	}
 	co := &consumeOutput{
-		cl:  cl,
-		max: c.num,
+		cl:   cl,
+		max:  c.num,
+		done: make(chan struct{}),
 	}
+	co.ctx, co.cancel = context.WithCancel(context.Background())
 	co.buildFormatFn(c.format)
 
 	go co.consume()
@@ -84,6 +88,15 @@ func (c *consumption) run(topics []string) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		atomic.StoreUint32(&co.quit, 1)
+		co.cancel()
+		<-co.done
+		commitDone := make(chan struct{})
+		wait := func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, _ error) {
+			close(commitDone)
+		}
+		cl.Commit(context.Background(), cl.Uncommitted(), wait)
+		<-commitDone
 		cl.Close() // leaves group
 	}()
 	select {
@@ -120,6 +133,11 @@ type consumeOutput struct {
 
 	num int
 	max int
+
+	ctx    context.Context
+	cancel func()
+	quit   uint32
+	done   chan struct{}
 
 	format func(*kgo.Record)
 }
@@ -290,8 +308,9 @@ func nomOpenClose(src string) (string, string, error) {
 }
 
 func (co *consumeOutput) consume() {
-	for {
-		fetches := co.cl.PollFetches(context.Background())
+	defer close(co.done)
+	for atomic.LoadUint32(&co.quit) == 0 {
+		fetches := co.cl.PollFetches(co.ctx)
 		// TODO Errors(), print to stderr
 		iter := fetches.RecordIter()
 		for !iter.Done() {
