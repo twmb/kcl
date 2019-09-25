@@ -47,8 +47,7 @@ To get a lot more information about groups, use the describe command.
 			resp := kresp.(*kmsg.ListGroupsResponse)
 
 			if cl.AsJSON() {
-				out.DumpJSON(kresp)
-				return
+				out.ExitJSON(kresp)
 			}
 
 			if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
@@ -88,8 +87,7 @@ This command supports JSON output.
 			resp := unbinaryGroupDescribeMembers(kresp.(*kmsg.DescribeGroupsResponse))
 
 			if cl.AsJSON() {
-				out.DumpJSON(resp)
-				return
+				out.ExitJSON(resp)
 			}
 
 			if len(args) == 1 {
@@ -234,8 +232,7 @@ func groupDeleteCommand(cl *client.Client) *cobra.Command {
 			out.MaybeDie(err, "unable to delete groups: %v", err)
 			resp := kresp.(*kmsg.DeleteGroupsResponse)
 			if cl.AsJSON() {
-				out.DumpJSON(resp)
-				return
+				out.ExitJSON(resp)
 			}
 			tw := out.BeginTabWrite()
 			defer tw.Flush()

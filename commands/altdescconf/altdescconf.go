@@ -118,8 +118,7 @@ func (cfger *cfger) alter(args []string) {
 	out.MaybeDie(err, "unable to alter config: %v", err)
 
 	if cfger.querier.cl.AsJSON() {
-		out.DumpJSON(kresp)
-		return
+		out.ExitJSON(kresp)
 	}
 	resps := kresp.(*kmsg.AlterConfigsResponse).Resources
 	if len(resps) != 1 {
@@ -246,8 +245,7 @@ func DescribeConfigs(cl *client.Client, maybeName []string, forBroker bool) {
 	querier := querier{cl, forBroker}
 	resp, resource := querier.issueDescribeConfig(maybeName)
 	if cl.AsJSON() {
-		out.DumpJSON(resp)
-		return
+		out.ExitJSON(resp)
 	}
 
 	kvs := resource.ConfigEntries

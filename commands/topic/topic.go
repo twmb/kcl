@@ -48,8 +48,7 @@ func topicListCommand(cl *client.Client) *cobra.Command {
 			out.MaybeDie(err, "unable to get metadata: %v", err)
 			resp := kresp.(*kmsg.MetadataResponse)
 			if cl.AsJSON() {
-				out.DumpJSON(resp.TopicMetadata)
-				return
+				out.ExitJSON(resp.TopicMetadata)
 			}
 			PrintTopics(resp.TopicMetadata, detailed)
 		},
@@ -156,8 +155,7 @@ func topicCreateCommand(cl *client.Client) *cobra.Command {
 			kresp, err := cl.Client().Request(context.Background(), &req)
 			out.MaybeDie(err, "unable to create topic %q: %v", args[0], err)
 			if cl.AsJSON() {
-				out.DumpJSON(kresp)
-				return
+				out.ExitJSON(kresp)
 			}
 			resps := kresp.(*kmsg.CreateTopicsResponse).TopicErrors
 			if len(resps) != 1 {
@@ -186,8 +184,7 @@ func topicDeleteCommand(cl *client.Client) *cobra.Command {
 			})
 			out.MaybeDie(err, "unable to delete topics: %v", err)
 			if cl.AsJSON() {
-				out.DumpJSON(resp)
-				return
+				out.ExitJSON(resp)
 			}
 			resps := resp.(*kmsg.DeleteTopicsResponse).TopicErrorCodes
 			tw := out.BeginTabWrite()
@@ -318,8 +315,7 @@ This command supports JSON output.
 			out.MaybeDie(err, "unable to create topic partitions: %v", err)
 
 			if cl.AsJSON() {
-				out.DumpJSON(createResp)
-				return
+				out.ExitJSON(createResp)
 			}
 			resps := createResp.(*kmsg.CreatePartitionsResponse).TopicErrors
 			if len(resps) != 1 {

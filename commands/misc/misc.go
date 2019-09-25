@@ -75,7 +75,7 @@ func metadataCommand(cl *client.Client) *cobra.Command {
 			kresp, err := cl.Client().Request(context.Background(), &req)
 			out.MaybeDie(err, "unable to get metadata: %v", err)
 			if cl.AsJSON() {
-				out.DumpJSON(kresp)
+				out.ExitJSON(kresp)
 			}
 			resp := kresp.(*kmsg.MetadataResponse)
 			if resp.ClusterID != nil {
@@ -126,8 +126,7 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 			out.MaybeDie(err, "unable to request API versions: %v", err)
 
 			if cl.AsJSON() {
-				out.DumpJSON(kresp)
-				return
+				out.ExitJSON(kresp)
 			}
 
 			tw := out.BeginTabWrite()

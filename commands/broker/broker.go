@@ -39,8 +39,7 @@ func brokerListCommand(cl *client.Client) *cobra.Command {
 			resp := kresp.(*kmsg.MetadataResponse)
 
 			if cl.AsJSON() {
-				out.DumpJSON(resp.Brokers)
-				return
+				out.ExitJSON(resp.Brokers)
 			}
 
 			PrintBrokers(resp.ControllerID, resp.Brokers)
