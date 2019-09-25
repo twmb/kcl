@@ -2,12 +2,15 @@
 package consume
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -40,6 +43,14 @@ func Command(cl *client.Client) *cobra.Command {
 }
 
 func (c *consumption) run(topics []string) {
+	var isConsumerOffsets bool
+	for _, topic := range topics {
+		isConsumerOffsets = isConsumerOffsets || topic == "__consumer_offsets"
+	}
+	if isConsumerOffsets && len(topics) != 1 {
+		out.Die("__consumer_offsets must be the only topic listed when trying to consume it")
+	}
+
 	var consumeOpts []kgo.ConsumeOpt
 	var groupOpts []kgo.GroupOpt
 	offset := c.parseOffset()
@@ -69,18 +80,23 @@ func (c *consumption) run(topics []string) {
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 
 	cl := c.cl.Client()
-	if len(c.group) > 0 {
+	if len(c.group) > 0 && !isConsumerOffsets {
 		cl.AssignGroup(c.group, groupOpts...)
 	} else {
 		cl.AssignPartitions(consumeOpts...)
 	}
 	co := &consumeOutput{
-		cl:   cl,
-		max:  c.num,
-		done: make(chan struct{}),
+		cl:    cl,
+		max:   c.num,
+		group: c.group,
+		done:  make(chan struct{}),
 	}
 	co.ctx, co.cancel = context.WithCancel(context.Background())
-	co.buildFormatFn(c.format)
+	if isConsumerOffsets {
+		co.buildConsumerOffsetsFormatFn()
+	} else {
+		co.buildFormatFn(c.format)
+	}
 
 	go co.consume()
 
@@ -133,6 +149,8 @@ type consumeOutput struct {
 
 	num int
 	max int
+
+	group string // for filtering __consumer_offsets
 
 	ctx    context.Context
 	cancel func()
@@ -188,6 +206,8 @@ func (co *consumeOutput) buildFormatFn(format string) {
 				format = format[1:]
 				continue
 			}
+			openBrace := len(format) > 2 && format[1] == '{'
+			var handledBrace bool
 
 			// Always cut the piece, even if it is empty. We alternate piece, argFn.
 			pieces = append(pieces, piece)
@@ -197,7 +217,18 @@ func (co *consumeOutput) buildFormatFn(format string) {
 			format = format[1:]
 			switch next {
 			case 's', 'v':
-				argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return append(out, r.Value...) })
+				if handledBrace = openBrace; handledBrace {
+					format = format[1:]
+					switch {
+					case strings.HasPrefix(format, "base64}"):
+						argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return appendBase64(out, r.Value) })
+						format = format[len("base64}"):]
+					default:
+						out.Die("unknown %%v{ escape")
+					}
+				} else {
+					argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return append(out, r.Value...) })
+				}
 
 			case 'S', 'V':
 				argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return strconv.AppendInt(out, int64(len(r.Value)), 10) })
@@ -210,7 +241,18 @@ func (co *consumeOutput) buildFormatFn(format string) {
 				})
 
 			case 'k':
-				argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return append(out, r.Key...) })
+				if handledBrace = openBrace; handledBrace {
+					format = format[1:]
+					switch {
+					case strings.HasPrefix(format, "base64}"):
+						argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return appendBase64(out, r.Key) })
+						format = format[len("base64}"):]
+					default:
+						out.Die("unknown %%k{ escape")
+					}
+				} else {
+					argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return append(out, r.Key...) })
+				}
 
 			case 'K':
 				argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return strconv.AppendInt(out, int64(len(r.Key)), 10) })
@@ -225,7 +267,7 @@ func (co *consumeOutput) buildFormatFn(format string) {
 				argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return strconv.AppendInt(out, r.Offset, 10) })
 
 			case 'T':
-				if len(format) > 0 && format[0] == '{' {
+				if handledBrace = openBrace; handledBrace {
 					format = format[1:]
 					switch {
 					case strings.HasPrefix(format, "strftime"):
@@ -260,6 +302,10 @@ func (co *consumeOutput) buildFormatFn(format string) {
 			default:
 				out.Die("unknown percent escape sequence %q", format[:1])
 			}
+
+			if openBrace && !handledBrace {
+				out.Die("unhandled, unknown open brace %q", format[:2])
+			}
 		}
 	}
 
@@ -276,6 +322,12 @@ func (co *consumeOutput) buildFormatFn(format string) {
 		}
 		os.Stdout.Write(out)
 	}
+}
+
+func appendBase64(dst, src []byte) []byte {
+	fin := append(dst, make([]byte, base64.RawStdEncoding.EncodedLen(len(src)))...)
+	base64.RawStdEncoding.Encode(fin[len(dst):], src)
+	return fin
 }
 
 // nomOpenClose extracts a middle section from a string beginning with repeated
@@ -322,5 +374,238 @@ func (co *consumeOutput) consume() {
 				os.Exit(0)
 			}
 		}
+	}
+}
+
+///////////////////////
+// __consumer_offset //
+///////////////////////
+
+func (co *consumeOutput) buildConsumerOffsetsFormatFn() {
+	var out []byte
+	co.format = func(r *kgo.Record) {
+		out = out[:0]
+		out = co.formatConsumerOffsets(out, r)
+		os.Stdout.Write(out)
+	}
+}
+
+func (co *consumeOutput) formatConsumerOffsets(out []byte, r *kgo.Record) []byte {
+	orig := out
+	out = append(out, r.Topic...)
+	out = append(out, " partition "...)
+	out = strconv.AppendInt(out, int64(r.Partition), 10)
+	out = append(out, " offset "...)
+	out = strconv.AppendInt(out, r.Offset, 10)
+	out = append(out, " at "...)
+	out = r.Timestamp.AppendFormat(out, "[2006-01-02 15:04:05.999]\n")
+
+	if len(r.Key) < 2 || r.Key[0] != 0 {
+		out = append(out, "(corrupt short key)\n\n"...)
+		return out
+	}
+
+	var keep bool
+	switch v := r.Key[1]; v {
+	case 0, 1:
+		out, keep = co.formatOffsetCommit(out, r)
+	case 2:
+		out, keep = co.formatGroupMetadata(out, r)
+	default:
+		out = append(out, "(unknown offset key format "...)
+		out = append(out, r.Key[1])
+		out = append(out, ')')
+	}
+	if !keep {
+		return orig
+	}
+
+	out = append(out, "\n\n"...)
+	return out
+}
+
+func (co *consumeOutput) formatOffsetCommit(dst []byte, r *kgo.Record) ([]byte, bool) {
+	{
+		var k kmsg.OffsetCommitKey
+		if err := k.ReadFrom(r.Key); err != nil {
+			if len(r.Key) == 0 {
+				return append(dst, "OffsetCommitKey (empty)"...), co.group == ""
+			}
+			return append(dst, fmt.Sprintf("OffsetCommitKey (could not decode %d bytes)", len(r.Key))...), co.group == ""
+		}
+
+		// We can now apply our group filter: do so; if we are keeping
+		// this info, all returns after are true.
+		if co.group != "" && co.group != k.Group {
+			return dst, false
+		}
+
+		w := bytes.NewBuffer(dst)
+		fmt.Fprintf(w, "OffsetCommitKey(%d)\n", k.Version)
+
+		tw := out.BeginTabWriteTo(w)
+		fmt.Fprintf(tw, "\tGroup\t%s\n", k.Group)
+		fmt.Fprintf(tw, "\tTopic\t%s\n", k.Topic)
+		fmt.Fprintf(tw, "\tPartition\t%d\n", k.Partition)
+		tw.Flush()
+
+		dst = w.Bytes()
+	}
+
+	{
+		var v kmsg.OffsetCommitValue
+		if err := v.ReadFrom(r.Value); err != nil {
+			if len(r.Value) == 0 {
+				return append(dst, "OffsetCommitValue (empty)"...), true
+			}
+			return append(dst, fmt.Sprintf("OffsetCommitValue (could not decode %d bytes)", len(r.Value))...), true
+		}
+
+		w := bytes.NewBuffer(dst)
+		fmt.Fprintf(w, "OffsetCommitValue(%d)\n", v.Version)
+
+		tw := out.BeginTabWriteTo(w)
+		fmt.Fprintf(tw, "\tOffset\t%d\n", v.Offset)
+		if v.Version >= 3 {
+			fmt.Fprintf(tw, "\tLeaderEpoch\t%d\n", v.LeaderEpoch)
+		}
+		fmt.Fprintf(tw, "\tMetadata\t%s\n", v.Metadata)
+		fmt.Fprintf(tw, "\tCommitTimestamp\t%d\n", v.CommitTimestamp)
+		if v.Version == 1 {
+			fmt.Fprintf(tw, "\tExpireTimestamp\t%d\n", v.ExpireTimestamp)
+		}
+		tw.Flush()
+
+		return w.Bytes(), true
+	}
+}
+
+func (co *consumeOutput) formatGroupMetadata(dst []byte, r *kgo.Record) ([]byte, bool) {
+	{
+		var k kmsg.GroupMetadataKey
+		if err := k.ReadFrom(r.Key); err != nil {
+			if len(r.Key) == 0 {
+				return append(dst, "GroupMetadataKey (empty)"...), co.group == ""
+			}
+			return append(dst, fmt.Sprintf("GroupMetadataKey (could not decode %d bytes)", len(r.Key))...), co.group == ""
+		}
+
+		// We can now apply our group filter: do so; if we are keeping
+		// this info, all returns after are true.
+		if co.group != "" && co.group != k.Group {
+			return dst, false
+		}
+
+		w := bytes.NewBuffer(dst)
+		fmt.Fprintf(w, "GroupMetadataKey(%d)\n", k.Version)
+
+		tw := out.BeginTabWriteTo(w)
+		fmt.Fprintf(tw, "\tGroup\t%s\n", k.Group)
+		tw.Flush()
+
+		dst = w.Bytes()
+	}
+
+	{
+		var v kmsg.GroupMetadataValue
+		if err := v.ReadFrom(r.Value); err != nil {
+			if len(r.Value) == 0 {
+				return append(dst, "GroupMetadataValue (empty)"...), true
+			}
+			return append(dst, fmt.Sprintf("GroupMetadataValue (could not decode %d bytes)", len(r.Value))...), true
+		}
+
+		w := bytes.NewBuffer(dst)
+		fmt.Fprintf(w, "GroupMetadataValue(%d)\n", v.Version)
+
+		tw := out.BeginTabWriteTo(w)
+		fmt.Fprintf(tw, "\tProtocolType\t%s\n", v.ProtocolType)
+		fmt.Fprintf(tw, "\tGeneration\t%d\n", v.Generation)
+		if v.Protocol == nil {
+			fmt.Fprintf(tw, "\tProtocol\t%s\n", "(null)")
+		} else {
+			fmt.Fprintf(tw, "\tProtocol\t%s\n", *v.Protocol)
+		}
+		if v.Leader == nil {
+			fmt.Fprintf(tw, "\tLeader\t%s\n", "(null)")
+		} else {
+			fmt.Fprintf(tw, "\tLeader\t%s\n", *v.Leader)
+		}
+
+		if v.Version >= 2 {
+			fmt.Fprintf(tw, "\tStateTimestamp\t%d\n", v.CurrentStateTimestamp)
+		}
+
+		fmt.Fprintf(tw, "\tMembers\t\n")
+		tw.Flush()
+
+		for _, member := range v.Members {
+			tw = out.BeginTabWriteTo(w)
+			fmt.Fprintf(tw, "\t\tMemberID\t%s\n", member.MemberID)
+			if v.Version >= 3 {
+				if member.GroupInstanceID == nil {
+					fmt.Fprintf(tw, "\t\tGroupInstanceID\t%s\n", "(null)")
+				} else {
+					fmt.Fprintf(tw, "\t\tGroupInstanceID\t%d\n", *member.GroupInstanceID)
+				}
+			}
+			fmt.Fprintf(tw, "\t\tClientID\t%s\n", member.ClientID)
+			fmt.Fprintf(tw, "\t\tClientHost\t%s\n", member.ClientHost)
+			fmt.Fprintf(tw, "\t\tRebalanceTimeout\t%d\n", member.RebalanceTimeout)
+			fmt.Fprintf(tw, "\t\tSessionTimeout\t%d\n", member.SessionTimeout)
+
+			if v.ProtocolType != "consumer" {
+				fmt.Fprintf(tw, "\t\tSubscription\t(unknown proto type) %x\n", member.Subscription)
+				fmt.Fprintf(tw, "\t\tAssignment\t(unknown proto type) %x\n", member.Assignment)
+				continue
+			}
+
+			var m kmsg.GroupMemberMetadata
+			if err := m.ReadFrom(member.Subscription); err != nil {
+				fmt.Fprintf(tw, "\t\tSubscription\t(could not decode %d bytes)\n", len(member.Subscription))
+			} else {
+				fmt.Fprintf(tw, "\t\tSubscription\t\n")
+				fmt.Fprintf(tw, "\t\t      Version\t%d\n", m.Version)
+				sort.Strings(m.Topics)
+				fmt.Fprintf(tw, "\t\t      Topics\t%v\n", m.Topics)
+				if v.Protocol != nil && *v.Protocol == "sticky" {
+					var s kmsg.StickyMemberMetadata
+					if err := s.ReadFrom(m.UserData, m.Version); err != nil {
+						fmt.Fprintf(tw, "\t\t      UserData\t(could not read sticky user data)\n")
+					} else {
+						var sb strings.Builder
+						fmt.Fprintf(&sb, "gen %d, current assignment:", s.Generation)
+						for _, topic := range s.CurrentAssignment {
+							sort.Slice(topic.Partitions, func(i, j int) bool {
+								return topic.Partitions[i] < topic.Partitions[j]
+							})
+							fmt.Fprintf(&sb, " %s=>%v", topic.Topic, topic.Partitions)
+						}
+						fmt.Fprintf(tw, "\t\t      UserData\t%s\n", sb.String())
+					}
+				} else {
+					fmt.Fprintf(tw, "\t\t b64 UserData\t%s\n", base64.RawStdEncoding.EncodeToString(m.UserData))
+				}
+			}
+			var a kmsg.GroupMemberAssignment
+			if err := a.ReadFrom(member.Assignment); err != nil {
+				fmt.Fprintf(tw, "\t\tAssignment\t(could not decode %d bytes)\n", len(member.Assignment))
+			} else {
+				fmt.Fprintf(tw, "\t\tAssignment\t\n")
+				fmt.Fprintf(tw, "\t\t      Version\t%d\n", a.Version)
+				var sb strings.Builder
+				for _, topic := range a.Topics {
+					sort.Slice(topic.Partitions, func(i, j int) bool {
+						return topic.Partitions[i] < topic.Partitions[j]
+					})
+					fmt.Fprintf(&sb, "%s=>%v ", topic.Topic, topic.Partitions)
+				}
+				fmt.Fprintf(tw, "\t\t      Assigned\t%s\n", sb.String())
+			}
+			tw.Flush()
+			fmt.Fprintln(w)
+		}
+
+		return w.Bytes(), true
 	}
 }

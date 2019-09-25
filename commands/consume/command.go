@@ -50,12 +50,15 @@ Format options:
   %p    record partition
   %o    record offset
   %%    percent sign
+  %{    left brace
   \n    newline
   \r    carriage return
   \t    tab
   \xXX  any ASCII character (input must be hex)
 
-%T supports enhanced time formatting through opening inside {}.
+The record and key fields support printing as base64 encoded values
+by including {base64} after the %s, %v, or %k.
+%T supports enhanced time formatting inside braces.
 
 To use strftime formatting, open with "%T{strftime" and close with "}".
 After "%T{strftime", you can use any delimiter to open the strftime
@@ -70,9 +73,15 @@ To use Go time formatting, open with "T{go" and close with "}".
 The Go time formatting follows the same delimiting rules as strftime.
 
 For example,
-  %T{go#15:04:05.99#}
+  %T{go#06-01-02 15:04:05.999#}
 will output the timestamp as HH:MM:SS.ms.
 
 Putting it all together:
   -f 'Topic %t [%p] at offset %o @%T{strftime[%F %T]}: key %k: %s\n'
+
+Note that this command allows you to consume the Kafka special internal topic
+__consumer_offsets. To do so, this must be the only topic specified. Doing so
+will simply dump all group commit information. To dump information about a
+specific group, use -G.
+
 `
