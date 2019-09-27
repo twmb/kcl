@@ -266,6 +266,9 @@ func (co *consumeOutput) buildFormatFn(format string) {
 			case 'o':
 				argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return strconv.AppendInt(out, r.Offset, 10) })
 
+			case 'e':
+				argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return strconv.AppendInt(out, int64(r.LeaderEpoch), 10) })
+
 			case 'T':
 				if handledBrace = openBrace; handledBrace {
 					format = format[1:]

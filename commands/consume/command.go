@@ -49,6 +49,7 @@ Format options:
   %t    record topic
   %p    record partition
   %o    record offset
+  %e    record leader epoch
   %%    percent sign
   %{    left brace
   \n    newline
