@@ -192,27 +192,27 @@ func probeVersion(cl *client.Client) {
 	keys := resp.ApiVersions
 	num := len(resp.ApiVersions)
 	switch {
-	case num == 18:
+	case num == 19:
 		fmt.Println("Kafka 0.10.0")
-	case num == 20 && keys[6].MaxVersion == 2:
+	case num == 21 && keys[6].MaxVersion == 2:
 		fmt.Println("Kafka 0.10.1")
-	case num == 20 && keys[6].MaxVersion == 3:
+	case num == 21 && keys[6].MaxVersion == 3:
 		fmt.Println("Kafka 0.10.2")
-	case num == 33:
+	case num == 34:
 		fmt.Println("Kafka 0.11.1")
-	case num == 37:
+	case num == 38:
 		fmt.Println("Kafka 1.0.0")
-	case num == 42 && keys[0].MaxVersion == 5:
+	case num == 43 && keys[0].MaxVersion == 5:
 		fmt.Println("Kafka 1.1.0")
-	case num == 42 && keys[0].MaxVersion == 6:
+	case num == 43 && keys[0].MaxVersion == 6:
 		fmt.Println("Kafka 2.0.0")
-	case num == 42 && keys[0].MaxVersion == 7:
+	case num == 43 && keys[0].MaxVersion == 7:
 		fmt.Println("Kafka 2.1.0")
-	case num == 43:
-		fmt.Println("Kafka 2.2.0")
 	case num == 44:
+		fmt.Println("Kafka 2.2.0")
+	case num == 45:
 		fmt.Println("Kafka 2.3.0")
-	case num == 46:
+	case num == 47:
 		fmt.Println("Kafka 2.4.0")
 	default:
 		fmt.Println("Unknown version: either tip or between releases")
