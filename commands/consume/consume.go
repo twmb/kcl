@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -35,6 +36,7 @@ type consumption struct {
 	offset     string
 	num        int
 	format     string
+	end        int64 // if exact range
 }
 
 // Command returns a consume command.
@@ -88,6 +90,7 @@ func (c *consumption) run(topics []string) {
 	co := &consumeOutput{
 		cl:    cl,
 		max:   c.num,
+		end:   c.end,
 		group: c.group,
 		done:  make(chan struct{}),
 	}
@@ -122,26 +125,33 @@ func (c *consumption) run(topics []string) {
 }
 
 func (c *consumption) parseOffset() kgo.Offset {
-	var koffset kgo.Offset
+	c.end = -1
+	var opts []kgo.OffsetOpt
 	switch {
 	case c.offset == "start":
-		koffset = kgo.ConsumeStartOffset()
+		opts = append(opts, kgo.AtStart())
 	case c.offset == "end":
-		koffset = kgo.ConsumeEndOffset()
+		opts = append(opts, kgo.AtEnd())
 	case strings.HasPrefix(c.offset, "end-"):
 		v, err := strconv.Atoi(c.offset[4:])
 		out.MaybeDie(err, "unable to parse relative end offset number in %q: %v", c.offset, err)
-		koffset = kgo.ConsumeEndRelativeOffset(v)
+		opts = append(opts, kgo.AtEnd(), kgo.Relative(int64(-v)))
 	case strings.HasPrefix(c.offset, "start+"):
 		v, err := strconv.Atoi(c.offset[6:])
 		out.MaybeDie(err, "unable to parse relative start offset number in %q: %v", c.offset, err)
-		koffset = kgo.ConsumeStartRelativeOffset(v)
+		opts = append(opts, kgo.AtStart(), kgo.Relative(int64(v)))
 	default:
-		v, err := strconv.Atoi(c.offset)
-		out.MaybeDie(err, "unable to parse exact offset number in %q: %v", c.offset, err)
-		koffset = kgo.ConsumeExactOffset(int64(v))
+		match := regexp.MustCompile(`^(\d+)(?:-(\d+))?$`).FindStringSubmatch(c.offset)
+		if len(match) == 0 {
+			out.Die("unable to parse exact or range offset in %q", c.offset)
+		}
+		at, _ := strconv.ParseInt(match[1], 10, 64)
+		if match[2] != "" {
+			c.end, _ = strconv.ParseInt(match[2], 10, 64)
+		}
+		opts = append(opts, kgo.At(at))
 	}
-	return koffset
+	return kgo.NewOffset(opts...)
 }
 
 type consumeOutput struct {
@@ -149,6 +159,7 @@ type consumeOutput struct {
 
 	num int
 	max int
+	end int64
 
 	group string // for filtering __consumer_offsets
 
@@ -370,6 +381,9 @@ func (co *consumeOutput) consume() {
 		iter := fetches.RecordIter()
 		for !iter.Done() {
 			record := iter.Next()
+			if co.end > 0 && record.Offset > co.end {
+				continue
+			}
 			co.num++
 			co.format(record)
 

@@ -58,7 +58,10 @@ func errcodeCommand() *cobra.Command {
 }
 
 func metadataCommand(cl *client.Client) *cobra.Command {
-	var req kmsg.MetadataRequest
+	req := kmsg.MetadataRequest{
+		IncludeClusterAuthorizedOperations: true,
+		IncludeTopicAuthorizedOperations:   true,
+	}
 	var noTopics bool
 
 	cmd := &cobra.Command{
