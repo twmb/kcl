@@ -48,9 +48,9 @@ func topicListCommand(cl *client.Client) *cobra.Command {
 			out.MaybeDie(err, "unable to get metadata: %v", err)
 			resp := kresp.(*kmsg.MetadataResponse)
 			if cl.AsJSON() {
-				out.ExitJSON(resp.TopicMetadata)
+				out.ExitJSON(resp.Topics)
 			}
-			PrintTopics(resp.TopicMetadata, detailed)
+			PrintTopics(resp.Topics, detailed)
 		},
 	}
 	cmd.Flags().BoolVarP(&detailed, "detailed", "d", false, "include detailed information about all topic partitions")
@@ -60,7 +60,7 @@ func topicListCommand(cl *client.Client) *cobra.Command {
 // PrintBrokers prints tab written topic information to stdout.
 //
 // If detailed is true, this prints per partition metadata as well.
-func PrintTopics(topics []kmsg.MetadataResponseTopicMetadata, detailed bool) {
+func PrintTopics(topics []kmsg.MetadataResponseTopic, detailed bool) {
 	sort.Slice(topics, func(i, j int) bool {
 		return topics[i].Topic < topics[j].Topic
 	})
@@ -71,10 +71,10 @@ func PrintTopics(topics []kmsg.MetadataResponseTopicMetadata, detailed bool) {
 
 		fmt.Fprintf(tw, "NAME\tPARTITIONS\tREPLICAS\n")
 		for _, topic := range topics {
-			parts := len(topic.PartitionMetadata)
+			parts := len(topic.Partitions)
 			replicas := 0
 			if parts > 0 {
-				replicas = len(topic.PartitionMetadata[0].Replicas)
+				replicas = len(topic.Partitions[0].Replicas)
 			}
 			fmt.Fprintf(tw, "%s\t%d\t%d\n",
 				topic.Topic, parts, replicas)
@@ -93,7 +93,7 @@ func PrintTopics(topics []kmsg.MetadataResponseTopicMetadata, detailed bool) {
 			fmt.Fprint(buf, " (internal)")
 		}
 
-		parts := topic.PartitionMetadata
+		parts := topic.Partitions
 		fmt.Fprintf(buf, ", %d partition", len(parts))
 		if len(parts) > 1 {
 			buf.WriteByte('s')
@@ -103,7 +103,7 @@ func PrintTopics(topics []kmsg.MetadataResponseTopicMetadata, detailed bool) {
 		sort.Slice(parts, func(i, j int) bool {
 			return parts[i].Partition < parts[j].Partition
 		})
-		for _, part := range topic.PartitionMetadata {
+		for _, part := range topic.Partitions {
 			fmt.Fprintf(buf, "  %4d  leader %d replicas %v isr %v",
 				part.Partition,
 				part.Leader,
@@ -282,7 +282,7 @@ This command supports JSON output.
 				Topics: args,
 			})
 			out.MaybeDie(err, "unable to get topic metadata: %v", err)
-			metas := kmetaResp.(*kmsg.MetadataResponse).TopicMetadata
+			metas := kmetaResp.(*kmsg.MetadataResponse).Topics
 			if len(metas) != 1 {
 				out.Die("quitting; one metadata topic requested but received %d responses", len(metas))
 			}
@@ -293,9 +293,9 @@ This command supports JSON output.
 				out.Die("quitting; metadata responded with topic error %s", err)
 			}
 
-			currentPartitionCount := len(metas[0].PartitionMetadata)
+			currentPartitionCount := len(metas[0].Partitions)
 			if currentPartitionCount > 0 {
-				currentReplicaCount := len(metas[0].PartitionMetadata[0].Replicas)
+				currentReplicaCount := len(metas[0].Partitions[0].Replicas)
 				if currentReplicaCount != len(assignments[0]) {
 					out.Die("cannot create partitions with %d when existing partitions have %d replicas",
 						len(assignments[0]), currentReplicaCount)

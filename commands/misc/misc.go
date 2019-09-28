@@ -88,7 +88,7 @@ func metadataCommand(cl *client.Client) *cobra.Command {
 			broker.PrintBrokers(resp.ControllerID, resp.Brokers)
 
 			fmt.Printf("\nTOPICS\n======\n")
-			topic.PrintTopics(resp.TopicMetadata, true)
+			topic.PrintTopics(resp.Topics, true)
 
 		},
 	}
