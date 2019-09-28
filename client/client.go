@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
@@ -70,6 +71,9 @@ func (c *Client) TimeoutMillis() int32 { return c.cfg.TimeoutMillis }
 // persistent flags and commands to root.
 func New(root *cobra.Command) *Client {
 	c := &Client{
+		opts: []kgo.Opt{
+			kgo.WithMetadataMinAge(time.Second),
+		},
 		cfg: Cfg{
 			SeedBrokers:   []string{"localhost"},
 			TimeoutMillis: 5000,

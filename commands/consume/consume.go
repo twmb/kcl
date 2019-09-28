@@ -36,7 +36,9 @@ type consumption struct {
 	offset     string
 	num        int
 	format     string
-	end        int64 // if exact range
+
+	start int64 // if exact range
+	end   int64 // if exact range
 }
 
 // Command returns a consume command.
@@ -90,6 +92,7 @@ func (c *consumption) run(topics []string) {
 	co := &consumeOutput{
 		cl:    cl,
 		max:   c.num,
+		start: c.start,
 		end:   c.end,
 		group: c.group,
 		done:  make(chan struct{}),
@@ -146,6 +149,7 @@ func (c *consumption) parseOffset() kgo.Offset {
 			out.Die("unable to parse exact or range offset in %q", c.offset)
 		}
 		at, _ := strconv.ParseInt(match[1], 10, 64)
+		c.start = at
 		if match[2] != "" {
 			c.end, _ = strconv.ParseInt(match[2], 10, 64)
 		}
@@ -159,7 +163,9 @@ type consumeOutput struct {
 
 	num int
 	max int
-	end int64
+
+	start int64 // if exact range
+	end   int64 // if exact range
 
 	group string // for filtering __consumer_offsets
 
@@ -381,7 +387,10 @@ func (co *consumeOutput) consume() {
 		iter := fetches.RecordIter()
 		for !iter.Done() {
 			record := iter.Next()
-			if co.end > 0 && record.Offset > co.end {
+			// This record offset could be before the requested start
+			// following an out of range reset.
+			if co.start > 0 && record.Offset < co.start ||
+				co.end > 0 && record.Offset >= co.end {
 				continue
 			}
 			co.num++
