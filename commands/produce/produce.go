@@ -3,6 +3,7 @@ package produce
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"strconv"
@@ -75,6 +76,7 @@ The input delimiter understands \n, \r, \t, and \xXX (hex) escape sequences.
 			scanner.Split(splitDelimFn(delim))
 
 			var wg sync.WaitGroup
+			bg := context.Background()
 			for scanner.Scan() {
 				r := &kgo.Record{
 					Topic: args[0],
@@ -88,7 +90,7 @@ The input delimiter understands \n, \r, \t, and \xXX (hex) escape sequences.
 				r.Value = append(make([]byte, len(scanner.Bytes())), scanner.Bytes()...)
 
 				wg.Add(1)
-				err := cl.Client().Produce(r, func(r *kgo.Record, err error) {
+				err := cl.Client().Produce(bg, r, func(r *kgo.Record, err error) {
 					defer wg.Done()
 					out.MaybeDie(err, "unable to produce record: %v", err)
 					if verbose {

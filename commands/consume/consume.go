@@ -55,11 +55,11 @@ func (c *consumption) run(topics []string) {
 		out.Die("__consumer_offsets must be the only topic listed when trying to consume it")
 	}
 
-	var consumeOpts []kgo.ConsumeOpt
+	var directOpts []kgo.DirectConsumeOpt
 	var groupOpts []kgo.GroupOpt
 	offset := c.parseOffset()
 	if len(c.partitions) == 0 {
-		consumeOpts = append(consumeOpts, kgo.ConsumeTopics(offset, topics...))
+		directOpts = append(directOpts, kgo.ConsumeTopics(offset, topics...))
 		groupOpts = append(groupOpts, kgo.GroupTopics(topics...))
 	} else {
 		if len(c.group) != 0 {
@@ -73,10 +73,10 @@ func (c *consumption) run(topics []string) {
 			}
 			offsets[topic] = partOffsets
 		}
-		consumeOpts = append(consumeOpts, kgo.ConsumePartitions(offsets))
+		directOpts = append(directOpts, kgo.ConsumePartitions(offsets))
 	}
 	if c.regex {
-		consumeOpts = append(consumeOpts, kgo.ConsumeTopicsRegex())
+		directOpts = append(directOpts, kgo.ConsumeTopicsRegex())
 		groupOpts = append(groupOpts, kgo.GroupTopicsRegex())
 	}
 
@@ -87,7 +87,7 @@ func (c *consumption) run(topics []string) {
 	if len(c.group) > 0 && !isConsumerOffsets {
 		cl.AssignGroup(c.group, groupOpts...)
 	} else {
-		cl.AssignPartitions(consumeOpts...)
+		cl.AssignPartitions(directOpts...)
 	}
 	co := &consumeOutput{
 		cl:    cl,

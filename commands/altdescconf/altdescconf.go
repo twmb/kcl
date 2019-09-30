@@ -138,13 +138,13 @@ func (cfger *cfger) confirmAlterLoss(args []string, kvs []kv.KV) {
 			continue
 		}
 		val := "(null)"
-		if entry.ConfigValue != nil {
-			val = *entry.ConfigValue
+		if entry.Value != nil {
+			val = *entry.Value
 		}
 		if entry.IsSensitive {
 			val = "(sensitive)"
 		}
-		existing[entry.ConfigName] = val
+		existing[entry.Name] = val
 	}
 
 	for _, kv := range kvs {
@@ -250,20 +250,20 @@ func DescribeConfigs(cl *client.Client, maybeName []string, forBroker bool) {
 
 	kvs := resource.ConfigEntries
 	sort.Slice(kvs, func(i, j int) bool {
-		return kvs[i].ConfigName < kvs[j].ConfigName
+		return kvs[i].Name < kvs[j].Name
 	})
 
 	tw := out.BeginTabWrite()
 	defer tw.Flush()
 
 	for _, kv := range kvs {
-		key := kv.ConfigName
+		key := kv.Name
 		if kv.ReadOnly {
 			key += "*"
 		}
 		val := "(null)"
-		if kv.ConfigValue != nil {
-			val = *kv.ConfigValue
+		if kv.Value != nil {
+			val = *kv.Value
 		}
 		if kv.IsSensitive {
 			val = "(sensitive)"
@@ -290,6 +290,8 @@ func configSourceForInt8(i int8) string {
 		return "STATIC_BROKER_CONFIG"
 	case 5:
 		return "DEFAULT_CONFIG"
+	case 6:
+		return "DYNAMIC_BROKER_LOGGER_CONFIG"
 	}
 	return ""
 }
