@@ -3,16 +3,19 @@ package misc
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"math"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/twmb/kgo"
-	"github.com/twmb/kgo/kerr"
-	"github.com/twmb/kgo/kmsg"
+	"github.com/twmb/kafka-go/pkg/kerr"
+	"github.com/twmb/kafka-go/pkg/kgo"
+	"github.com/twmb/kafka-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/commands/broker"
@@ -33,6 +36,8 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd.AddCommand(probeVersionCommand(cl))
 	cmd.AddCommand(electLeaderCommand(cl))
 	cmd.AddCommand(offsetForLeaderEpoch(cl))
+	cmd.AddCommand(rawCommand(cl))
+	cmd.AddCommand(deleteRecordsCommand(cl))
 
 	return cmd
 }
@@ -63,6 +68,7 @@ func metadataCommand(cl *client.Client) *cobra.Command {
 		IncludeTopicAuthorizedOperations:   true,
 	}
 	var noTopics bool
+	var topics []string
 
 	cmd := &cobra.Command{
 		Use:   "metadata",
@@ -74,7 +80,13 @@ func metadataCommand(cl *client.Client) *cobra.Command {
 		Args: cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
 			if noTopics { // nil means everything, empty means nothing
-				req.Topics = []string{}
+				req.Topics = []kmsg.MetadataRequestTopic{}
+			} else {
+				for _, topic := range topics {
+					req.Topics = append(req.Topics, kmsg.MetadataRequestTopic{
+						Topic: topic,
+					})
+				}
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), &req)
@@ -96,7 +108,7 @@ func metadataCommand(cl *client.Client) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&noTopics, "no-topics", false, "fetch only broker metadata, no topics")
-	cmd.Flags().StringSliceVarP(&req.Topics, "topics", "t", nil, "list of topics to fetch (comma separated or repeated flag)")
+	cmd.Flags().StringSliceVarP(&topics, "topics", "t", nil, "list of topics to fetch (comma separated or repeated flag)")
 	return cmd
 }
 
@@ -139,7 +151,7 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 
 			resp := kresp.(*kmsg.ApiVersionsResponse)
 			fmt.Fprintf(tw, "NAME\tMAX\n")
-			for _, k := range resp.ApiVersions {
+			for _, k := range resp.ApiKeys {
 				kind := kmsg.NameForKey(k.ApiKey)
 				if kind == "" {
 					kind = "Unknown"
@@ -194,8 +206,8 @@ func probeVersion(cl *client.Client) {
 	}
 
 	resp := kresp.(*kmsg.ApiVersionsResponse)
-	keys := resp.ApiVersions
-	num := len(resp.ApiVersions)
+	keys := resp.ApiKeys
+	num := len(resp.ApiKeys)
 	switch {
 	case num == 19:
 		fmt.Println("Kafka 0.10.0")
@@ -217,7 +229,7 @@ func probeVersion(cl *client.Client) {
 		fmt.Println("Kafka 2.2.0")
 	case num == 45:
 		fmt.Println("Kafka 2.3.0")
-	case num == 47:
+	case num == 48:
 		fmt.Println("Kafka 2.4.0")
 	default:
 		fmt.Println("Unknown version: either tip or between releases")
@@ -245,7 +257,7 @@ func electLeaderCommand(cl *client.Client) *cobra.Command {
 					}
 					return 0
 				}(),
-				TimeoutMs: cl.TimeoutMillis(),
+				TimeoutMillis: cl.TimeoutMillis(),
 			}
 			if topic != "" {
 				req.Topics = append(req.Topics, kmsg.ElectLeadersRequestTopic{
@@ -359,5 +371,55 @@ func offsetForLeaderEpoch(cl *client.Client) *cobra.Command {
 	cmd.Flags().Int32VarP(&leaderEpoch, "leader-epoch", "e", 0, "leader epoch to ask for")
 	cmd.Flags().Int32VarP(&broker, "broker", "b", 1, "broker to query")
 
+	return cmd
+}
+
+func rawCommand(cl *client.Client) *cobra.Command {
+	var key int16
+	cmd := &cobra.Command{
+		Use:   "raw-req",
+		Short: "Issue an arbitrary request as parsed from JSON STDIN.",
+		Args:  cobra.ExactArgs(0),
+		Run: func(_ *cobra.Command, _ []string) {
+			req := kmsg.RequestForKey(key)
+			if req == nil {
+				out.Die("request key %d unknown", key)
+			}
+			raw, err := ioutil.ReadAll(os.Stdin)
+			out.MaybeDie(err, "unable to read stdin: %v", err)
+			err = json.Unmarshal(raw, req)
+			out.MaybeDie(err, "unable to unmarshal stdin: %v", err)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			kresp, err := cl.Client().Request(ctx, req)
+			out.MaybeDie(err, "response error: %v", err)
+			out.ExitJSON(kresp)
+		},
+	}
+	cmd.Flags().Int16VarP(&key, "key", "k", -1, "request key")
+	return cmd
+}
+
+func deleteRecordsCommand(cl *client.Client) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "delete-records",
+		Short: "Delete topic foo partition 0 offset 10.",
+		Args:  cobra.ExactArgs(0),
+		Run: func(_ *cobra.Command, _ []string) {
+			req := &kmsg.DeleteRecordsRequest{
+				Topics: []kmsg.DeleteRecordsRequestTopic{{
+					Topic: "foo",
+					Partitions: []kmsg.DeleteRecordsRequestTopicPartition{{
+						Partition: 0,
+						Offset:    10,
+					}},
+				}},
+				TimeoutMillis: cl.TimeoutMillis(),
+			}
+			kresp, err := cl.Client().Broker(2).Request(context.Background(), req)
+			out.MaybeDie(err, "unable to to get delete records: %v", err)
+			out.ExitJSON(kresp)
+		},
+	}
 	return cmd
 }

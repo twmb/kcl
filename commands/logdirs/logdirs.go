@@ -6,9 +6,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/twmb/kafka-go/pkg/kmsg"
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/out"
-	"github.com/twmb/kgo/kmsg"
 )
 
 func Command(cl *client.Client) *cobra.Command {
@@ -70,9 +70,9 @@ func logdirsAlterReplicasCommand(cl *client.Client) *cobra.Command {
 		Args: cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
 			resp, err := cl.Client().Request(context.Background(), &kmsg.AlterReplicaLogDirsRequest{
-				LogDirs: []kmsg.AlterReplicaLogDirsRequestLogDir{{
-					LogDir: destDir,
-					Topics: []kmsg.AlterReplicaLogDirsRequestLogDirTopic{{
+				Dirs: []kmsg.AlterReplicaLogDirsRequestDir{{
+					Dir: destDir,
+					Topics: []kmsg.AlterReplicaLogDirsRequestDirTopic{{
 						Topic:      topic,
 						Partitions: partitions,
 					}},

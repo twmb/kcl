@@ -9,8 +9,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/twmb/kgo/kerr"
-	"github.com/twmb/kgo/kmsg"
+	"github.com/twmb/kafka-go/pkg/kerr"
+	"github.com/twmb/kafka-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/out"
@@ -59,7 +59,7 @@ To get a lot more information about groups, use the describe command.
 			defer tw.Flush()
 			fmt.Fprintf(tw, "GROUP ID\tPROTO TYPE\n")
 			for _, group := range resp.Groups {
-				fmt.Fprintf(tw, "%s\t%s\n", group.GroupID, group.ProtocolType)
+				fmt.Fprintf(tw, "%s\t%s\n", group.Group, group.ProtocolType)
 			}
 		},
 	}
@@ -79,7 +79,7 @@ This command supports JSON output.
 		Args: cobra.MinimumNArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
 			req := kmsg.DescribeGroupsRequest{
-				GroupIDs: args,
+				Groups: args,
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), &req)
@@ -104,7 +104,7 @@ This command supports JSON output.
 					errMsg = err.Error()
 				}
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
-					group.GroupID,
+					group.Group,
 					group.State,
 					group.ProtocolType,
 					group.Protocol,
@@ -121,7 +121,7 @@ func describeGroupDetailed(group *consumerGroup) {
 	}
 
 	tw := out.BeginTabWrite()
-	fmt.Fprintf(tw, "ID\t%s\n", group.GroupID)
+	fmt.Fprintf(tw, "ID\t%s\n", group.Group)
 	fmt.Fprintf(tw, "STATE\t%s\n", group.State)
 	fmt.Fprintf(tw, "PROTO TYPE\t%s\n", group.ProtocolType)
 	fmt.Fprintf(tw, "PROTO\t%s\n", group.Protocol)
@@ -177,7 +177,7 @@ type consumerGroupMember struct {
 }
 type consumerGroup struct {
 	ErrorCode            int16
-	GroupID              string
+	Group                string
 	State                string
 	ProtocolType         string
 	Protocol             string
@@ -185,19 +185,19 @@ type consumerGroup struct {
 	AuthorizedOperations int32
 }
 type consumerGroups struct {
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 	Groups         []consumerGroup
 }
 
 // unmarshals and prints the standard java protocol type
 func unbinaryGroupDescribeMembers(resp *kmsg.DescribeGroupsResponse) *consumerGroups {
 	cresp := &consumerGroups{
-		ThrottleTimeMs: resp.ThrottleTimeMs,
+		ThrottleMillis: resp.ThrottleMillis,
 	}
 	for _, group := range resp.Groups {
 		cgroup := consumerGroup{
 			ErrorCode:            group.ErrorCode,
-			GroupID:              group.GroupID,
+			Group:                group.Group,
 			State:                group.State,
 			ProtocolType:         group.ProtocolType,
 			Protocol:             group.Protocol,
@@ -209,7 +209,7 @@ func unbinaryGroupDescribeMembers(resp *kmsg.DescribeGroupsResponse) *consumerGr
 				ClientID:   member.ClientID,
 				ClientHost: member.ClientHost,
 			}
-			cmember.MemberMetadata.ReadFrom(member.MemberMetadata)
+			cmember.MemberMetadata.ReadFrom(member.ProtocolMetadata)
 			cmember.MemberAssignment.ReadFrom(member.MemberAssignment)
 
 			cgroup.Members = append(cgroup.Members, cmember)
@@ -236,12 +236,12 @@ func groupDeleteCommand(cl *client.Client) *cobra.Command {
 			}
 			tw := out.BeginTabWrite()
 			defer tw.Flush()
-			for _, resp := range resp.GroupErrorCodes {
+			for _, resp := range resp.Groups {
 				msg := "OK"
 				if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
 					msg = err.Error()
 				}
-				fmt.Fprintf(tw, "%s\t%s\n", resp.GroupID, msg)
+				fmt.Fprintf(tw, "%s\t%s\n", resp.Group, msg)
 			}
 		},
 	}

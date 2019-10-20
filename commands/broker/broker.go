@@ -12,7 +12,7 @@ import (
 	"github.com/twmb/kcl/commands/altdescconf"
 	"github.com/twmb/kcl/out"
 
-	"github.com/twmb/kgo/kmsg"
+	"github.com/twmb/kafka-go/pkg/kmsg"
 )
 
 func Command(cl *client.Client) *cobra.Command {

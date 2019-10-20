@@ -13,8 +13,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/twmb/kgo/kerr"
-	"github.com/twmb/kgo/kmsg"
+	"github.com/twmb/kafka-go/pkg/kerr"
+	"github.com/twmb/kafka-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/commands/altdescconf"
@@ -122,7 +122,7 @@ func PrintTopics(topics []kmsg.MetadataResponseTopic, detailed bool) {
 }
 
 func topicCreateCommand(cl *client.Client) *cobra.Command {
-	req := kmsg.CreateTopicsRequest{Timeout: cl.TimeoutMillis()}
+	req := kmsg.CreateTopicsRequest{TimeoutMillis: cl.TimeoutMillis()}
 
 	var topicReq kmsg.CreateTopicsRequestTopic
 	var configKVs []string
@@ -143,10 +143,10 @@ func topicCreateCommand(cl *client.Client) *cobra.Command {
 			kvs, err := kv.Parse(configKVs)
 			out.MaybeDie(err, "unable to parse KVs: %v", err)
 			for _, kv := range kvs {
-				topicReq.ConfigEntries = append(topicReq.ConfigEntries,
-					kmsg.CreateTopicsRequestTopicConfigEntry{
-						ConfigName:  kv.K,
-						ConfigValue: kmsg.StringPtr(kv.V),
+				topicReq.Configs = append(topicReq.Configs,
+					kmsg.CreateTopicsRequestTopicConfig{
+						Name:  kv.K,
+						Value: kmsg.StringPtr(kv.V),
 					})
 			}
 
@@ -157,7 +157,7 @@ func topicCreateCommand(cl *client.Client) *cobra.Command {
 			if cl.AsJSON() {
 				out.ExitJSON(kresp)
 			}
-			resps := kresp.(*kmsg.CreateTopicsResponse).TopicErrors
+			resps := kresp.(*kmsg.CreateTopicsResponse).Topics
 			if len(resps) != 1 {
 				out.ExitErrJSON(kresp, "quitting; one topic create requested but received %d responses", len(resps))
 			}
@@ -179,14 +179,14 @@ func topicDeleteCommand(cl *client.Client) *cobra.Command {
 		Short: "Delete all listed topics",
 		Run: func(_ *cobra.Command, args []string) {
 			resp, err := cl.Client().Request(context.Background(), &kmsg.DeleteTopicsRequest{
-				Timeout: cl.TimeoutMillis(),
-				Topics:  args,
+				TimeoutMillis: cl.TimeoutMillis(),
+				Topics:        args,
 			})
 			out.MaybeDie(err, "unable to delete topics: %v", err)
 			if cl.AsJSON() {
 				out.ExitJSON(resp)
 			}
-			resps := resp.(*kmsg.DeleteTopicsResponse).TopicErrorCodes
+			resps := resp.(*kmsg.DeleteTopicsResponse).Topics
 			tw := out.BeginTabWrite()
 			defer tw.Flush()
 			for _, topicResp := range resps {
@@ -278,9 +278,11 @@ This command supports JSON output.
 				out.Die("no new partitions requested")
 			}
 
-			kmetaResp, err := cl.Client().Request(context.Background(), &kmsg.MetadataRequest{
-				Topics: args,
-			})
+			req := new(kmsg.MetadataRequest)
+			for _, topic := range args {
+				req.Topics = append(req.Topics, kmsg.MetadataRequestTopic{Topic: topic})
+			}
+			kmetaResp, err := cl.Client().Request(context.Background(), req)
 			out.MaybeDie(err, "unable to get topic metadata: %v", err)
 			metas := kmetaResp.(*kmsg.MetadataResponse).Topics
 			if len(metas) != 1 {
@@ -296,28 +298,28 @@ This command supports JSON output.
 			currentPartitionCount := len(metas[0].Partitions)
 			if currentPartitionCount > 0 {
 				currentReplicaCount := len(metas[0].Partitions[0].Replicas)
-				if currentReplicaCount != len(assignments[0]) {
+				if currentReplicaCount != len(assignments[0].Replicas) {
 					out.Die("cannot create partitions with %d when existing partitions have %d replicas",
-						len(assignments[0]), currentReplicaCount)
+						len(assignments[0].Replicas), currentReplicaCount)
 				}
 			}
 
 			createResp, err := cl.Client().Request(context.Background(), &kmsg.CreatePartitionsRequest{
-				TopicPartitions: []kmsg.CreatePartitionsRequestTopicPartition{
+				Topics: []kmsg.CreatePartitionsRequestTopic{
 					{
 						Topic:      args[0],
 						Count:      int32(currentPartitionCount + len(assignments)),
 						Assignment: assignments,
 					},
 				},
-				Timeout: cl.TimeoutMillis(),
+				TimeoutMillis: cl.TimeoutMillis(),
 			})
 			out.MaybeDie(err, "unable to create topic partitions: %v", err)
 
 			if cl.AsJSON() {
 				out.ExitJSON(createResp)
 			}
-			resps := createResp.(*kmsg.CreatePartitionsResponse).TopicErrors
+			resps := createResp.(*kmsg.CreatePartitionsResponse).Topics
 			if len(resps) != 1 {
 				out.ExitErrJSON(createResp, "quitting; one topic partition creation requested but received %d responses", len(resps))
 			}
@@ -330,8 +332,8 @@ This command supports JSON output.
 	return cmd
 }
 
-func parseAssignments(in string) ([][]int32, error) {
-	var partitions [][]int32
+func parseAssignments(in string) ([]kmsg.CreatePartitionsRequestTopicAssignment, error) {
+	var partitions []kmsg.CreatePartitionsRequestTopicAssignment
 	var replicasSize int
 
 	for _, partition := range strings.Split(in, ";") {
@@ -369,7 +371,7 @@ func parseAssignments(in string) ([][]int32, error) {
 			return nil, errors.New("all partitions must have the same number of replicas")
 		}
 
-		partitions = append(partitions, replicas)
+		partitions = append(partitions, kmsg.CreatePartitionsRequestTopicAssignment{Replicas: replicas})
 	}
 
 	return partitions, nil

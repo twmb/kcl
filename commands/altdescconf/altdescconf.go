@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/twmb/kgo/kmsg"
+	"github.com/twmb/kafka-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/kv"
@@ -92,10 +92,10 @@ func (cfger *cfger) alter(args []string) {
 	}
 
 	for _, kv := range kvs {
-		cfg.ConfigEntries = append(cfg.ConfigEntries,
-			kmsg.AlterConfigsRequestResourceConfigEntry{
-				ConfigName:  kv.K,
-				ConfigValue: kmsg.StringPtr(kv.V),
+		cfg.Configs = append(cfg.Configs,
+			kmsg.AlterConfigsRequestResourceConfig{
+				Name:  kv.K,
+				Value: kmsg.StringPtr(kv.V),
 			})
 	}
 
@@ -132,8 +132,8 @@ func (cfger *cfger) alter(args []string) {
 func (cfger *cfger) confirmAlterLoss(args []string, kvs []kv.KV) {
 	existing := make(map[string]string, 10)
 	_, describeResource := cfger.querier.issueDescribeConfig(args)
-	for _, entry := range describeResource.ConfigEntries {
-		switch entry.ConfigSource {
+	for _, entry := range describeResource.Configs {
+		switch entry.Source {
 		case 4, 5: // static, default
 			continue
 		}
@@ -248,7 +248,7 @@ func DescribeConfigs(cl *client.Client, maybeName []string, forBroker bool) {
 		out.ExitJSON(resp)
 	}
 
-	kvs := resource.ConfigEntries
+	kvs := resource.Configs
 	sort.Slice(kvs, func(i, j int) bool {
 		return kvs[i].Name < kvs[j].Name
 	})
@@ -271,7 +271,7 @@ func DescribeConfigs(cl *client.Client, maybeName []string, forBroker bool) {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t\n",
 			key,
 			val,
-			configSourceForInt8(kv.ConfigSource),
+			configSourceForInt8(kv.Source),
 		)
 	}
 }

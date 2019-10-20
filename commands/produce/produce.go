@@ -11,9 +11,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/twmb/kafka-go/pkg/kgo"
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/out"
-	"github.com/twmb/kgo"
 )
 
 func Command(cl *client.Client) *cobra.Command {

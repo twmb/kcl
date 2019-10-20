@@ -20,9 +20,10 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
-	"github.com/twmb/kgo"
-	"github.com/twmb/kgo/kmsg"
-	"github.com/twmb/kgo/kversion"
+
+	"github.com/twmb/kafka-go/pkg/kgo"
+	"github.com/twmb/kafka-go/pkg/kmsg"
+	"github.com/twmb/kafka-go/pkg/kversion"
 
 	"github.com/twmb/kcl/out"
 )

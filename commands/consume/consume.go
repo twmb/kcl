@@ -20,8 +20,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/twmb/go-strftime"
-	"github.com/twmb/kgo"
-	"github.com/twmb/kgo/kmsg"
+	"github.com/twmb/kafka-go/pkg/kgo"
+	"github.com/twmb/kafka-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/out"
@@ -569,16 +569,16 @@ func (co *consumeOutput) formatGroupMetadata(dst []byte, r *kgo.Record) ([]byte,
 			tw = out.BeginTabWriteTo(w)
 			fmt.Fprintf(tw, "\t\tMemberID\t%s\n", member.MemberID)
 			if v.Version >= 3 {
-				if member.GroupInstanceID == nil {
-					fmt.Fprintf(tw, "\t\tGroupInstanceID\t%s\n", "(null)")
+				if member.InstanceID == nil {
+					fmt.Fprintf(tw, "\t\tInstanceID\t%s\n", "(null)")
 				} else {
-					fmt.Fprintf(tw, "\t\tGroupInstanceID\t%d\n", *member.GroupInstanceID)
+					fmt.Fprintf(tw, "\t\tInstanceID\t%d\n", *member.InstanceID)
 				}
 			}
 			fmt.Fprintf(tw, "\t\tClientID\t%s\n", member.ClientID)
 			fmt.Fprintf(tw, "\t\tClientHost\t%s\n", member.ClientHost)
-			fmt.Fprintf(tw, "\t\tRebalanceTimeout\t%d\n", member.RebalanceTimeout)
-			fmt.Fprintf(tw, "\t\tSessionTimeout\t%d\n", member.SessionTimeout)
+			fmt.Fprintf(tw, "\t\tRebalanceTimeout\t%d\n", member.RebalanceTimeoutMillis)
+			fmt.Fprintf(tw, "\t\tSessionTimeout\t%d\n", member.SessionTimeoutMillis)
 
 			if v.ProtocolType != "consumer" {
 				fmt.Fprintf(tw, "\t\tSubscription\t(unknown proto type) %x\n", member.Subscription)
