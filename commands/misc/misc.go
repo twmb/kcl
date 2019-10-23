@@ -18,8 +18,6 @@ import (
 	"github.com/twmb/kafka-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
-	"github.com/twmb/kcl/commands/broker"
-	"github.com/twmb/kcl/commands/topic"
 	"github.com/twmb/kcl/out"
 )
 
@@ -30,7 +28,6 @@ func Command(cl *client.Client) *cobra.Command {
 	}
 
 	cmd.AddCommand(errcodeCommand())
-	cmd.AddCommand(metadataCommand(cl))
 	cmd.AddCommand(genAutocompleteCommand())
 	cmd.AddCommand(apiVersionsCommand(cl))
 	cmd.AddCommand(probeVersionCommand(cl))
@@ -60,56 +57,6 @@ func errcodeCommand() *cobra.Command {
 			fmt.Printf("%s\n%s\n", kerr.Message, kerr.Description)
 		},
 	}
-}
-
-func metadataCommand(cl *client.Client) *cobra.Command {
-	req := kmsg.MetadataRequest{
-		IncludeClusterAuthorizedOperations: true,
-		IncludeTopicAuthorizedOperations:   true,
-	}
-	var noTopics bool
-	var topics []string
-
-	cmd := &cobra.Command{
-		Use:   "metadata",
-		Short: "Issue a metadata command and dump the results",
-		ValidArgs: []string{
-			"--no-topics",
-			"--topics",
-		},
-		Args: cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
-			if noTopics { // nil means everything, empty means nothing
-				req.Topics = []kmsg.MetadataRequestTopic{}
-			} else {
-				for _, topic := range topics {
-					req.Topics = append(req.Topics, kmsg.MetadataRequestTopic{
-						Topic: topic,
-					})
-				}
-			}
-
-			kresp, err := cl.Client().Request(context.Background(), &req)
-			out.MaybeDie(err, "unable to get metadata: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
-			}
-			resp := kresp.(*kmsg.MetadataResponse)
-			if resp.ClusterID != nil {
-				fmt.Printf("CLUSTER\n=======\n%s\n\n", *resp.ClusterID)
-			}
-
-			fmt.Printf("BROKERS\n=======\n")
-			broker.PrintBrokers(resp.ControllerID, resp.Brokers)
-
-			fmt.Printf("\nTOPICS\n======\n")
-			topic.PrintTopics(resp.Topics, true)
-
-		},
-	}
-	cmd.Flags().BoolVar(&noTopics, "no-topics", false, "fetch only broker metadata, no topics")
-	cmd.Flags().StringSliceVarP(&topics, "topics", "t", nil, "list of topics to fetch (comma separated or repeated flag)")
-	return cmd
 }
 
 func genAutocompleteCommand() *cobra.Command {

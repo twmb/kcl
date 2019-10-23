@@ -2,12 +2,9 @@
 package topic
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -27,95 +24,10 @@ func Command(cl *client.Client) *cobra.Command {
 		Short: "Perform topic relation actions",
 	}
 
-	cmd.AddCommand(topicListCommand(cl))
 	cmd.AddCommand(topicCreateCommand(cl))
 	cmd.AddCommand(topicDeleteCommand(cl))
 	cmd.AddCommand(topicAddPartitionsCommand(cl))
 	return cmd
-}
-
-func topicListCommand(cl *client.Client) *cobra.Command {
-	var detailed bool
-	cmd := &cobra.Command{
-		Use:   "list",
-		Short: "List all topics",
-		Args:  cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
-			kresp, err := cl.Client().Request(context.Background(), new(kmsg.MetadataRequest))
-			out.MaybeDie(err, "unable to get metadata: %v", err)
-			resp := kresp.(*kmsg.MetadataResponse)
-			if cl.AsJSON() {
-				out.ExitJSON(resp.Topics)
-			}
-			PrintTopics(resp.Topics, detailed)
-		},
-	}
-	cmd.Flags().BoolVarP(&detailed, "detailed", "d", false, "include detailed information about all topic partitions")
-	return cmd
-}
-
-// PrintBrokers prints tab written topic information to stdout.
-//
-// If detailed is true, this prints per partition metadata as well.
-func PrintTopics(topics []kmsg.MetadataResponseTopic, detailed bool) {
-	sort.Slice(topics, func(i, j int) bool {
-		return topics[i].Topic < topics[j].Topic
-	})
-
-	if !detailed {
-		tw := out.BeginTabWrite()
-		defer tw.Flush()
-
-		fmt.Fprintf(tw, "NAME\tPARTITIONS\tREPLICAS\n")
-		for _, topic := range topics {
-			parts := len(topic.Partitions)
-			replicas := 0
-			if parts > 0 {
-				replicas = len(topic.Partitions[0].Replicas)
-			}
-			fmt.Fprintf(tw, "%s\t%d\t%d\n",
-				topic.Topic, parts, replicas)
-		}
-		tw.Flush()
-		return
-	}
-
-	buf := new(bytes.Buffer)
-	buf.Grow(10 << 10)
-	defer func() { os.Stdout.Write(buf.Bytes()) }()
-
-	for _, topic := range topics {
-		fmt.Fprintf(buf, "%s", topic.Topic)
-		if topic.IsInternal {
-			fmt.Fprint(buf, " (internal)")
-		}
-
-		parts := topic.Partitions
-		fmt.Fprintf(buf, ", %d partition", len(parts))
-		if len(parts) > 1 {
-			buf.WriteByte('s')
-		}
-		buf.WriteString("\n")
-
-		sort.Slice(parts, func(i, j int) bool {
-			return parts[i].Partition < parts[j].Partition
-		})
-		for _, part := range topic.Partitions {
-			fmt.Fprintf(buf, "  %4d  leader %d replicas %v isr %v",
-				part.Partition,
-				part.Leader,
-				part.Replicas,
-				part.ISR,
-			)
-			if len(part.OfflineReplicas) > 0 {
-				fmt.Fprintf(buf, ", offline replicas %v", part.OfflineReplicas)
-			}
-			if err := kerr.ErrorForCode(part.ErrorCode); err != nil {
-				fmt.Fprintf(buf, " (%s)", err)
-			}
-			fmt.Fprintln(buf)
-		}
-	}
 }
 
 func topicCreateCommand(cl *client.Client) *cobra.Command {

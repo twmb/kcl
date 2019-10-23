@@ -11,6 +11,7 @@ import (
 	"github.com/twmb/kcl/commands/configs"
 	"github.com/twmb/kcl/commands/consume"
 	"github.com/twmb/kcl/commands/group"
+	"github.com/twmb/kcl/commands/metadata"
 	"github.com/twmb/kcl/commands/misc"
 	"github.com/twmb/kcl/commands/produce"
 	"github.com/twmb/kcl/commands/topic"
@@ -50,7 +51,7 @@ Command completion is available at:
 		group.Command(cl),
 		topic.Command(cl),
 		// TODO configs
-		// TODO metadata
+		metadata.Command(cl),
 		// TODO myconfig
 	)
 
