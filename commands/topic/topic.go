@@ -17,7 +17,6 @@ import (
 	"github.com/twmb/kafka-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
-	"github.com/twmb/kcl/commands/altdescconf"
 	"github.com/twmb/kcl/kv"
 	"github.com/twmb/kcl/out"
 )
@@ -31,8 +30,6 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd.AddCommand(topicListCommand(cl))
 	cmd.AddCommand(topicCreateCommand(cl))
 	cmd.AddCommand(topicDeleteCommand(cl))
-	cmd.AddCommand(topicDescribeConfigCommand(cl))
-	cmd.AddCommand(topicAlterConfigCommand(cl))
 	cmd.AddCommand(topicAddPartitionsCommand(cl))
 	return cmd
 }
@@ -198,46 +195,6 @@ func topicDeleteCommand(cl *client.Client) *cobra.Command {
 			}
 		},
 	}
-}
-
-func topicDescribeConfigCommand(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
-		Use:   "describe TOPIC",
-		Short: "Describe a topic's configuration",
-		Long: `Print key/value config pairs for a topic.
-
-This command prints all key/value config values for a topic, as well
-as the value's source. Read only keys are suffixed with *.
-
-The JSON output option includes all config synonyms.
-`,
-		Args: cobra.ExactArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
-			altdescconf.DescribeConfigs(cl, args, false)
-		},
-	}
-}
-
-func topicAlterConfigCommand(cl *client.Client) *cobra.Command {
-	return altdescconf.AlterConfigsCommand(
-		cl,
-		"alter-config TOPIC",
-		"Alter a topic's configuration",
-		`Alter a topic's configuration.
-
-Altering configs requires listing all dynamic config options for any alter.
-The incremental alter, added in Kafka 2.3.0, allows adding or removing
-individual values.
-
-Since an alter may inadvertently lose existing config values, this command
-by default checks for existing config key/value pairs that may be lost in
-the alter and prompts if it is OK to lose those values. To skip this check,
-use the --no-confirm flag.
-
-This command supports JSON output.
-`,
-		false,
-	)
 }
 
 func topicAddPartitionsCommand(cl *client.Client) *cobra.Command {
