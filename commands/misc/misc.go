@@ -60,24 +60,44 @@ func errcodeCommand() *cobra.Command {
 }
 
 func genAutocompleteCommand() *cobra.Command {
-	// TODO gen-autocomplete bash/zsh
-	return &cobra.Command{
+	var kind string
+
+	cmd := &cobra.Command{
 		Use:   "gen-autocomplete",
 		Short: "Generates bash completion scripts",
 		Long: `To load completion run
 
-. <(kcl misc gen-autocomplete)
+. <(kcl misc gen-autocomplete -kbash)
 
-To configure your bash shell to load completions for each session add to your bashrc
+To configure your shell to load completions for each session add to your bashrc
+(or equivalent, for your shell depending on support):
 
 # ~/.bashrc or ~/.profile
-. <(kcl misc gen-autocomplete)
+if [ -f /etc/bash_completion ] && ! shopt -oq posix; then
+    . /etc/bash_completion
+    . <(kcl misc gen-autocomplete -kbash)
+fi
+
+This command supports completion for bash, zsh, and powershell.
 `,
 		Args: cobra.ExactArgs(0),
 		Run: func(cmd *cobra.Command, _ []string) {
-			cmd.Root().GenBashCompletion(os.Stdout)
+			switch kind {
+			case "bash":
+				cmd.Root().GenBashCompletion(os.Stdout)
+			case "zsh":
+				cmd.Root().GenZshCompletion(os.Stdout)
+			case "powershell":
+				cmd.Root().GenPowerShellCompletion(os.Stdout)
+			default:
+				out.Die("unrecognized autocomplete kind %q", kind)
+			}
 		},
 	}
+
+	cmd.Flags().StringVarP(&kind, "kind", "k", "bash", "autocomplete kind (bash, zsh, powershell)")
+
+	return cmd
 }
 
 func apiVersionsCommand(cl *client.Client) *cobra.Command {
