@@ -68,6 +68,8 @@ Command completion is available at:
 		}
 	})
 
+	root.SetUsageTemplate(usageTmpl)
+
 	if err := root.Execute(); err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -80,3 +82,25 @@ func allCommands(root *cobra.Command, fn func(*cobra.Command)) {
 	}
 	fn(root)
 }
+
+const usageTmpl = `USAGE:{{if .Runnable}}
+  {{.UseLine}}{{end}}{{if .HasAvailableSubCommands}}
+  {{.CommandPath}} [command]{{end}}{{if gt (len .Aliases) 0}}
+
+ALIASES:
+  {{.NameAndAliases}}{{end}}{{if .HasExample}}
+
+EXAMPLES:
+{{.Example}}{{end}}{{if .HasAvailableSubCommands}}
+
+SUBCOMMANDS:{{range .Commands}}{{if .IsAvailableCommand}}
+  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{end}}{{if .HasAvailableLocalFlags}}
+
+FLAGS:
+{{.LocalFlags.FlagUsages | trimTrailingWhitespaces}}{{end}}{{if .HasAvailableInheritedFlags}}
+
+GLOBAL FLAGS:
+{{.InheritedFlags.FlagUsages | trimTrailingWhitespaces}}{{end}}{{if .HasAvailableSubCommands}}
+
+Use "{{.CommandPath}} [command] --help" for more information about a command.{{end}}
+`
