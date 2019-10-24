@@ -23,12 +23,13 @@ func Command(cl *client.Client) *cobra.Command {
 
 	cmd.AddCommand(electLeaderCommand(cl))
 	cmd.AddCommand(deleteRecordsCommand(cl))
+	cmd.AddCommand(logdirsDescribeCommand(cl))
+	cmd.AddCommand(logdirsAlterReplicasCommand(cl))
 
 	return cmd
 }
 
 func electLeaderCommand(cl *client.Client) *cobra.Command {
-	var topicParts []string
 	var allPartitions bool
 	var unclean bool
 	var run bool
@@ -47,9 +48,8 @@ topic and 1,2,3 are partition numbers.
 
 To avoid accidental triggers, this command requires a --run flag to run.
 `,
-		Args:    cobra.ExactArgs(0),
-		Example: "elect-leaders -t foo:1,2,3 -tbar:9",
-		Run: func(_ *cobra.Command, _ []string) {
+		Example: "elect-leaders --run foo:1,2,3 bar:9",
+		Run: func(_ *cobra.Command, topicParts []string) {
 			tps, err := flagutil.ParseTopicPartitions(topicParts)
 			out.MaybeDie(err, "unable to parse topic partitions: %v", err)
 			if !run {
@@ -93,7 +93,7 @@ To avoid accidental triggers, this command requires a --run flag to run.
 
 			for _, topic := range resp.Topics {
 				for _, partition := range topic.Partitions {
-					errKind := "OK"
+					errKind := ""
 					var msg string
 					if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
 						errKind = err.Error()
@@ -112,7 +112,6 @@ To avoid accidental triggers, this command requires a --run flag to run.
 		},
 	}
 
-	cmd.Flags().StringArrayVarP(&topicParts, "topic", "t", nil, "topic and partitions to trigger leader elections for; repeatable")
 	cmd.Flags().BoolVar(&allPartitions, "all-partitions", false, "trigger leader election on all topics for all partitions")
 	cmd.Flags().BoolVar(&unclean, "unclean", false, "allow unclean leader election (requires at least Kafka 2.4.0)")
 	cmd.Flags().BoolVarP(&run, "run", "r", false, "actually run the command (avoids accidental elections without this flag)")
