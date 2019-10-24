@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -45,12 +46,6 @@ func topicCreateCommand(cl *client.Client) *cobra.Command {
 All topics created with this command will have the same number of partitions,
 replication factor, and key/value configs.
 `,
-		ValidArgs: []string{
-			"--num-partitions",
-			"--replication-factor",
-			"--kv",
-			"--dry",
-		},
 		Args: cobra.MinimumNArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
 			kvs, err := kv.Parse(configKVs)
@@ -127,93 +122,98 @@ func topicDeleteCommand(cl *client.Client) *cobra.Command {
 }
 
 func topicAddPartitionsCommand(cl *client.Client) *cobra.Command {
-	var assignmentFlag string
+	var topics []string
 
 	cmd := &cobra.Command{
-		Use:   "add-partitions TOPIC",
+		Use:   "add-partitions -tTOPIC ASSIGNMENTS",
 		Short: "Add partitions to a topic",
 		Long: `Add partitions to a topic.
 
-Adding partitions to topics is done by requesting a total amount of
-partitions for a topic combined with an assignment of which brokers
-should own the replicas of each new partition.
+As a client, adding partitions to topics is done by requesting a total amount
+of partitions for a topic combined with an assignment of which brokers should
+own the replicas of each new partition.
 
-This CLI handles the total count of final partitions; you just need
+This CLI handles the total count of final partitions; you as a user just need
 to specify the where new partitions and their replicas should go.
 
-The input format is r,r,r;r,r,r. Each semicolon delimits a new partition.
-This command strips space. Note that because the partition delimiter is
-a semicolon, the input will need quoting if using multiple partitions
-(or if using spaces).
-
-To add a single new partition with three replicas, you would do 1,2,3.
-
-To add three partitions with two replicas each, you would do '1,2; 3,1; 2,1'.
-
-
-This command supports JSON output.
+When adding partitions to multiple topics, all topics use the same assignment.
 `,
-		ValidArgs: []string{
-			"--assignments",
-		},
-		Args: cobra.ExactArgs(1),
+
+		Example: `To add three partitions with two replicas each,
+add-partitions -t foo 1,2 : 3,1 : 2,3
+
+To add three partitions with one replica each,
+add-partitions -t foo 1:2:3
+
+To add a single partition with three replicas to two topics,
+add-partitions -t bar -t baz 1, 2, 3`,
+
+		Args: cobra.MinimumNArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
-			assignments, err := parseAssignments(assignmentFlag)
+			if len(topics) == 0 {
+				out.Die("missing topics to add partitions to")
+			}
+
+			assignments, err := parseAssignments(strings.Join(args, ""))
 			out.MaybeDie(err, "parse assignments failure: %v", err)
 			if len(assignments) == 0 {
 				out.Die("no new partitions requested")
 			}
 
-			req := new(kmsg.MetadataRequest)
-			for _, topic := range args {
-				req.Topics = append(req.Topics, kmsg.MetadataRequestTopic{Topic: topic})
+			// Get the metadata so we can determine the final partition count.
+			metaReq := new(kmsg.MetadataRequest)
+			for _, topic := range topics {
+				metaReq.Topics = append(metaReq.Topics, kmsg.MetadataRequestTopic{Topic: topic})
 			}
-			kmetaResp, err := cl.Client().Request(context.Background(), req)
+			kmetaResp, err := cl.Client().Request(context.Background(), metaReq)
 			out.MaybeDie(err, "unable to get topic metadata: %v", err)
-			metas := kmetaResp.(*kmsg.MetadataResponse).Topics
-			if len(metas) != 1 {
-				out.Die("quitting; one metadata topic requested but received %d responses", len(metas))
-			}
-			if metas[0].Topic != args[0] {
-				out.Die("quitting; metadata responded with non-requested topic %s", metas[0].Topic)
-			}
-			if err := kerr.ErrorForCode(metas[0].ErrorCode); err != nil {
-				out.Die("quitting; metadata responded with topic error %s", err)
-			}
+			metaResp := kmetaResp.(*kmsg.MetadataResponse)
 
-			currentPartitionCount := len(metas[0].Partitions)
-			if currentPartitionCount > 0 {
-				currentReplicaCount := len(metas[0].Partitions[0].Replicas)
-				if currentReplicaCount != len(assignments[0].Replicas) {
-					out.Die("cannot create partitions with %d when existing partitions have %d replicas",
-						len(assignments[0].Replicas), currentReplicaCount)
-				}
-			}
-
-			createResp, err := cl.Client().Request(context.Background(), &kmsg.CreatePartitionsRequest{
-				Topics: []kmsg.CreatePartitionsRequestTopic{
-					{
-						Topic:      args[0],
-						Count:      int32(currentPartitionCount + len(assignments)),
-						Assignment: assignments,
-					},
-				},
+			createReq := kmsg.CreatePartitionsRequest{
 				TimeoutMillis: cl.TimeoutMillis(),
-			})
+			}
+			for _, topic := range metaResp.Topics {
+				currentPartitionCount := len(topic.Partitions)
+				if currentPartitionCount > 0 {
+					currentReplicaCount := len(topic.Partitions[0].Replicas)
+					if currentReplicaCount != len(assignments[0].Replicas) {
+						fmt.Fprintf(os.Stderr, "ERR: requested topic %s has partitions with %d replicas; you cannot create a new partition with %d (must match)",
+							topic.Topic, currentReplicaCount, len(assignments[0].Replicas))
+					}
+				}
+
+				createReq.Topics = append(createReq.Topics, kmsg.CreatePartitionsRequestTopic{
+					Topic:      topic.Topic,
+					Count:      int32(currentPartitionCount + len(assignments)),
+					Assignment: assignments,
+				})
+			}
+
+			createResp, err := cl.Client().Request(context.Background(), &createReq)
 			out.MaybeDie(err, "unable to create topic partitions: %v", err)
 
 			if cl.AsJSON() {
 				out.ExitJSON(createResp)
 			}
+
 			resps := createResp.(*kmsg.CreatePartitionsResponse).Topics
-			if len(resps) != 1 {
-				out.ExitErrJSON(createResp, "quitting; one topic partition creation requested but received %d responses", len(resps))
+			tw := out.BeginTabWrite()
+			defer tw.Flush()
+			for _, topic := range resps {
+				errKind := "OK"
+				errMsg := ""
+				if err := kerr.ErrorForCode(topic.ErrorCode); err != nil {
+					errKind = err.Error()
+					if topic.ErrorMessage != nil {
+						errMsg = *topic.ErrorMessage
+					}
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\n", topic.Topic, errKind, errMsg)
 			}
-			out.ErrAndMsg(resps[0].ErrorCode, resps[0].ErrorMessage)
 		},
 	}
 
-	cmd.Flags().StringVarP(&assignmentFlag, "assignments", "a", "", "assignment of new semicolon delimited partitions and their comma delimited replicas to broker IDs")
+	cmd.Flags().StringArrayVarP(&topics, "topic", "t", nil, "topic to add partitions to; repeatable")
 
 	return cmd
 }
@@ -222,7 +222,7 @@ func parseAssignments(in string) ([]kmsg.CreatePartitionsRequestTopicAssignment,
 	var partitions []kmsg.CreatePartitionsRequestTopicAssignment
 	var replicasSize int
 
-	for _, partition := range strings.Split(in, ";") {
+	for _, partition := range strings.Split(in, ":") {
 		partition = strings.TrimSpace(partition)
 		if len(partition) == 0 {
 			continue
