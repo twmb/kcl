@@ -108,13 +108,16 @@ across Kafka releases. KIP-211 addressed commits expiring in groups that were
 infrequently committing but not yet dead, but introduced a problem where
 commits can hang around in some edge cases. See the motivation in KIP-496 for
 more detals.
+
+The format for deleting offsets per topic partition is "foo:1,2,3", where foo
+is a topic and 1,2,3 are partition numbers.
 `,
 		Example: "offset-delete mygroup -t foo:1,2,3 -t bar:9",
 		Args:    cobra.ExactArgs(1),
 
 		Run: func(_ *cobra.Command, args []string) {
 			tps, err := flagutil.ParseTopicPartitions(topicParts)
-			out.MaybeDie(err, "unable to parse flag: %v", err)
+			out.MaybeDie(err, "unable to parse topic partitions: %v", err)
 
 			req := &kmsg.OffsetDeleteRequest{
 				Group: args[0],
