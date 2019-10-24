@@ -33,51 +33,68 @@ func Command(cl *client.Client) *cobra.Command {
 func topicCreateCommand(cl *client.Client) *cobra.Command {
 	req := kmsg.CreateTopicsRequest{TimeoutMillis: cl.TimeoutMillis()}
 
-	var topicReq kmsg.CreateTopicsRequestTopic
+	var numPartitions int32
+	var replicationFactor int16
 	var configKVs []string
 
 	cmd := &cobra.Command{
-		Use:   "create TOPIC",
-		Short: "Create a topic",
+		Use:   "create TOPICS",
+		Short: "Create topics",
+		Long: `Create topics.
+
+All topics created with this command will have the same number of partitions,
+replication factor, and key/value configs.
+`,
 		ValidArgs: []string{
 			"--num-partitions",
 			"--replication-factor",
 			"--kv",
 			"--dry",
 		},
-		Args: cobra.ExactArgs(1),
+		Args: cobra.MinimumNArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
-			topicReq.Topic = args[0]
-
 			kvs, err := kv.Parse(configKVs)
 			out.MaybeDie(err, "unable to parse KVs: %v", err)
+			var configs []kmsg.CreateTopicsRequestTopicConfig
 			for _, kv := range kvs {
-				topicReq.Configs = append(topicReq.Configs,
-					kmsg.CreateTopicsRequestTopicConfig{
-						Name:  kv.K,
-						Value: kmsg.StringPtr(kv.V),
-					})
+				configs = append(configs, kmsg.CreateTopicsRequestTopicConfig{
+					Name:  kv.K,
+					Value: kmsg.StringPtr(kv.V),
+				})
 			}
 
-			req.Topics = append(req.Topics, topicReq)
+			for _, topic := range args {
+				req.Topics = append(req.Topics, kmsg.CreateTopicsRequestTopic{
+					Topic:             topic,
+					ReplicationFactor: replicationFactor,
+					NumPartitions:     numPartitions,
+					Configs:           configs,
+				})
+			}
 
 			kresp, err := cl.Client().Request(context.Background(), &req)
 			out.MaybeDie(err, "unable to create topic %q: %v", args[0], err)
 			if cl.AsJSON() {
 				out.ExitJSON(kresp)
 			}
-			resps := kresp.(*kmsg.CreateTopicsResponse).Topics
-			if len(resps) != 1 {
-				out.ExitErrJSON(kresp, "quitting; one topic create requested but received %d responses", len(resps))
+
+			resp := kresp.(*kmsg.CreateTopicsResponse)
+			tw := out.BeginTabWrite()
+			defer tw.Flush()
+			for _, topic := range resp.Topics {
+				msg := "OK"
+				if err := kerr.ErrorForCode(topic.ErrorCode); err != nil {
+					msg = err.Error()
+				}
+				fmt.Fprintf(tw, "%s\t%s\n", topic.Topic, msg)
 			}
-			out.ErrAndMsg(resps[0].ErrorCode, resps[0].ErrorMessage)
 		},
 	}
 
 	cmd.Flags().BoolVarP(&req.ValidateOnly, "dry", "d", false, "dry run: validate the topic creation request; do not create topics")
-	cmd.Flags().Int32VarP(&topicReq.NumPartitions, "num-partitions", "p", 20, "number of (p)artitions to create")
-	cmd.Flags().Int16VarP(&topicReq.ReplicationFactor, "replication-factor", "r", 1, "number of (r)eplicas to have of each partition")
-	cmd.Flags().StringSliceVarP(&configKVs, "kv", "k", nil, "list of (k)ey value config parameters (comma separated or repeated flag; e.g. cleanup.policy=compact,preallocate=true)")
+	cmd.Flags().Int32VarP(&numPartitions, "num-partitions", "p", 20, "number of partitions to create")
+	cmd.Flags().Int16VarP(&replicationFactor, "replication-factor", "r", 1, "number of replicas to have of each partition")
+	cmd.Flags().StringArrayVarP(&configKVs, "kv", "k", nil, "list of key=value config parameters (repeatable, e.g. -k cleanup.policy=compact -k preallocate=true)")
 
 	return cmd
 }
