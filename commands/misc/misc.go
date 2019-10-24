@@ -31,10 +31,7 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd.AddCommand(genAutocompleteCommand())
 	cmd.AddCommand(apiVersionsCommand(cl))
 	cmd.AddCommand(probeVersionCommand(cl))
-	cmd.AddCommand(electLeaderCommand(cl))
-	cmd.AddCommand(offsetForLeaderEpoch(cl))
 	cmd.AddCommand(rawCommand(cl))
-	cmd.AddCommand(deleteRecordsCommand(cl))
 
 	return cmd
 }
@@ -203,144 +200,6 @@ func probeVersion(cl *client.Client) {
 	}
 }
 
-func electLeaderCommand(cl *client.Client) *cobra.Command {
-	var topic string
-	var partitions []int32
-	var unclean bool
-	var run bool
-
-	cmd := &cobra.Command{
-		Use:   "elect-leaders",
-		Short: "Trigger leader elections for partitions",
-		Args:  cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
-			if !run {
-				out.Die("use --run to run this command")
-			}
-			req := &kmsg.ElectLeadersRequest{
-				ElectionType: func() int8 {
-					if unclean {
-						return 1
-					}
-					return 0
-				}(),
-				TimeoutMillis: cl.TimeoutMillis(),
-			}
-			if topic != "" {
-				req.Topics = append(req.Topics, kmsg.ElectLeadersRequestTopic{
-					Topic:      topic,
-					Partitions: partitions,
-				})
-			}
-
-			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to elect leaders: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
-			}
-
-			resp := kresp.(*kmsg.ElectLeadersResponse)
-			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-				out.Die("%v", err)
-			}
-
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
-			for _, topic := range resp.Topics {
-				for _, partition := range topic.Partitions {
-					errKind := "OK"
-					var msg string
-					if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
-						errKind = err.Error()
-					}
-					if partition.ErrorMessage != nil {
-						msg = *partition.ErrorMessage
-					}
-					fmt.Fprintf(tw, "%s\t%d\t%v\t%s\n",
-						topic.Topic,
-						partition.Partition,
-						errKind,
-						msg,
-					)
-				}
-			}
-		},
-	}
-
-	cmd.Flags().StringVarP(&topic, "topic", "t", "", "topic to trigger elections for")
-	cmd.Flags().Int32SliceVarP(&partitions, "partitions", "p", nil, "comma delimited list of specific partitions to trigger elections for")
-	cmd.Flags().BoolVar(&unclean, "unclean", false, "allow unclean leader election (requires 2.4.0)")
-	cmd.Flags().BoolVarP(&run, "run", "r", false, "actually run the command (avoids accidental elections without this flag)")
-
-	return cmd
-}
-
-func offsetForLeaderEpoch(cl *client.Client) *cobra.Command {
-	var topic string
-	var partitions []int32
-	var currentLeaderEpoch int32
-	var leaderEpoch int32
-	var broker int32
-
-	cmd := &cobra.Command{
-		Use:   "offset-for-leader-epoch",
-		Short: "See the offsets for a leader epoch.",
-		Args:  cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
-			req := &kmsg.OffsetForLeaderEpochRequest{
-				ReplicaID: -1,
-			}
-			reqTopic := kmsg.OffsetForLeaderEpochRequestTopic{
-				Topic: topic,
-			}
-			for _, partition := range partitions {
-				reqTopic.Partitions = append(reqTopic.Partitions, kmsg.OffsetForLeaderEpochRequestTopicPartition{
-					Partition:          partition,
-					CurrentLeaderEpoch: currentLeaderEpoch,
-					LeaderEpoch:        leaderEpoch,
-				})
-			}
-			req.Topics = append(req.Topics, reqTopic)
-			kresp, err := cl.Client().Broker(int(broker)).Request(context.Background(), req)
-			out.MaybeDie(err, "unable to to get offsets for leader epoch: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
-			}
-
-			resp := kresp.(*kmsg.OffsetForLeaderEpochResponse)
-
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
-			fmt.Fprintf(tw, "TOPIC\tPARTITION\tLEADER EPOCH\tEND OFFSET\tERROR\n")
-			for _, topic := range resp.Topics {
-				for _, partition := range topic.Partitions {
-					var msg string
-					if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
-						msg = err.Error()
-					}
-					fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%s\n",
-						topic.Topic,
-						partition.Partition,
-						partition.LeaderEpoch,
-						partition.EndOffset,
-						msg,
-					)
-				}
-			}
-		},
-	}
-
-	cmd.Flags().StringVarP(&topic, "topic", "t", "", "topic to trigger elections for")
-	cmd.Flags().Int32SliceVarP(&partitions, "partitions", "p", nil, "comma delimited list of specific partitions to trigger elections for")
-	cmd.Flags().Int32VarP(&currentLeaderEpoch, "current-leader-epoch", "c", -1, "current leader epoch to use in the request")
-	cmd.Flags().Int32VarP(&leaderEpoch, "leader-epoch", "e", 0, "leader epoch to ask for")
-	cmd.Flags().Int32VarP(&broker, "broker", "b", 1, "broker to query")
-
-	return cmd
-}
-
 func rawCommand(cl *client.Client) *cobra.Command {
 	var key int16
 	cmd := &cobra.Command{
@@ -364,29 +223,5 @@ func rawCommand(cl *client.Client) *cobra.Command {
 		},
 	}
 	cmd.Flags().Int16VarP(&key, "key", "k", -1, "request key")
-	return cmd
-}
-
-func deleteRecordsCommand(cl *client.Client) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "delete-records",
-		Short: "Delete topic foo partition 0 offset 10.",
-		Args:  cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
-			req := &kmsg.DeleteRecordsRequest{
-				Topics: []kmsg.DeleteRecordsRequestTopic{{
-					Topic: "foo",
-					Partitions: []kmsg.DeleteRecordsRequestTopicPartition{{
-						Partition: 0,
-						Offset:    10,
-					}},
-				}},
-				TimeoutMillis: cl.TimeoutMillis(),
-			}
-			kresp, err := cl.Client().Broker(2).Request(context.Background(), req)
-			out.MaybeDie(err, "unable to to get delete records: %v", err)
-			out.ExitJSON(kresp)
-		},
-	}
 	return cmd
 }
