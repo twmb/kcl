@@ -21,7 +21,7 @@ func Command(cl *client.Client) *cobra.Command {
 		IncludeTopicAuthorizedOperations:   true,
 	}
 
-	var pcluster, pbrokers, ptopics, detailed bool
+	var pcluster, pbrokers, ptopics, pinternal, detailed bool
 
 	cmd := &cobra.Command{
 		Use:   "metadata",
@@ -93,7 +93,7 @@ If the brokers section is printed, the controller broker is marked with *.
 				if includeHeader {
 					fmt.Printf("TOPICS\n======\n")
 				}
-				printTopics(resp.Topics, detailed)
+				printTopics(resp.Topics, pinternal, detailed)
 			}
 
 		},
@@ -102,6 +102,7 @@ If the brokers section is printed, the controller broker is marked with *.
 	cmd.Flags().BoolVarP(&pcluster, "cluster", "c", false, "print cluster section")
 	cmd.Flags().BoolVarP(&pbrokers, "brokers", "b", false, "print brokers section")
 	cmd.Flags().BoolVarP(&ptopics, "topics", "t", false, "print topics section")
+	cmd.Flags().BoolVarP(&pinternal, "internal", "i", false, "print internal topics if all topics are printed")
 	cmd.Flags().BoolVarP(&detailed, "detailed", "d", false, "include detailed information about all topic partitions")
 	return cmd
 }
@@ -131,7 +132,7 @@ func printBrokers(controllerID int32, brokers []kmsg.MetadataResponseBroker) {
 	}
 }
 
-func printTopics(topics []kmsg.MetadataResponseTopic, detailed bool) {
+func printTopics(topics []kmsg.MetadataResponseTopic, pinternal, detailed bool) {
 	sort.Slice(topics, func(i, j int) bool {
 		return topics[i].Topic < topics[j].Topic
 	})
@@ -142,6 +143,9 @@ func printTopics(topics []kmsg.MetadataResponseTopic, detailed bool) {
 
 		fmt.Fprintf(tw, "NAME\tPARTITIONS\tREPLICAS\n")
 		for _, topic := range topics {
+			if !pinternal && topic.IsInternal {
+				continue
+			}
 			parts := len(topic.Partitions)
 			replicas := 0
 			if parts > 0 {
@@ -161,6 +165,9 @@ func printTopics(topics []kmsg.MetadataResponseTopic, detailed bool) {
 	for _, topic := range topics {
 		fmt.Fprintf(buf, "%s", topic.Topic)
 		if topic.IsInternal {
+			if !pinternal {
+				continue
+			}
 			fmt.Fprint(buf, " (internal)")
 		}
 
