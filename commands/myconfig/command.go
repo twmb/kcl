@@ -1,5 +1,5 @@
-// Package config contains config file related subcommands.
-package config
+// Package myconfig contains kcl config file related subcommands.
+package myconfig
 
 import (
 	"fmt"
@@ -17,20 +17,20 @@ import (
 
 func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "config",
+		Use:   "myconfig",
 		Short: "kcl configuration commands",
 	}
 
-	cmd.AddCommand(cfgDumpCommand(cl))
-	cmd.AddCommand(cfgHelpCommand(cl))
-	cmd.AddCommand(cfgUseCommand(cl))
-	cmd.AddCommand(cfgClearCommand(cl))
-	cmd.AddCommand(cfgListCommand(cl))
+	cmd.AddCommand(linkCommand(cl))
+	cmd.AddCommand(unlinkCommand(cl))
+	cmd.AddCommand(dumpCommand(cl))
+	cmd.AddCommand(helpCommand(cl))
+	cmd.AddCommand(listCommand(cl))
 
 	return cmd
 }
 
-func cfgDumpCommand(cl *client.Client) *cobra.Command {
+func dumpCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "dump",
 		Short: "dump the loaded configuration",
@@ -41,12 +41,14 @@ func cfgDumpCommand(cl *client.Client) *cobra.Command {
 	}
 }
 
-func cfgHelpCommand(cl *client.Client) *cobra.Command {
-	var configHelp = `kcl takes configuration options by default from ` + cl.DefaultCfgPath() + `.
-The config path can be set with --config-path, and --no-config (-Z) can be used
-to disable loading a config file entirely.
+func helpCommand(cl *client.Client) *cobra.Command {
+	var configHelp = `On your machine, kcl takes configuration options by default from:
 
-To show the configuration that kcl is running with, run 'kcl misc dump-config'.
+  ` + cl.DefaultCfgPath() + `
+
+The config path can be set with --config-path, while --no-config (-Z) disables
+loading a config file entirely. To show the configuration that kcl is running
+with, use the dump command.
 
 The repeatable -X flag allows for specifying config options directly. Any flag
 set option has higher precedence over config file options.
@@ -88,26 +90,24 @@ OPTIONS
 	}
 }
 
-func cfgUseCommand(cl *client.Client) *cobra.Command {
+func linkCommand(cl *client.Client) *cobra.Command {
 	dir := filepath.Dir(cl.DefaultCfgPath())
 
 	return &cobra.Command{
-		Use:   "use NAME",
+		Use:     "link NAME",
+		Aliases: []string{"use"},
+
 		Short: "Link a config in " + dir + " to " + cl.DefaultCfgPath(),
 		Long: `Link a config in ` + dir + ` to ` + cl.DefaultCfgPath() + `.
 
-This command allows you to easily swap kcl configs. It will look for
-any file NAME or NAME.toml (favoring .toml) in the config directory
-and link it to the default config path.
-
-This dies if NAME does not yet exist or on any other os errors.
-
-If asked to use config "none", this simply remove an existing symlink.
+This command allows you to easily swap kcl configs. It will look for any file
+NAME or NAME.toml (favoring .toml) in the config directory and link it to the
+default config path.
 `,
 		Args: cobra.ExactArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
 			if cl.DefaultCfgPath() == "" {
-				out.Die("cannot use a config; unable to determine home dir")
+				out.Die("cannot link config; unable to determine home dir")
 			}
 
 			existing, err := os.Lstat(cl.DefaultCfgPath())
@@ -165,11 +165,12 @@ If asked to use config "none", this simply remove an existing symlink.
 	}
 }
 
-func cfgClearCommand(cl *client.Client) *cobra.Command {
+func unlinkCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
-		Use:   "clear",
-		Short: "Remove " + cl.DefaultCfgPath() + " if it is a symlink",
-		Args:  cobra.ExactArgs(0),
+		Use:     "unlink",
+		Aliases: []string{"clear"},
+		Short:   "Remove " + cl.DefaultCfgPath() + " if it is a symlink",
+		Args:    cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
 			if cl.DefaultCfgPath() == "" {
 				out.Die("cannot use a config; unable to determine config dir")
@@ -191,19 +192,19 @@ func cfgClearCommand(cl *client.Client) *cobra.Command {
 			if err := os.Remove(cl.DefaultCfgPath()); err != nil {
 				out.Die("unable to remove symlink at %q: %v", cl.DefaultCfgPath(), err)
 			}
-			fmt.Printf("cleared config symlink %q\n", cl.DefaultCfgPath())
+			fmt.Printf("unlinked config symlink %q\n", cl.DefaultCfgPath())
 		},
 	}
 }
 
-func cfgListCommand(cl *client.Client) *cobra.Command {
-	dir := filepath.Dir(cl.DefaultCfgPath())
-
+func listCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
-		Use:   "lsdir",
-		Short: "List all files in configuration directory" + cl.DefaultCfgPath(),
-		Args:  cobra.ExactArgs(0),
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List all files in configuration directory" + cl.DefaultCfgPath(),
+		Args:    cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
+			dir := filepath.Dir(cl.DefaultCfgPath())
 			dirents, err := ioutil.ReadDir(dir)
 			out.MaybeDie(err, "unable to read config dir %q: %v", dir, err)
 			for _, dirent := range dirents {

@@ -13,6 +13,7 @@ import (
 	"github.com/twmb/kcl/commands/group"
 	"github.com/twmb/kcl/commands/metadata"
 	"github.com/twmb/kcl/commands/misc"
+	"github.com/twmb/kcl/commands/myconfig"
 	"github.com/twmb/kcl/commands/produce"
 	"github.com/twmb/kcl/commands/topic"
 )
@@ -50,9 +51,8 @@ Command completion is available at:
 		// TODO acl
 		group.Command(cl),
 		topic.Command(cl),
-		// TODO configs
 		metadata.Command(cl),
-		// TODO myconfig
+		myconfig.Command(cl),
 	)
 
 	allCommands(root, func(cmd *cobra.Command) {
