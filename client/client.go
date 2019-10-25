@@ -24,6 +24,8 @@ import (
 	"github.com/twmb/kafka-go/pkg/kgo"
 	"github.com/twmb/kafka-go/pkg/kmsg"
 	"github.com/twmb/kafka-go/pkg/kversion"
+	"github.com/twmb/kafka-go/pkg/sasl/plain"
+	"github.com/twmb/kafka-go/pkg/sasl/scram"
 
 	"github.com/twmb/kcl/out"
 )
@@ -35,14 +37,23 @@ type Requestor interface {
 
 // cfg contains kcl options that can be defined in a file.
 type Cfg struct {
-	SeedBrokers []string `toml:"seed_brokers"`
+	SeedBrokers []string `toml:"seed_brokers,omitempty"`
 
-	TimeoutMillis int32 `toml:"timeout_ms"`
+	TimeoutMillis int32 `toml:"timeout_ms,omitempty"`
 
-	TLSCACert         string `toml:"tls_ca_cert_path"`
-	TLSClientCertPath string `toml:"tls_client_cert_path"`
-	TLSClientKeyPath  string `toml:"tls_client_key_path"`
-	TLSServerName     string `toml:"tls_server_name"`
+	TLSCACert         string `toml:"tls_ca_cert_path,omitempty"`
+	TLSClientCertPath string `toml:"tls_client_cert_path,omitempty"`
+	TLSClientKeyPath  string `toml:"tls_client_key_path,omitempty"`
+	TLSServerName     string `toml:"tls_server_name,omitempty"`
+
+	SASLMethod string `toml:"sasl_method,omitempty"`
+
+	PlainUser string `toml:"sasl_plain_user,omitempty"`
+	PlainPass string `toml:"sasl_plain_pass,omitempty"`
+
+	ScramUser    string `toml:"sasl_scram_user,omitempty"`
+	ScramPass    string `toml:"sasl_scram_pass,omitempty"`
+	ScramIsToken bool   `toml:"sasl_scram_is_token,omitempty"`
 }
 
 // Client contains kgo client options and a kgo client.
@@ -133,6 +144,10 @@ func (c *Client) fillOpts() {
 	c.processOverrides()    // overrides config values just loaded
 	c.maybeAddMaxVersions() // fills WithMaxVersions if necessary
 
+	if err := c.maybeAddSASL(); err != nil {
+		out.Die("sasl error: %v", err)
+	}
+
 	tlscfg, err := c.loadTLS()
 	if err != nil {
 		out.Die("%s", err)
@@ -147,6 +162,7 @@ func (c *Client) fillOpts() {
 			return tls.Dial("tcp", host, cloned)
 		}))
 	}
+
 	c.AddOpt(kgo.WithSeedBrokers(c.cfg.SeedBrokers...))
 }
 
@@ -257,6 +273,38 @@ func (c *Client) maybeAddMaxVersions() {
 		}
 		c.AddOpt(kgo.WithMaxVersions(versions))
 	}
+}
+
+func (c *Client) maybeAddSASL() error {
+	method := strings.ToLower(strings.TrimSpace(c.cfg.SASLMethod))
+	method = strings.Replace(method, "-", "_", -1)
+
+	switch method {
+	case "":
+	case "plain", "plaintext":
+		c.AddOpt(kgo.WithSASL(plain.Plain(func(context.Context) (string, string, error) {
+			return c.cfg.PlainUser, c.cfg.PlainPass, nil
+		})))
+	case "scram_sha_256", "scram_256", "scram_sha256":
+		c.AddOpt(kgo.WithSASL(scram.Sha256(func(context.Context) (scram.Auth, error) {
+			return scram.Auth{
+				User:    c.cfg.ScramUser,
+				Pass:    c.cfg.ScramPass,
+				IsToken: c.cfg.ScramIsToken,
+			}, nil
+		})))
+	case "scram_sha_512", "scram_512", "scram_sha512":
+		c.AddOpt(kgo.WithSASL(scram.Sha512(func(context.Context) (scram.Auth, error) {
+			return scram.Auth{
+				User:    c.cfg.ScramUser,
+				Pass:    c.cfg.ScramPass,
+				IsToken: c.cfg.ScramIsToken,
+			}, nil
+		})))
+	default:
+		return fmt.Errorf("unrecognized / unhandled sasl method %q", c.cfg.SASLMethod)
+	}
+	return nil
 }
 
 func (c *Client) loadTLS() (*tls.Config, error) {

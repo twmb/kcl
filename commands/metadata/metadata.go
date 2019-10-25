@@ -46,7 +46,7 @@ If the brokers section is printed, the controller broker is marked with *.
 					sections++
 				}
 			}
-			if sections == 0 {
+			if sections == 0 && !cl.AsJSON() {
 				out.Die("no metadata section requested")
 			}
 
@@ -165,9 +165,6 @@ func printTopics(topics []kmsg.MetadataResponseTopic, pinternal, detailed bool) 
 	for _, topic := range topics {
 		fmt.Fprintf(buf, "%s", topic.Topic)
 		if topic.IsInternal {
-			if !pinternal {
-				continue
-			}
 			fmt.Fprint(buf, " (internal)")
 		}
 
@@ -177,6 +174,9 @@ func printTopics(topics []kmsg.MetadataResponseTopic, pinternal, detailed bool) 
 			buf.WriteByte('s')
 		}
 		buf.WriteString("\n")
+		if topic.IsInternal && !pinternal {
+			continue
+		}
 
 		sort.Slice(parts, func(i, j int) bool {
 			return parts[i].Partition < parts[j].Partition
