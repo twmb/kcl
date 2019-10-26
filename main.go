@@ -11,6 +11,7 @@ import (
 	"github.com/twmb/kcl/commands/admin"
 	"github.com/twmb/kcl/commands/configs"
 	"github.com/twmb/kcl/commands/consume"
+	"github.com/twmb/kcl/commands/dtoken"
 	"github.com/twmb/kcl/commands/group"
 	"github.com/twmb/kcl/commands/metadata"
 	"github.com/twmb/kcl/commands/misc"
@@ -48,7 +49,7 @@ Command completion is available at:
 		// TODO transact
 		misc.Command(cl),
 		admin.Command(cl),
-		// TODO dtoken
+		dtoken.Command(cl),
 		// TODO acl
 		group.Command(cl),
 		topic.Command(cl),
