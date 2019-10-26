@@ -75,3 +75,13 @@ func ErrAndMsg(code int16, msg *string) bool {
 	fmt.Println("OK")
 	return false
 }
+
+func MaybeExitErrMsg(code int16, msg *string) {
+	if err := kerr.ErrorForCode(code); err != nil {
+		additional := ""
+		if msg != nil {
+			additional = ": " + *msg
+		}
+		Die("%s%s\n", err, additional)
+	}
+}

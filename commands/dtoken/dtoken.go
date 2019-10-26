@@ -40,6 +40,9 @@ expiry timestamp.
 As a client, you can use delegation tokens in SCRAM-SHA-256 or SCRAM-SHA-512
 sasl authentication, and you must specify "tokenauth=true" with a scram
 extension (kcl does this automatically with the sasl_scram_is_token option).
+
+To enable delegation tokens in Kafka, use the delegation.token.master.key
+setting. All brokers must use the same token master key.
 `,
 	}
 

@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/commands/acl"
 	"github.com/twmb/kcl/commands/admin"
 	"github.com/twmb/kcl/commands/configs"
 	"github.com/twmb/kcl/commands/consume"
@@ -50,7 +51,7 @@ Command completion is available at:
 		misc.Command(cl),
 		admin.Command(cl),
 		dtoken.Command(cl),
-		// TODO acl
+		acl.Command(cl),
 		group.Command(cl),
 		topic.Command(cl),
 		metadata.Command(cl),
