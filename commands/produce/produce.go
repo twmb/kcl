@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"sync"
 
 	"github.com/spf13/cobra"
 
@@ -75,7 +74,6 @@ The input delimiter understands \n, \r, \t, and \xXX (hex) escape sequences.
 			scanner.Buffer(nil, maxBuf)
 			scanner.Split(splitDelimFn(delim))
 
-			var wg sync.WaitGroup
 			bg := context.Background()
 			for scanner.Scan() {
 				r := &kgo.Record{
@@ -89,9 +87,7 @@ The input delimiter understands \n, \r, \t, and \xXX (hex) escape sequences.
 				}
 				r.Value = append(make([]byte, len(scanner.Bytes())), scanner.Bytes()...)
 
-				wg.Add(1)
 				err := cl.Client().Produce(bg, r, func(r *kgo.Record, err error) {
-					defer wg.Done()
 					out.MaybeDie(err, "unable to produce record: %v", err)
 					if verbose {
 						fmt.Printf("Successful send to topic %s partition %d offset %d\n",
@@ -100,11 +96,12 @@ The input delimiter understands \n, \r, \t, and \xXX (hex) escape sequences.
 				})
 				out.MaybeDie(err, "unable to produce record: %v", err)
 			}
-			wg.Wait()
 
 			if scanner.Err() != nil {
 				out.Die("final scan error: %v", scanner.Err())
 			}
+
+			cl.Client().Flush(bg)
 		},
 	}
 
