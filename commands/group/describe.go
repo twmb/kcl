@@ -75,7 +75,11 @@ func describeGroupVerbose(group *consumerGroup) {
 	fmt.Fprintf(tw, "PROTO TYPE\t%s\n", group.ProtocolType)
 	fmt.Fprintf(tw, "PROTO\t%s\n", group.Protocol)
 	fmt.Fprintf(tw, "MEMBERS\t%d\n", len(group.Members))
-	fmt.Fprintf(tw, "ERROR\t%v\n", kerr.ErrorForCode(group.ErrorCode))
+	errStr := ""
+	if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
+		errStr = err.Error()
+	}
+	fmt.Fprintf(tw, "ERROR\t%s\n", errStr)
 	tw.Flush()
 	fmt.Println()
 
@@ -83,7 +87,7 @@ func describeGroupVerbose(group *consumerGroup) {
 	tw = out.BeginTabWriteTo(&sb)
 	fmt.Fprintf(tw, "MEMBER ID\tINSTANCE ID\tCLIENT ID\tCLIENT HOST\tUSER DATA\n")
 	for _, member := range group.Members {
-		instanceID := "<nil>"
+		instanceID := ""
 		if member.InstanceID != nil {
 			instanceID = *member.InstanceID
 		}
