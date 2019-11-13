@@ -31,6 +31,8 @@ type consumption struct {
 	cl *client.Client
 
 	group      string
+	groupAlg   string
+	instanceID string
 	regex      bool
 	partitions []int32
 	offset     string
@@ -78,6 +80,25 @@ func (c *consumption) run(topics []string) {
 	if c.regex {
 		directOpts = append(directOpts, kgo.ConsumeTopicsRegex())
 		groupOpts = append(groupOpts, kgo.GroupTopicsRegex())
+	}
+
+	var balancer kgo.GroupBalancer
+	switch c.groupAlg {
+	case "range":
+		balancer = kgo.RangeBalancer()
+	case "roundrobin":
+		balancer = kgo.RoundRobinBalancer()
+	case "sticky":
+		balancer = kgo.StickyBalancer()
+	case "cooperative-sticky":
+		balancer = kgo.CooperativeStickyBalancer()
+	default:
+		out.Die("unrecognized group balancer %q", c.groupAlg)
+	}
+	groupOpts = append(groupOpts, kgo.GroupBalancers(balancer))
+
+	if c.instanceID != "" {
+		groupOpts = append(groupOpts, kgo.GroupInstanceID(c.instanceID))
 	}
 
 	sigs := make(chan os.Signal, 2)
@@ -594,23 +615,31 @@ func (co *consumeOutput) formatGroupMetadata(dst []byte, r *kgo.Record) ([]byte,
 				fmt.Fprintf(tw, "\t\t      Version\t%d\n", m.Version)
 				sort.Strings(m.Topics)
 				fmt.Fprintf(tw, "\t\t      Topics\t%v\n", m.Topics)
-				if v.Protocol != nil && *v.Protocol == "sticky" {
+				if v.Protocol != nil && (*v.Protocol == "sticky" || *v.Protocol == "cooperative-sticky") {
 					var s kmsg.StickyMemberMetadata
-					if err := s.ReadFrom(m.UserData, m.Version); err != nil {
+					if err := s.ReadFrom(m.UserData); err != nil {
 						fmt.Fprintf(tw, "\t\t      UserData\t(could not read sticky user data)\n")
 					} else {
 						var sb strings.Builder
 						fmt.Fprintf(&sb, "gen %d, current assignment:", s.Generation)
+						sort.Slice(s.CurrentAssignment, func(i, j int) bool { return s.CurrentAssignment[i].Topic < s.CurrentAssignment[j].Topic })
 						for _, topic := range s.CurrentAssignment {
-							sort.Slice(topic.Partitions, func(i, j int) bool {
-								return topic.Partitions[i] < topic.Partitions[j]
-							})
+							sort.Slice(topic.Partitions, func(i, j int) bool { return topic.Partitions[i] < topic.Partitions[j] })
 							fmt.Fprintf(&sb, " %s=>%v", topic.Topic, topic.Partitions)
 						}
 						fmt.Fprintf(tw, "\t\t      UserData\t%s\n", sb.String())
 					}
 				} else {
 					fmt.Fprintf(tw, "\t\t b64 UserData\t%s\n", base64.RawStdEncoding.EncodeToString(m.UserData))
+				}
+				if m.Version == 1 {
+					var sb strings.Builder
+					sort.Slice(m.OwnedPartitions, func(i, j int) bool { return m.OwnedPartitions[i].Topic < m.OwnedPartitions[j].Topic })
+					for _, topic := range m.OwnedPartitions {
+						sort.Slice(topic.Partitions, func(i, j int) bool { return topic.Partitions[i] < topic.Partitions[j] })
+						fmt.Fprintf(&sb, "%s=>%v ", topic.Topic, topic.Partitions)
+					}
+					fmt.Fprintf(tw, "\t\t      OwnedPartitions\t%s\n", sb.String())
 				}
 			}
 			var a kmsg.GroupMemberAssignment

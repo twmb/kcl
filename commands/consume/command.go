@@ -7,19 +7,14 @@ func (c *consumption) command() *cobra.Command {
 		Use:   "consume TOPICS...",
 		Short: "Consume topic records",
 		Long:  help,
-		ValidArgs: []string{
-			"--partitions",
-			"--offset",
-			"--num",
-			"--format",
-			"--regex",
-		},
-		Args: cobra.MinimumNArgs(1), // topic
+		Args:  cobra.MinimumNArgs(1), // topic
 		Run: func(_ *cobra.Command, args []string) {
 			c.run(args)
 		},
 	}
 	cmd.Flags().StringVarP(&c.group, "group", "G", "", "group to assign")
+	cmd.Flags().StringVarP(&c.groupAlg, "balancer", "b", "cooperative-sticky", "group balancer to use if group consuming (range, roundrobin, sticky, cooperative-sticky)")
+	cmd.Flags().StringVarP(&c.instanceID, "instance-id", "i", "", "group instance ID to use for consuming; empty means none (implies static membership)")
 	cmd.Flags().Int32SliceVarP(&c.partitions, "partitions", "p", nil, "comma delimited list of specific partitions to consume")
 	cmd.Flags().StringVarP(&c.offset, "offset", "o", "start", "offset to start consuming from (start, end, 47, start+2, end-3)")
 	cmd.Flags().IntVarP(&c.num, "num", "n", 0, "quit after consuming this number of records; 0 is unbounded")
@@ -83,6 +78,6 @@ Putting it all together:
 Note that this command allows you to consume the Kafka special internal topic
 __consumer_offsets. To do so, this must be the only topic specified. Doing so
 will simply dump all group commit information. To dump information about a
-specific group, use -G.
+specific group, use the -G flag.
 
 `
