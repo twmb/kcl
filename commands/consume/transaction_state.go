@@ -85,7 +85,7 @@ func (co *consumeOutput) formatTransactionStateV0(dst []byte, r *kgo.Record) ([]
 			return dst, false
 		}
 
-		dst = append(dst, fmt.Sprintf("TxnMetadataKey(%d)\n\tTransactionalID\t%s\n", k.Version, k.TransactionalID)...)
+		dst = append(dst, fmt.Sprintf("TxnMetadataKey(%d) %s\n", k.Version, k.TransactionalID)...)
 	}
 	{
 		var v kmsg.TxnMetadataValue
