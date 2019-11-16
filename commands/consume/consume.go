@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -48,12 +49,13 @@ func Command(cl *client.Client) *cobra.Command {
 }
 
 func (c *consumption) run(topics []string) {
-	var isConsumerOffsets bool
+	var isConsumerOffsets, isTransactionState bool
 	for _, topic := range topics {
 		isConsumerOffsets = isConsumerOffsets || topic == "__consumer_offsets"
+		isTransactionState = isTransactionState || topic == "__transaction_state"
 	}
-	if isConsumerOffsets && len(topics) != 1 {
-		out.Die("__consumer_offsets must be the only topic listed when trying to consume it")
+	if (isConsumerOffsets || isTransactionState) && len(topics) != 1 {
+		out.Die("__consumer_offsets or __transaction_state must be the only topic listed when trying to consume it")
 	}
 
 	var directOpts []kgo.DirectConsumeOpt
@@ -103,14 +105,14 @@ func (c *consumption) run(topics []string) {
 	sigs := make(chan os.Signal, 2)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 
-	if !isConsumerOffsets {
-		c.cl.AddOpt(kgo.WithConsumeIsolationLevel(kgo.ReadCommitted()))
-	} else {
+	if isConsumerOffsets || isTransactionState {
 		c.cl.AddOpt(kgo.WithConsumeKeepControl())
+	} else {
+		c.cl.AddOpt(kgo.WithConsumeIsolationLevel(kgo.ReadCommitted()))
 	}
 
 	cl := c.cl.Client()
-	if len(c.group) > 0 && !isConsumerOffsets {
+	if len(c.group) > 0 && !(isConsumerOffsets || isTransactionState) {
 		cl.AssignGroup(c.group, groupOpts...)
 	} else {
 		cl.AssignPartitions(directOpts...)
@@ -126,6 +128,8 @@ func (c *consumption) run(topics []string) {
 	co.ctx, co.cancel = context.WithCancel(context.Background())
 	if isConsumerOffsets {
 		co.buildConsumerOffsetsFormatFn()
+	} else if isTransactionState {
+		co.buildTransactionStateFormatFn()
 	} else {
 		co.buildFormatFn(c.format)
 	}
@@ -266,6 +270,9 @@ func (co *consumeOutput) buildFormatFn(format string) {
 					case strings.HasPrefix(format, "base64}"):
 						argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return appendBase64(out, r.Value) })
 						format = format[len("base64}"):]
+					case strings.HasPrefix(format, "hex}"):
+						argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return appendHex(out, r.Value) })
+						format = format[len("hex}"):]
 					default:
 						out.Die("unknown %%v{ escape")
 					}
@@ -290,6 +297,9 @@ func (co *consumeOutput) buildFormatFn(format string) {
 					case strings.HasPrefix(format, "base64}"):
 						argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return appendBase64(out, r.Key) })
 						format = format[len("base64}"):]
+					case strings.HasPrefix(format, "hex}"):
+						argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return appendHex(out, r.Key) })
+						format = format[len("hex}"):]
 					default:
 						out.Die("unknown %%k{ escape")
 					}
@@ -373,6 +383,12 @@ func (co *consumeOutput) buildFormatFn(format string) {
 func appendBase64(dst, src []byte) []byte {
 	fin := append(dst, make([]byte, base64.RawStdEncoding.EncodedLen(len(src)))...)
 	base64.RawStdEncoding.Encode(fin[len(dst):], src)
+	return fin
+}
+
+func appendHex(dst, src []byte) []byte {
+	fin := append(dst, make([]byte, hex.EncodedLen(len(src)))...)
+	hex.Encode(fin[len(dst):], src)
 	return fin
 }
 

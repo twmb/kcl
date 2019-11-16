@@ -16,9 +16,25 @@ import (
 	"github.com/twmb/kcl/out"
 )
 
-///////////////////////
-// __consumer_offset //
-///////////////////////
+// also returns whether corrupt; used by transaction_state as well
+func appendInternalTopicRecordStart(out []byte, r *kgo.Record) ([]byte, bool) {
+	out = append(out, r.Topic...)
+	out = append(out, " partition "...)
+	out = strconv.AppendInt(out, int64(r.Partition), 10)
+	out = append(out, " offset "...)
+	out = strconv.AppendInt(out, r.Offset, 10)
+	out = append(out, " at "...)
+	out = r.Timestamp.AppendFormat(out, "[2006-01-02 15:04:05.999]\n")
+	if len(r.Key) < 2 || r.Key[0] != 0 {
+		out = append(out, "(corrupt short key)\n\n"...)
+		return out, true
+	}
+	return out, false
+}
+
+////////////////////////
+// __consumer_offsets //
+////////////////////////
 
 func (co *consumeOutput) buildConsumerOffsetsFormatFn() {
 	var out []byte
@@ -31,16 +47,8 @@ func (co *consumeOutput) buildConsumerOffsetsFormatFn() {
 
 func (co *consumeOutput) formatConsumerOffsets(out []byte, r *kgo.Record) []byte {
 	orig := out
-	out = append(out, r.Topic...)
-	out = append(out, " partition "...)
-	out = strconv.AppendInt(out, int64(r.Partition), 10)
-	out = append(out, " offset "...)
-	out = strconv.AppendInt(out, r.Offset, 10)
-	out = append(out, " at "...)
-	out = r.Timestamp.AppendFormat(out, "[2006-01-02 15:04:05.999]\n")
-
-	if len(r.Key) < 2 || r.Key[0] != 0 {
-		out = append(out, "(corrupt short key)\n\n"...)
+	out, corrupt := appendInternalTopicRecordStart(out, r)
+	if corrupt {
 		return out
 	}
 
@@ -51,7 +59,7 @@ func (co *consumeOutput) formatConsumerOffsets(out []byte, r *kgo.Record) []byte
 	case 2:
 		out, keep = co.formatGroupMetadata(out, r)
 	default:
-		out = append(out, "(unknown offset key format "...)
+		out = append(out, "(unknown offset key format version "...)
 		out = append(out, r.Key[1])
 		out = append(out, ')')
 	}

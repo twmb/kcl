@@ -52,8 +52,9 @@ Format options:
   \t    tab
   \xXX  any ASCII character (input must be hex)
 
-The record and key fields support printing as base64 encoded values
-by including {base64} after the %s, %v, or %k.
+The record and key fields support printing as base64 or hex encoded values
+by including {base64} or {hex} after the %s, %v, or %k.
+
 %T supports enhanced time formatting inside braces.
 
 To use strftime formatting, open with "%T{strftime" and close with "}".
@@ -75,9 +76,11 @@ will output the timestamp as HH:MM:SS.ms.
 Putting it all together:
   -f 'Topic %t [%p] at offset %o @%T{strftime[%F %T]}: key %k: %s\n'
 
-Note that this command allows you to consume the Kafka special internal topic
-__consumer_offsets. To do so, this must be the only topic specified. Doing so
-will simply dump all group commit information. To dump information about a
-specific group, use the -G flag.
+Note that this command allows you to consume the Kafka special internal topics
+__consumer_offsets and __transaction_state. To do so, either of these topics
+must be the only topic specified.
 
+For __consumer_offsets, to dump information about a specific group, use the -G
+flag. Doing so will also hide transaction markers. For __transaction_state, you
+can use -G to dump information about a specific transactional ID.
 `
