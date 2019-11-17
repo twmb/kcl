@@ -2,58 +2,128 @@ package produce
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
-	"strconv"
 
 	"github.com/spf13/cobra"
 
 	"github.com/twmb/kafka-go/pkg/kgo"
 	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/format"
 	"github.com/twmb/kcl/out"
 )
 
 func Command(cl *client.Client) *cobra.Command {
 	var (
-		recDelim    string
-		keyDelim    string
+		informat    string
 		maxBuf      int
 		verbose     bool
 		compression string
+		escapeChar  string
 	)
 
 	cmd := &cobra.Command{
-		Use:   "produce TOPIC",
-		Short: "Produce records to a topic",
+		Use:   "produce [TOPIC]",
+		Short: "Produce records.",
 		Long: `Produce records to a topic, taking input from stdin or files.
 
 By default, producing consumes newline delimited, unkeyed records from stdin.
-The flags allow for switching the delimiter, or using the delimiter for
-keys and values, or consuming from files.
+The input format can be specified with delimiters or with sized numbers, and
+the input can parse a topic, key, value, and header keys and values.
 
-If the keyed-record delimiter option is used, the record-only option will be
-ignored.
+Currently, headers only support sized parsing.
 
-If streaming records, each key or value must be under 64KiB in length. This can
-be changed with the --max-read-buf flag.
+By default, if using delimiters, each field must be under 64KiB in length. This
+can be changed with the --max-delim-buf flag.
 
-The input delimiter understands \n, \r, \t, and \xXX (hex) escape sequences.
+Delimiters understand \n, \r, \t, and \xXX (hex) escape sequences.
+
+Format options:
+  %v    record value
+  %V    length of a record
+  %k    record key
+  %K    length of a record key
+  %t    topic name
+  %T    length of a topic
+  %h    begins a header specification
+  %H    number of headers
+  %%    percent sign
+  %{    left brace
+  \n    newline
+  \r    carriage return
+  \t    tab
+  \xXX  any ASCII character (input must be hex)
+
+Headers have their own internal format (the same as keys and values above):
+  %v    header value
+  %V    length of a header value
+  %k    header key
+  %K    length of a header key
+
+All number specifiers are required to have "kind" specification in braces,
+with the kinds being:
+  big8     eight byte unsigned big endian
+  big4     four byte unsigned big endian
+  big2     two byte unsigned big endian
+  little8  eight byte unsigned little endian
+  little4  four byte unsigned little endian
+  little2  two byte unsigned little endian
+  byte     single byte
+  b8       alias for big8
+  b4       alias for big4
+  b2       alias for big2
+  l8       alias for little8
+  l4       alias for little4
+  l2       alias for little2
+  b        alias for byte
+
+EXAMPLES
+
+To read a newline delimited file, each line a record (no keys):
+  -f '%v\n'
+
+To read that same file, with each line alternating key/value:
+  -f '%k\n%v\n'
+
+To read a binary file with keys and values having four byte big endian
+prefixes:
+  -f '%K{b4}%k%V{b4}%v'
+
+To read a similar file that also has a count of headers (big endian short) and
+then headers (also sized with big endian shorts) following the value:
+  -f '%K{b4}%k%V{b4}%v%H{b2}%h{%K{b2}%k%V{b2}%v}
+
+To read a similar file that has the topic to produce to before the key, also
+sized with a big endians short:
+  -f '%T{b2}%t%K{b4}%k%V{b4}%v%H{b2}%h{%K{b2}%k%V{b2}%v}
+
+The same, but with a space trailing every field:
+  -f '%T{b2}%t %K{b4}%k %V{b4}%v %H{b2}%h{%K{b2}%k %V{b2}%v }
+
+REMARKS
+
+Delimiters can be of arbitrary length, but must match exactly. When parsing
+with sizes, you can ignore any unnecessary characters by putting fake
+delimiters in the parsing format. Since the parser ignores indiscriminately,
+you may as well use characters that make reading the format a bit easier.
+
+If you do not like %, you can switch the escape character with a flag.
 `,
-		ValidArgs: []string{
-			"--delim",
-			"--keyed-record-delim",
-			"--verbose",
-			"--max-read-buf",
-		},
-		Args: cobra.ExactArgs(1),
+		Args: cobra.MaximumNArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
-			if keyDelim != "" {
-				recDelim = keyDelim
+			if len(escapeChar) != 1 {
+				out.Die("invalid escape character len %d", len(escapeChar))
 			}
-
-			delim := parseDelim(recDelim)
+			reader, err := format.NewReader(informat, escapeChar[0], os.Stdin)
+			out.MaybeDie(err, "unable to parse in format: %v", err)
+			if reader.ParsesTopic() && len(args) == 1 {
+				out.Die("cannot produce to a specific topic; the parse format specifies that it parses a topic")
+			}
+			if !reader.ParsesTopic() && len(args) == 0 {
+				out.Die("topic missing from both produce line and from parse format")
+			}
 
 			var codec kgo.CompressionCodec
 			switch compression {
@@ -67,27 +137,23 @@ The input delimiter understands \n, \r, \t, and \xXX (hex) escape sequences.
 				codec = kgo.Lz4Compression()
 			case "zstd":
 				codec = kgo.ZstdCompression()
+			default:
+				out.Die("invalid compression codec %q", codec)
 			}
 			cl.AddOpt(kgo.WithProduceCompression(codec))
 
-			scanner := bufio.NewScanner(os.Stdin)
-			scanner.Buffer(nil, maxBuf)
-			scanner.Split(splitDelimFn(delim))
-
-			bg := context.Background()
-			for scanner.Scan() {
-				r := &kgo.Record{
-					Topic: args[0],
-				}
-				if keyDelim != "" {
-					r.Key = append(make([]byte, len(scanner.Bytes())), scanner.Bytes()...)
-					if !scanner.Scan() {
-						out.Die("missing final value delim")
+			for {
+				r, err := reader.Next()
+				if err != nil {
+					if err != io.EOF {
+						out.Die("final error: %v", err)
 					}
+					break
 				}
-				r.Value = append(make([]byte, len(scanner.Bytes())), scanner.Bytes()...)
-
-				err := cl.Client().Produce(bg, r, func(r *kgo.Record, err error) {
+				if !reader.ParsesTopic() {
+					r.Topic = args[0]
+				}
+				err = cl.Client().Produce(context.Background(), r, func(r *kgo.Record, err error) {
 					out.MaybeDie(err, "unable to produce record: %v", err)
 					if verbose {
 						fmt.Printf("Successful send to topic %s partition %d offset %d\n",
@@ -97,71 +163,15 @@ The input delimiter understands \n, \r, \t, and \xXX (hex) escape sequences.
 				out.MaybeDie(err, "unable to produce record: %v", err)
 			}
 
-			if scanner.Err() != nil {
-				out.Die("final scan error: %v", scanner.Err())
-			}
-
-			cl.Client().Flush(bg)
+			cl.Client().Flush(context.Background())
 		},
 	}
 
-	cmd.Flags().StringVarP(&recDelim, "delim", "D", "\n", "record only delimiter")
-	cmd.Flags().StringVarP(&keyDelim, "keyed-record-delim", "K", "", "key and record delimiter")
+	cmd.Flags().StringVarP(&informat, "format", "f", "%v\n", "record only delimiter")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "verbose information of the producing of records")
-	cmd.Flags().IntVar(&maxBuf, "max-read-buf", bufio.MaxScanTokenSize, "maximum input to buffer before a delimiter is required")
+	cmd.Flags().IntVar(&maxBuf, "max-delim-buf", bufio.MaxScanTokenSize, "maximum input to buffer before a delimiter is required, if using delimiters")
 	cmd.Flags().StringVarP(&compression, "compression", "z", "snappy", "compression to use for producing batches (none, gzip, snappy, lz4, zstd)")
+	cmd.Flags().StringVarP(&escapeChar, "escape-char", "c", "%", "character to use for beginning a record field escape")
 
 	return cmd
-}
-
-func parseDelim(in string) []byte {
-	parsed := make([]byte, 0, len(in))
-	for len(in) > 0 {
-		b := in[0]
-		in = in[1:]
-		switch b {
-		default:
-			parsed = append(parsed, b)
-		case '\\':
-			if len(in) == 0 {
-				out.Die("invalid slash escape at end of delim string")
-			}
-			switch in[0] {
-			case 't':
-				parsed = append(parsed, '\t')
-			case 'n':
-				parsed = append(parsed, '\n')
-			case 'r':
-				parsed = append(parsed, '\r')
-			case 'x':
-				if len(in) < 3 { // on x, need two more
-					out.Die("invalid non-terminated hex escape sequence at end of delim string")
-				}
-				hex := in[1:3]
-				n, err := strconv.ParseInt(hex, 16, 8)
-				out.MaybeDie(err, "unable to parse hex escape sequence %q: %v", hex, err)
-				parsed = append(parsed, byte(n))
-				in = in[2:] // two here, one below
-			default:
-				out.Die("unknown slash escape sequence %q", in[:1])
-			}
-			in = in[1:]
-		}
-	}
-	return parsed
-}
-
-func splitDelimFn(delim []byte) bufio.SplitFunc {
-	return func(data []byte, atEOF bool) (advance int, token []byte, err error) {
-		if atEOF && len(data) == 0 {
-			return 0, nil, nil
-		}
-		if i := bytes.Index(data, delim); i >= 0 {
-			return i + 1, data[0:i], nil
-		}
-		if atEOF {
-			return len(data), data, nil // non terminated line
-		}
-		return 0, nil, nil
-	}
 }
