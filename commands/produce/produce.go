@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -27,13 +28,12 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "produce [TOPIC]",
 		Short: "Produce records.",
-		Long: `Produce records to a topic, taking input from stdin or files.
+		Long: `Produce records, optionally to a defined, from stdin.
 
 By default, producing consumes newline delimited, unkeyed records from stdin.
 The input format can be specified with delimiters or with sized numbers, and
-the input can parse a topic, key, value, and header keys and values.
-
-Currently, headers only support sized parsing.
+the format can parse a topic, key, value, and header keys and values. Headers
+only support sized parsing.
 
 By default, if using delimiters, each field must be under 64KiB in length. This
 can be changed with the --max-delim-buf flag.
@@ -42,15 +42,15 @@ Delimiters understand \n, \r, \t, and \xXX (hex) escape sequences.
 
 Format options:
   %v    record value
-  %V    length of a record
+  %V    record value length
   %k    record key
-  %K    length of a record key
+  %K    record key length
   %t    topic name
-  %T    length of a topic
-  %h    begins a header specification
+  %T    topic name length
+  %h    begin the header specification
   %H    number of headers
   %%    percent sign
-  %{    left brace
+  %{    left brace (required if a brace is after another format option)
   \n    newline
   \r    carriage return
   \t    tab
@@ -58,9 +58,9 @@ Format options:
 
 Headers have their own internal format (the same as keys and values above):
   %v    header value
-  %V    length of a header value
+  %V    header value length
   %k    header key
-  %K    length of a header key
+  %K    header key length
 
 All number specifiers are required to have "kind" specification in braces,
 with the kinds being:
@@ -78,6 +78,7 @@ with the kinds being:
   l4       alias for little4
   l2       alias for little2
   b        alias for byte
+  ###      an exact number of bytes (in ascii digits)
 
 EXAMPLES
 
@@ -87,20 +88,27 @@ To read a newline delimited file, each line a record (no keys):
 To read that same file, with each line alternating key/value:
   -f '%k\n%v\n'
 
+To read a file where each line has a key and value beginning with "key: " and
+", value: ":
+  -f 'key: %k, value: %v\n'
+
 To read a binary file with keys and values having four byte big endian
 prefixes:
   -f '%K{b4}%k%V{b4}%v'
 
 To read a similar file that also has a count of headers (big endian short) and
 then headers (also sized with big endian shorts) following the value:
-  -f '%K{b4}%k%V{b4}%v%H{b2}%h{%K{b2}%k%V{b2}%v}
+  -f '%K{b4}%k%V{b4}%v%H{b2}%h{%K{b2}%k%V{b2}%v}'
 
 To read a similar file that has the topic to produce to before the key, also
 sized with a big endians short:
-  -f '%T{b2}%t%K{b4}%k%V{b4}%v%H{b2}%h{%K{b2}%k%V{b2}%v}
+  -f '%T{b2}%t%K{b4}%k%V{b4}%v%H{b2}%h{%K{b2}%k%V{b2}%v}'
 
 The same, but with a space trailing every field:
-  -f '%T{b2}%t %K{b4}%k %V{b4}%v %H{b2}%h{%K{b2}%k %V{b2}%v }
+  -f '%T{b2}%t %K{b4}%k %V{b4}%v %H{b2}%h{%K{b2}%k %V{b2}%v }'
+
+To read a compact key, value, and single header, with each piece being 3 bytes:
+  -f '%K{3}%V{3}%H{1}%k%v%h{%K{3}%k%V{3}%v}'
 
 REMARKS
 
@@ -110,13 +118,19 @@ delimiters in the parsing format. Since the parser ignores indiscriminately,
 you may as well use characters that make reading the format a bit easier.
 
 If you do not like %, you can switch the escape character with a flag.
+Unfortunately, with exact sizing, the format string is unavoidably noisy.
 `,
 		Args: cobra.MaximumNArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
-			if len(escapeChar) != 1 {
-				out.Die("invalid escape character len %d", len(escapeChar))
+			if len(escapeChar) == 0 {
+				out.Die("invalid empty escape character")
 			}
-			reader, err := format.NewReader(informat, escapeChar[0], os.Stdin)
+			escape, size := utf8.DecodeRuneInString(escapeChar)
+			if size != len(escapeChar) {
+				out.Die("invalid multi character escape character")
+			}
+
+			reader, err := format.NewReader(informat, escape, os.Stdin)
 			out.MaybeDie(err, "unable to parse in format: %v", err)
 			if reader.ParsesTopic() && len(args) == 1 {
 				out.Die("cannot produce to a specific topic; the parse format specifies that it parses a topic")
@@ -171,7 +185,7 @@ If you do not like %, you can switch the escape character with a flag.
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "verbose information of the producing of records")
 	cmd.Flags().IntVar(&maxBuf, "max-delim-buf", bufio.MaxScanTokenSize, "maximum input to buffer before a delimiter is required, if using delimiters")
 	cmd.Flags().StringVarP(&compression, "compression", "z", "snappy", "compression to use for producing batches (none, gzip, snappy, lz4, zstd)")
-	cmd.Flags().StringVarP(&escapeChar, "escape-char", "c", "%", "character to use for beginning a record field escape")
+	cmd.Flags().StringVarP(&escapeChar, "escape-char", "c", "%", "character to use for beginning a record field escape (accepts any utf8)")
 
 	return cmd
 }

@@ -9,6 +9,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/twmb/kafka-go/pkg/kgo"
 )
@@ -24,7 +25,7 @@ type Reader struct {
 	usesDelims bool
 }
 
-func NewReader(infmt string, escape byte, reader io.Reader) (*Reader, error) {
+func NewReader(infmt string, escape rune, reader io.Reader) (*Reader, error) {
 	r := &Reader{r: reader}
 	if err := r.parseReadFormat(infmt, escape); err != nil {
 		return nil, err
@@ -54,7 +55,7 @@ func (p parseBits) parsesKey() bool     { return p&2 != 0 }
 func (p parseBits) parsesValue() bool   { return p&4 != 0 }
 func (p parseBits) parsesHeaders() bool { return p&8 != 0 }
 
-func (r *Reader) parseReadFormat(format string, escape byte) error {
+func (r *Reader) parseReadFormat(format string, escape rune) error {
 	var (
 		// If we see any sized fields, we ensure that the size comes
 		// before the field with sawXyz. Additionally, we ensure that
@@ -88,11 +89,12 @@ func (r *Reader) parseReadFormat(format string, escape byte) error {
 	)
 
 	for len(format) > 0 {
-		b := format[0]
-		format = format[1:]
-		switch b {
+		char, size := utf8.DecodeRuneInString(format)
+		raw := format[:size]
+		format = format[size:]
+		switch char {
 		default:
-			piece = append(piece, b)
+			piece = append(piece, raw...)
 
 		case '\\':
 			if len(format) == 0 {
@@ -105,6 +107,8 @@ func (r *Reader) parseReadFormat(format string, escape byte) error {
 				piece = append(piece, '\n')
 			case 'r':
 				piece = append(piece, '\r')
+			case '\\':
+				piece = append(piece, '\\')
 			case 'x':
 				if len(format) < 3 { // on x, need two more
 					return errors.New("invalid non-terminated hex escape sequence at end of delim string")
@@ -125,16 +129,16 @@ func (r *Reader) parseReadFormat(format string, escape byte) error {
 			if len(format) == 0 {
 				return fmt.Errorf("invalid escape sequence at end of format string")
 			}
-			if format[0] == escape {
-				piece = append(piece, escape)
-				format = format[1:]
+			nextChar, size := utf8.DecodeRuneInString(format)
+			if nextChar == escape || nextChar == '{' {
+				piece = append(piece, format[:size]...)
+				format = format[size:]
 				continue
 			}
 			openBrace := len(format) > 2 && format[1] == '{'
 			var handledBrace bool
 
-			// Always cut the piece, even if it is empty. We alternate piece, fn.
-			pieces = append(pieces, piece)
+			pieces = append(pieces, piece) // always cut the piece, even if empty
 			piece = []byte{}
 
 			next := format[0]
@@ -332,13 +336,19 @@ func (r *Reader) parseReadFormat(format string, escape byte) error {
 		}
 
 	} else {
-		if len(pieces) > 0 && len(pieces[0]) != 0 {
-			return errors.New("invalid leading delimiter before topic, key, or value")
+		var leadingDelim bool
+		if len(pieces) > 0 {
+			if len(pieces[0]) != 0 {
+				leadingDelim = true
+				delimFns = append([]func([]byte, *kgo.Record){nil}, delimFns...)
+			} else {
+				pieces = pieces[1:]
+			}
 		}
 		if len(piece) == 0 {
 			return errors.New("invalid line missing trailing delimiter")
 		}
-		pieces = append(pieces[1:], piece)
+		pieces = append(pieces, piece)
 		d := &delimer{delims: pieces}
 
 		r.scanner = bufio.NewScanner(r.r)
@@ -347,7 +357,15 @@ func (r *Reader) parseReadFormat(format string, escape byte) error {
 		r.fn = func(r *Reader) error {
 			var scanned int
 			for r.scanner.Scan() {
-				delimFns[scanned](r.scanner.Bytes(), r.on)
+				if scanned == 0 && leadingDelim {
+					if len(r.scanner.Bytes()) > 0 {
+						return fmt.Errorf("invalid content %q before leading delimeter")
+					}
+				} else {
+					val := make([]byte, len(r.scanner.Bytes()))
+					copy(val, r.scanner.Bytes())
+					delimFns[scanned](val, r.on)
+				}
 				scanned++
 				if scanned == len(d.delims) {
 					return nil
@@ -372,15 +390,16 @@ func (d *delimer) split(data []byte, atEOF bool) (advance int, token []byte, err
 	if atEOF && len(data) == 0 {
 		return 0, nil, nil
 	}
-	if i := bytes.Index(data, d.delims[d.atDelim]); i >= 0 {
+	delim := d.delims[d.atDelim]
+	if i := bytes.Index(data, delim); i >= 0 {
 		d.atDelim++
 		if d.atDelim == len(d.delims) {
 			d.atDelim = 0
 		}
-		return i + 1, data[0:i], nil
+		return i + len(delim), data[0:i], nil
 	}
 	if atEOF {
-		return 0, nil, fmt.Errorf("unfinished delim %q", d.delims[d.atDelim])
+		return 0, nil, fmt.Errorf("unfinished delim %q", delim)
 	}
 	return 0, nil, nil
 }
@@ -458,6 +477,13 @@ func parseReadSize(format string, dst *uint64) (int, func(*Reader) error, error)
 		}, nil
 
 	default:
-		return end, nil, fmt.Errorf("unrecognized number reading format %q", format)
+		num, err := strconv.Atoi(format)
+		if err != nil {
+			return end, nil, fmt.Errorf("unrecognized number reading format %q", format)
+		}
+		if num <= 0 {
+			return end, nil, fmt.Errorf("invalid zero or negative number %q", format)
+		}
+		return end, func(r *Reader) error { *dst = uint64(num); return nil }, nil
 	}
 }
