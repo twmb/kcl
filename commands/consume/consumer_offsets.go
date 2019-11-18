@@ -110,7 +110,7 @@ func formatTransactionalControl(r *kgo.Record) string {
 	tw := out.BeginTabWriteTo(&sb)
 	fmt.Fprintf(tw, "\tCoordinator Epoch\t%d\n", epoch)
 	if version != 0 {
-		fmt.Fprintf(tw, "\tExtra Bytes (v%d)\t%x\n", reader.Src)
+		fmt.Fprintf(tw, "\tExtra Bytes (v%d)\t%x\n", version, reader.Src)
 	}
 	tw.Flush()
 	return sb.String()
@@ -241,7 +241,7 @@ func (co *consumeOutput) formatGroupMetadata(dst []byte, r *kgo.Record) ([]byte,
 				if member.InstanceID == nil {
 					fmt.Fprintf(tw, "\t\tInstanceID\t%s\n", "(null)")
 				} else {
-					fmt.Fprintf(tw, "\t\tInstanceID\t%d\n", *member.InstanceID)
+					fmt.Fprintf(tw, "\t\tInstanceID\t%s\n", *member.InstanceID)
 				}
 			}
 			fmt.Fprintf(tw, "\t\tClientID\t%s\n", member.ClientID)

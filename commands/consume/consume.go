@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"syscall"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -32,6 +33,7 @@ type consumption struct {
 	offset     string
 	num        int
 	format     string
+	escapeChar string
 
 	start int64 // if exact range
 	end   int64 // if exact range
@@ -43,6 +45,14 @@ func Command(cl *client.Client) *cobra.Command {
 }
 
 func (c *consumption) run(topics []string) {
+	if len(c.escapeChar) == 0 {
+		out.Die("invalid empty escape character")
+	}
+	escape, size := utf8.DecodeRuneInString(c.escapeChar)
+	if size != len(c.escapeChar) {
+		out.Die("invalid multi character escape character")
+	}
+
 	var isConsumerOffsets, isTransactionState bool
 	for _, topic := range topics {
 		isConsumerOffsets = isConsumerOffsets || topic == "__consumer_offsets"
@@ -125,7 +135,13 @@ func (c *consumption) run(topics []string) {
 	} else if isTransactionState {
 		co.buildTransactionStateFormatFn()
 	} else {
-		co.buildFormatFn(c.format)
+		fn, err := format.ParseWriteFormat(c.format, escape)
+		out.MaybeDie(err, "%v", err)
+		var out []byte
+		co.format = func(r *kgo.Record) {
+			out = fn(out[:0], r)
+			os.Stdout.Write(out)
+		}
 	}
 
 	go co.consume()
@@ -199,16 +215,6 @@ type consumeOutput struct {
 	done   chan struct{}
 
 	format func(*kgo.Record)
-}
-
-func (co *consumeOutput) buildFormatFn(write string) {
-	fn, err := format.ParseWriteFormat(write, '%')
-	out.MaybeDie(err, "%v", err)
-	var out []byte
-	co.format = func(r *kgo.Record) {
-		out = fn(out[:0], r)
-		os.Stdout.Write(out)
-	}
 }
 
 func (co *consumeOutput) consume() {

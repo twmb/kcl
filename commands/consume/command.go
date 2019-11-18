@@ -20,6 +20,7 @@ func (c *consumption) command() *cobra.Command {
 	cmd.Flags().IntVarP(&c.num, "num", "n", 0, "quit after consuming this number of records; 0 is unbounded")
 	cmd.Flags().StringVarP(&c.format, "format", "f", `%v\n`, "output format")
 	cmd.Flags().BoolVarP(&c.regex, "regex", "r", false, "parse topics as regex; consume any topic that matches any expression")
+	cmd.Flags().StringVarP(&c.escapeChar, "escape-char", "c", "%", "character to use for beginning a record field escape (accepts any utf8)")
 	// TODO: wait millis, size
 	return cmd
 }
@@ -134,4 +135,7 @@ flag. Doing so will also hide transaction markers. For __transaction_state, you
 can use -G to dump information about a specific transactional ID.
 
 Combined with producing, these two commands allow you to easily mirror a topic.
+
+If you do not like %, you can switch the escape character with a flag.
+Unfortunately, with exact sizing, the format string is unavoidably noisy.
 `

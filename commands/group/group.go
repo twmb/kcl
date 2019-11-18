@@ -151,7 +151,7 @@ is a topic and 1,2,3 are partition numbers.
 					if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
 						msg = err.Error()
 					}
-					fmt.Fprintf(tw, "%s\t%s\t%s\n", topic.Topic, partition.Partition, msg)
+					fmt.Fprintf(tw, "%s\t%d\t%s\n", topic.Topic, partition.Partition, msg)
 				}
 			}
 		},

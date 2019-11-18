@@ -338,7 +338,7 @@ func (r *Reader) parseReadFormat(format string, escape rune) error {
 			for r.scanner.Scan() {
 				if scanned == 0 && leadingDelim {
 					if len(r.scanner.Bytes()) > 0 {
-						return fmt.Errorf("invalid content %q before leading delimeter")
+						return fmt.Errorf("invalid content %q before leading delimeter", r.scanner.Bytes())
 					}
 				} else {
 					val := make([]byte, len(r.scanner.Bytes()))
