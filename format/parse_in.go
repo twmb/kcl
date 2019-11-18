@@ -97,33 +97,12 @@ func (r *Reader) parseReadFormat(format string, escape rune) error {
 			piece = append(piece, raw...)
 
 		case '\\':
-			if len(format) == 0 {
-				return errors.New("invalid slash escape at end of delim string")
+			c, n, err := parseSlash(format)
+			if err != nil {
+				return err
 			}
-			switch format[0] {
-			case 't':
-				piece = append(piece, '\t')
-			case 'n':
-				piece = append(piece, '\n')
-			case 'r':
-				piece = append(piece, '\r')
-			case '\\':
-				piece = append(piece, '\\')
-			case 'x':
-				if len(format) < 3 { // on x, need two more
-					return errors.New("invalid non-terminated hex escape sequence at end of delim string")
-				}
-				hex := format[1:3]
-				n, err := strconv.ParseInt(hex, 16, 8)
-				if err != nil {
-					return fmt.Errorf("unable to parse hex escape sequence %q: %v", hex, err)
-				}
-				piece = append(piece, byte(n))
-				format = format[2:] // two here, one below
-			default:
-				return fmt.Errorf("unknown slash escape sequence %q", format[:1])
-			}
-			format = format[1:]
+			format = format[n:]
+			piece = append(piece, c)
 
 		case escape:
 			if len(format) == 0 {
@@ -152,7 +131,7 @@ func (r *Reader) parseReadFormat(format string, escape rune) error {
 			case 'T':
 				sized, sawTopicSize = true, true
 				if handledBrace = openBrace; handledBrace {
-					n, fn, err := parseReadSize(format, &topicSize)
+					fn, n, err := parseReadSize(format, &topicSize)
 					if err != nil {
 						return fmt.Errorf("unable to parse %sT: %s", escstr, err)
 					}
@@ -180,7 +159,7 @@ func (r *Reader) parseReadFormat(format string, escape rune) error {
 			case 'K':
 				sized, sawKeySize = true, true
 				if handledBrace = openBrace; handledBrace {
-					n, fn, err := parseReadSize(format, &keySize)
+					fn, n, err := parseReadSize(format, &keySize)
 					if err != nil {
 						return fmt.Errorf("unable to parse %sK: %s", escstr, err)
 					}
@@ -207,7 +186,7 @@ func (r *Reader) parseReadFormat(format string, escape rune) error {
 			case 'V':
 				sized, sawValueSize = true, true
 				if handledBrace = openBrace; handledBrace {
-					n, fn, err := parseReadSize(format, &valueSize)
+					fn, n, err := parseReadSize(format, &valueSize)
 					if err != nil {
 						return fmt.Errorf("unable to parse %sV: %s", escstr, err)
 					}
@@ -234,7 +213,7 @@ func (r *Reader) parseReadFormat(format string, escape rune) error {
 			case 'H':
 				sized, sawHeadersNum = true, true
 				if handledBrace = openBrace; handledBrace {
-					n, fn, err := parseReadSize(format, &headersNum)
+					fn, n, err := parseReadSize(format, &headersNum)
 					if err != nil {
 						return fmt.Errorf("unable to parse %sH: %s", escstr, err)
 					}
@@ -404,86 +383,86 @@ func (d *delimer) split(data []byte, atEOF bool) (advance int, token []byte, err
 	return 0, nil, nil
 }
 
-func parseReadSize(format string, dst *uint64) (int, func(*Reader) error, error) {
+func parseReadSize(format string, dst *uint64) (func(*Reader) error, int, error) {
 	braceEnd := strings.IndexByte(format, '}')
 	if braceEnd == -1 {
-		return 0, nil, errors.New("missing brace end } to close number size specification")
+		return nil, 0, errors.New("missing brace end } to close number size specification")
 	}
 	end := braceEnd + 1
 
 	var buf [8]byte
 	switch format = format[:braceEnd]; format {
 	case "b8", "big8":
-		return end, func(r *Reader) error {
+		return func(r *Reader) error {
 			if _, err := io.ReadFull(r.r, buf[:]); err != nil {
 				return err
 			}
 			*dst = binary.BigEndian.Uint64(buf[:])
 			return nil
-		}, nil
+		}, end, nil
 
 	case "b4", "big4":
-		return end, func(r *Reader) error {
+		return func(r *Reader) error {
 			if _, err := io.ReadFull(r.r, buf[:4]); err != nil {
 				return err
 			}
 			*dst = uint64(binary.BigEndian.Uint32(buf[:]))
 			return nil
-		}, nil
+		}, end, nil
 
 	case "b2", "big2":
-		return end, func(r *Reader) error {
+		return func(r *Reader) error {
 			if _, err := io.ReadFull(r.r, buf[:2]); err != nil {
 				return err
 			}
 			*dst = uint64(binary.BigEndian.Uint16(buf[:]))
 			return nil
-		}, nil
+		}, end, nil
 
 	case "byte", "b":
-		return end, func(r *Reader) error {
+		return func(r *Reader) error {
 			if _, err := io.ReadFull(r.r, buf[:1]); err != nil {
 				return err
 			}
 			*dst = uint64(buf[0])
 			return nil
-		}, nil
+		}, end, nil
 
 	case "l8", "little8":
-		return end, func(r *Reader) error {
+		return func(r *Reader) error {
 			if _, err := io.ReadFull(r.r, buf[:]); err != nil {
 				return err
 			}
 			*dst = binary.LittleEndian.Uint64(buf[:])
 			return nil
-		}, nil
+		}, end, nil
 
 	case "l4", "little4":
-		return end, func(r *Reader) error {
+		return func(r *Reader) error {
 			if _, err := io.ReadFull(r.r, buf[:4]); err != nil {
 				return err
 			}
 			*dst = uint64(binary.LittleEndian.Uint32(buf[:]))
 			return nil
-		}, nil
+		}, end, nil
 
 	case "l2", "little2":
-		return end, func(r *Reader) error {
+		return func(r *Reader) error {
 			if _, err := io.ReadFull(r.r, buf[:2]); err != nil {
 				return err
 			}
 			*dst = uint64(binary.LittleEndian.Uint16(buf[:]))
 			return nil
-		}, nil
+		}, end, nil
 
 	default:
 		num, err := strconv.Atoi(format)
 		if err != nil {
-			return end, nil, fmt.Errorf("unrecognized number reading format %q", format)
+			return nil, 0, fmt.Errorf("unrecognized number reading format %q", format)
 		}
 		if num <= 0 {
-			return end, nil, fmt.Errorf("invalid zero or negative number %q", format)
+			return nil, 0, fmt.Errorf("invalid zero or negative number %q", format)
 		}
-		return end, func(r *Reader) error { *dst = uint64(num); return nil }, nil
+		return func(r *Reader) error { *dst = uint64(num); return nil }, end, nil
 	}
 }

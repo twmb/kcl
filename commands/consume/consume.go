@@ -3,11 +3,6 @@ package consume
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/binary"
-	"encoding/hex"
-	"errors"
-	"fmt"
 	"os"
 	"os/signal"
 	"regexp"
@@ -18,12 +13,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/twmb/go-strftime"
-
 	"github.com/twmb/kafka-go/pkg/kgo"
 	"github.com/twmb/kafka-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/format"
 	"github.com/twmb/kcl/out"
 )
 
@@ -207,218 +201,14 @@ type consumeOutput struct {
 	format func(*kgo.Record)
 }
 
-func (co *consumeOutput) buildFormatFn(format string) {
-	var argFns []func([]byte, *kgo.Record) []byte
-	var pieces [][]byte
-	var piece []byte
-	for len(format) > 0 {
-		b := format[0]
-		format = format[1:]
-
-		switch b {
-		default:
-			piece = append(piece, b)
-
-		case '\\':
-			if len(format) == 0 {
-				out.Die("invalid slash escape at end of format string")
-			}
-			switch format[0] {
-			case 't':
-				piece = append(piece, '\t')
-			case 'n':
-				piece = append(piece, '\n')
-			case 'r':
-				piece = append(piece, '\r')
-			case 'x':
-				if len(format) < 3 { // on x, need two more
-					out.Die("invalid non-terminated hex escape sequence at end of format string")
-				}
-				hex := format[1:3]
-				n, err := strconv.ParseInt(hex, 16, 8)
-				out.MaybeDie(err, "unable to parse hex escape sequence %q: %v", hex, err)
-				piece = append(piece, byte(n))
-				format = format[2:] // two here, one below
-			default:
-				out.Die("unknown slash escape sequence %q", format[:1])
-			}
-			format = format[1:]
-
-		case '%':
-			if len(format) == 0 {
-				out.Die("invalid percent escape sequence at end of format string")
-			}
-			if format[0] == '%' {
-				piece = append(piece, '%')
-				format = format[1:]
-				continue
-			}
-			openBrace := len(format) > 2 && format[1] == '{'
-			var handledBrace bool
-
-			// Always cut the piece, even if it is empty. We alternate piece, argFn.
-			pieces = append(pieces, piece)
-			piece = []byte{}
-
-			next := format[0]
-			format = format[1:]
-			switch next {
-			case 's', 'v':
-				if handledBrace = openBrace; handledBrace {
-					format = format[1:]
-					switch {
-					case strings.HasPrefix(format, "base64}"):
-						argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return appendBase64(out, r.Value) })
-						format = format[len("base64}"):]
-					case strings.HasPrefix(format, "hex}"):
-						argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return appendHex(out, r.Value) })
-						format = format[len("hex}"):]
-					default:
-						out.Die("unknown %%v{ escape")
-					}
-				} else {
-					argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return append(out, r.Value...) })
-				}
-
-			case 'S', 'V':
-				argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return strconv.AppendInt(out, int64(len(r.Value)), 10) })
-
-			case 'R':
-				argFns = append(argFns, func(out []byte, r *kgo.Record) []byte {
-					out = append(out, 0, 0, 0, 0, 0, 0, 0, 0)
-					binary.BigEndian.PutUint64(out[len(out)-8:], uint64(len(r.Value)))
-					return out
-				})
-
-			case 'k':
-				if handledBrace = openBrace; handledBrace {
-					format = format[1:]
-					switch {
-					case strings.HasPrefix(format, "base64}"):
-						argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return appendBase64(out, r.Key) })
-						format = format[len("base64}"):]
-					case strings.HasPrefix(format, "hex}"):
-						argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return appendHex(out, r.Key) })
-						format = format[len("hex}"):]
-					default:
-						out.Die("unknown %%k{ escape")
-					}
-				} else {
-					argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return append(out, r.Key...) })
-				}
-
-			case 'K':
-				argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return strconv.AppendInt(out, int64(len(r.Key)), 10) })
-
-			case 't':
-				argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return append(out, r.Topic...) })
-
-			case 'p':
-				argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return strconv.AppendInt(out, int64(r.Partition), 10) })
-
-			case 'o':
-				argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return strconv.AppendInt(out, r.Offset, 10) })
-
-			case 'e':
-				argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return strconv.AppendInt(out, int64(r.LeaderEpoch), 10) })
-
-			case 'T':
-				if handledBrace = openBrace; handledBrace {
-					format = format[1:]
-					switch {
-					case strings.HasPrefix(format, "strftime"):
-						tfmt, rem, err := nomOpenClose(format[len("strftime"):])
-						if err != nil {
-							out.Die("strftime parse err: %v", err)
-						}
-						if len(rem) == 0 || rem[0] != '}' {
-							out.Die("%%T{strftime missing closing }")
-						}
-						format = rem[1:]
-						argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return strftime.AppendFormat(out, tfmt, r.Timestamp) })
-
-					case strings.HasPrefix(format, "go"):
-						tfmt, rem, err := nomOpenClose(format[len("go"):])
-						if err != nil {
-							out.Die("go parse err: %v", err)
-						}
-						if len(rem) == 0 || rem[0] != '}' {
-							out.Die("%%T{go missing closing }")
-						}
-						format = rem[1:]
-						argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return r.Timestamp.AppendFormat(out, tfmt) })
-
-					default:
-						out.Die("unknown %%T{ time qualifier name")
-					}
-				} else {
-					argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return strconv.AppendInt(out, r.Timestamp.UnixNano(), 10) })
-				}
-
-			default:
-				out.Die("unknown percent escape sequence %q", format[:1])
-			}
-
-			if openBrace && !handledBrace {
-				out.Die("unhandled, unknown open brace %q", format[:2])
-			}
-		}
-	}
-
-	if len(piece) > 0 {
-		pieces = append(pieces, piece)
-		argFns = append(argFns, func(out []byte, _ *kgo.Record) []byte { return out })
-	}
+func (co *consumeOutput) buildFormatFn(write string) {
+	fn, err := format.ParseWriteFormat(write, '%')
+	out.MaybeDie(err, "%v", err)
 	var out []byte
 	co.format = func(r *kgo.Record) {
-		out = out[:0]
-		for i, piece := range pieces {
-			out = append(out, piece...)
-			out = argFns[i](out, r)
-		}
+		out = fn(out[:0], r)
 		os.Stdout.Write(out)
 	}
-}
-
-func appendBase64(dst, src []byte) []byte {
-	fin := append(dst, make([]byte, base64.RawStdEncoding.EncodedLen(len(src)))...)
-	base64.RawStdEncoding.Encode(fin[len(dst):], src)
-	return fin
-}
-
-func appendHex(dst, src []byte) []byte {
-	fin := append(dst, make([]byte, hex.EncodedLen(len(src)))...)
-	hex.Encode(fin[len(dst):], src)
-	return fin
-}
-
-// nomOpenClose extracts a middle section from a string beginning with repeated
-// delimiters and returns it as with remaining (past end delimiters) string.
-func nomOpenClose(src string) (string, string, error) {
-	if len(src) == 0 {
-		return "", "", errors.New("empty format")
-	}
-	delim := src[0]
-	openers := 1
-	for openers < len(src) && src[openers] == delim {
-		openers++
-	}
-	switch delim {
-	case '{':
-		delim = '}'
-	case '[':
-		delim = ']'
-	case '(':
-		delim = ')'
-	}
-	src = src[openers:]
-	end := strings.Repeat(string(delim), openers)
-	idx := strings.Index(src, end)
-	if idx < 0 {
-		return "", "", fmt.Errorf("missing end delim %q", end)
-	}
-	middle := src[:idx]
-	return middle, src[idx+len(end):], nil
 }
 
 func (co *consumeOutput) consume() {

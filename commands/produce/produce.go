@@ -41,12 +41,12 @@ can be changed with the --max-delim-buf flag.
 Delimiters understand \n, \r, \t, and \xXX (hex) escape sequences.
 
 Format options:
-  %v    record value
-  %V    record value length
-  %k    record key
-  %K    record key length
   %t    topic name
   %T    topic name length
+  %k    record key
+  %K    record key length
+  %v    record value
+  %V    record value length
   %h    begin the header specification
   %H    number of headers
   %%    percent sign
@@ -61,6 +61,9 @@ Headers have their own internal format (the same as keys and values above):
   %V    header value length
   %k    header key
   %K    header key length
+
+
+NUMBER FORMATTING
 
 All number specifiers are required to have "kind" specification in braces,
 with the kinds being:
@@ -79,6 +82,7 @@ with the kinds being:
   l2       alias for little2
   b        alias for byte
   ###      an exact number of bytes (in ascii digits)
+
 
 EXAMPLES
 
@@ -109,6 +113,7 @@ The same, but with a space trailing every field:
 
 To read a compact key, value, and single header, with each piece being 3 bytes:
   -f '%K{3}%V{3}%H{1}%k%v%h{%K{3}%k%V{3}%v}'
+
 
 REMARKS
 

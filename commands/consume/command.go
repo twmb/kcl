@@ -18,7 +18,7 @@ func (c *consumption) command() *cobra.Command {
 	cmd.Flags().Int32SliceVarP(&c.partitions, "partitions", "p", nil, "comma delimited list of specific partitions to consume")
 	cmd.Flags().StringVarP(&c.offset, "offset", "o", "start", "offset to start consuming from (start, end, 47, start+2, end-3)")
 	cmd.Flags().IntVarP(&c.num, "num", "n", 0, "quit after consuming this number of records; 0 is unbounded")
-	cmd.Flags().StringVarP(&c.format, "format", "f", `%s\n`, "output format")
+	cmd.Flags().StringVarP(&c.format, "format", "f", `%v\n`, "output format")
 	cmd.Flags().BoolVarP(&c.regex, "regex", "r", false, "parse topics as regex; consume any topic that matches any expression")
 	// TODO: wait millis, size
 	return cmd
@@ -33,18 +33,18 @@ being to newline delimit record values.
 The input topics can be regular expressions with the --regex (-r) flag.
 
 Format options:
-  %s    record value
-  %S    length of a record
-  %v    alias for %s
-  %V    alias for %S
-  %R    length of a record (8 byte big endian)
+  %t    topic name
+  %T    topic name length
   %k    record key
-  %K    length of a record key
-  %T    record timestamp (milliseconds since epoch).
-  %t    record topic
+  %K    record key length
+  %v    record value
+  %V    record value length
+  %h    begin the header specification
+  %H    number of headers
   %p    record partition
   %o    record offset
   %e    record leader epoch
+  %d    record timestamp (date)
   %%    percent sign
   %{    left brace
   \n    newline
@@ -52,29 +52,78 @@ Format options:
   \t    tab
   \xXX  any ASCII character (input must be hex)
 
-The record and key fields support printing as base64 or hex encoded values
-by including {base64} or {hex} after the %s, %v, or %k.
+Headers have their own internal format (the same as keys and values above):
+  %v    header value
+  %V    header value length
+  %k    header key
+  %K    header key length
+Other signifiers in the header section are ignored.
 
-%T supports enhanced time formatting inside braces.
+All strings or byte arrays support printing as base64 or hex encoded values
+by including {base64} or {hex} after the escape format, e.g., %v{hex}.
 
-To use strftime formatting, open with "%T{strftime" and close with "}".
-After "%T{strftime", you can use any delimiter to open the strftime
+
+NUMBER FORMATTING
+
+By default, numbers are printed as just their textual representation.
+
+However, all numbers support big/little endian compact encoding in braces
+following the number:
+  big8     eight byte unsigned big endian
+  big4     four byte unsigned big endian
+  big2     two byte unsigned big endian
+  little8  eight byte unsigned little endian
+  little4  four byte unsigned little endian
+  little2  two byte unsigned little endian
+  byte     single byte
+  b8       alias for big8
+  b4       alias for big4
+  b2       alias for big2
+  l8       alias for little8
+  l4       alias for little4
+  l2       alias for little2
+  b        alias for byte
+  ascii    textual representation (the default)
+
+For example,
+  %T{big8}
+will print the length of a topic as an eight byte big endian.
+
+Number formatting does not check for overflow.
+
+
+TIME FORMATTING
+
+%d supports enhanced time formatting inside braces.
+
+To use strftime formatting, open with "%d{strftime" and close with "}".
+After "%d{strftime", you can use any delimiter to open the strftime
 format and subsequently close it; the delimiter can be repeated.
 If your delimiter is {, [, (, the closing delimiter is ), ], or }.
 
 For example,
-  %T{strftime[[%F]]}
+  %d{strftime[[%F]]}
 will output the timestamp with strftime's %F option.
 
-To use Go time formatting, open with "T{go" and close with "}".
+To use Go time formatting, open with "%d{go" and close with "}".
 The Go time formatting follows the same delimiting rules as strftime.
 
 For example,
-  %T{go#06-01-02 15:04:05.999#}
+  %d{go#06-01-02 15:04:05.999#}
 will output the timestamp as HH:MM:SS.ms.
 
-Putting it all together:
-  -f 'Topic %t [%p] at offset %o @%T{strftime[%F %T]}: key %k: %s\n'
+
+EXAMPLES
+
+A basic example:
+  -f 'Topic %t [%p] at offset %o @%d{strftime[%F %T]}: key %k: %s\n'
+
+To mirror a topic, you can use the following format for consuming from one
+topic and pipe the results to producing with this same format:
+  -f '%K{b4}%k%V{b4}%v%H{b4}%h{%K{b4}%k%V{b4}%v}'
+
+
+REMARKS
 
 Note that this command allows you to consume the Kafka special internal topics
 __consumer_offsets and __transaction_state. To do so, either of these topics
@@ -83,4 +132,6 @@ must be the only topic specified.
 For __consumer_offsets, to dump information about a specific group, use the -G
 flag. Doing so will also hide transaction markers. For __transaction_state, you
 can use -G to dump information about a specific transactional ID.
+
+Combined with producing, these two commands allow you to easily mirror a topic.
 `
