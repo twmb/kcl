@@ -17,16 +17,18 @@ import (
 type Reader struct {
 	r       io.Reader
 	scanner *bufio.Scanner
+	scanbuf []byte
 
 	on *kgo.Record
 	fn func(*Reader) error
 
 	parseBits
-	usesDelims bool
+	delimiter *delimiter
+	scanmax   int
 }
 
-func NewReader(infmt string, escape rune, reader io.Reader) (*Reader, error) {
-	r := &Reader{r: reader}
+func NewReader(infmt string, escape rune, maxBuf int, reader io.Reader) (*Reader, error) {
+	r := &Reader{r: reader, scanmax: maxBuf}
 	if err := r.parseReadFormat(infmt, escape); err != nil {
 		return nil, err
 	}
@@ -41,6 +43,15 @@ func (r *Reader) Next() (*kgo.Record, error) {
 	r.on = new(kgo.Record)
 	err := r.fn(r)
 	return r.on, err
+}
+
+func (r *Reader) SetReader(reader io.Reader) {
+	r.r = reader
+	if r.delimiter != nil {
+		r.scanner = bufio.NewScanner(r.r)
+		r.scanner.Buffer(r.scanbuf, r.scanmax)
+		r.scanner.Split(r.delimiter.split)
+	}
 }
 
 type parseBits uint8
@@ -258,7 +269,7 @@ func (r *Reader) parseReadFormat(format string, escape rune) error {
 				if inr.parsesTopic() || inr.parsesHeaders() {
 					return errors.New("invalid header specification: internally specifies more than just a key and a value")
 				}
-				if inr.usesDelims {
+				if inr.delimiter != nil {
 					return errors.New("invalid header specification: internally uses delimiters, not sized fields")
 				}
 				sizeFns = append(sizeFns, func(r *Reader) error {
@@ -328,11 +339,13 @@ func (r *Reader) parseReadFormat(format string, escape rune) error {
 			return errors.New("invalid line missing trailing delimiter")
 		}
 		pieces = append(pieces, piece)
-		d := &delimer{delims: pieces}
+		d := &delimiter{delims: pieces}
 
 		r.scanner = bufio.NewScanner(r.r)
+		r.scanbuf = make([]byte, 0, r.scanmax)
+		r.scanner.Buffer(r.scanbuf, r.scanmax)
 		r.scanner.Split(d.split)
-		r.usesDelims = true
+		r.delimiter = d
 		r.fn = func(r *Reader) error {
 			var scanned int
 			for r.scanner.Scan() {
@@ -360,12 +373,12 @@ func (r *Reader) parseReadFormat(format string, escape rune) error {
 	return nil
 }
 
-type delimer struct {
+type delimiter struct {
 	delims  [][]byte
 	atDelim int
 }
 
-func (d *delimer) split(data []byte, atEOF bool) (advance int, token []byte, err error) {
+func (d *delimiter) split(data []byte, atEOF bool) (advance int, token []byte, err error) {
 	if atEOF && len(data) == 0 {
 		return 0, nil, nil
 	}
