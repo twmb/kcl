@@ -19,6 +19,7 @@ import (
 	"github.com/twmb/kcl/commands/myconfig"
 	"github.com/twmb/kcl/commands/produce"
 	"github.com/twmb/kcl/commands/topic"
+	"github.com/twmb/kcl/commands/transact"
 )
 
 // TODO remove cobra to remove ridiculous implicit "help" command from everything.
@@ -47,7 +48,7 @@ Command completion is available at:
 		consume.Command(cl),
 		produce.Command(cl),
 		configs.Command(cl),
-		// TODO transact
+		transact.Command(cl),
 		misc.Command(cl),
 		admin.Command(cl),
 		dtoken.Command(cl),
