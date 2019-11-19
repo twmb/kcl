@@ -135,7 +135,7 @@ Unfortunately, with exact sizing, the format string is unavoidably noisy.
 				out.Die("invalid multi character escape character")
 			}
 
-			reader, err := format.NewReader(informat, escape, os.Stdin)
+			reader, err := format.NewReader(informat, escape, maxBuf, os.Stdin)
 			out.MaybeDie(err, "unable to parse in format: %v", err)
 			if reader.ParsesTopic() && len(args) == 1 {
 				out.Die("cannot produce to a specific topic; the parse format specifies that it parses a topic")
