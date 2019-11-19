@@ -12,7 +12,7 @@ func (c *consumption) command() *cobra.Command {
 			c.run(args)
 		},
 	}
-	cmd.Flags().StringVarP(&c.group, "group", "G", "", "group to assign")
+	cmd.Flags().StringVarP(&c.group, "group", "g", "", "group to assign")
 	cmd.Flags().StringVarP(&c.groupAlg, "balancer", "b", "cooperative-sticky", "group balancer to use if group consuming (range, roundrobin, sticky, cooperative-sticky)")
 	cmd.Flags().StringVarP(&c.instanceID, "instance-id", "i", "", "group instance ID to use for consuming; empty means none (implies static membership)")
 	cmd.Flags().Int32SliceVarP(&c.partitions, "partitions", "p", nil, "comma delimited list of specific partitions to consume")
