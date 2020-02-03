@@ -35,8 +35,8 @@ func (co *consumeOutput) formatTransactionState(out []byte, r *kgo.Record) []byt
 
 	var keep bool
 	switch v := r.Key[1]; v {
-	case 0:
-		out, keep = co.formatTransactionStateV0(out, r)
+	case 0, 1:
+		out, keep = co.formatTransactionStateV01(out, r, v)
 	default:
 		out = append(out, "(unknown transaction state key format version "...)
 		out = append(out, r.Key[1])
@@ -74,7 +74,7 @@ func strTxnState(state int8) string {
 	}
 }
 
-func (co *consumeOutput) formatTransactionStateV0(dst []byte, r *kgo.Record) ([]byte, bool) {
+func (co *consumeOutput) formatTransactionStateV01(dst []byte, r *kgo.Record, version byte) ([]byte, bool) {
 	{
 		var k kmsg.TxnMetadataKey
 		if err := k.ReadFrom(r.Key); err != nil {
@@ -98,7 +98,13 @@ func (co *consumeOutput) formatTransactionStateV0(dst []byte, r *kgo.Record) ([]
 
 		tw := out.BeginTabWriteTo(w)
 		fmt.Fprintf(tw, "\tProducerID\t%d\n", v.ProducerID)
+		if version == 1 {
+			fmt.Fprintf(tw, "\tLastProducerID\t%d\n", v.LastProducerID)
+		}
 		fmt.Fprintf(tw, "\tProducerEpoch\t%d\n", v.ProducerEpoch)
+		if version == 1 {
+			fmt.Fprintf(tw, "\tLastProducerEpoch\t%d\n", v.LastProducerEpoch)
+		}
 		fmt.Fprintf(tw, "\tTimeoutMillis\t%d\n", v.TimeoutMillis)
 		fmt.Fprintf(tw, "\tState\t%s\n", strTxnState(v.State))
 

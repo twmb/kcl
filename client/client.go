@@ -84,7 +84,7 @@ func (c *Client) TimeoutMillis() int32 { return c.cfg.TimeoutMillis }
 func New(root *cobra.Command) *Client {
 	c := &Client{
 		opts: []kgo.Opt{
-			kgo.WithMetadataMinAge(time.Second),
+			kgo.MetadataMinAge(time.Second),
 		},
 		cfg: Cfg{
 			SeedBrokers:   []string{"localhost"},
@@ -142,7 +142,7 @@ func (c *Client) loadClientOnce() {
 func (c *Client) fillOpts() {
 	c.parseCfgFile()        // loads config file if needed
 	c.processOverrides()    // overrides config values just loaded
-	c.maybeAddMaxVersions() // fills WithMaxVersions if necessary
+	c.maybeAddMaxVersions() // fills MaxVersions if necessary
 
 	if err := c.maybeAddSASL(); err != nil {
 		out.Die("sasl error: %v", err)
@@ -152,7 +152,7 @@ func (c *Client) fillOpts() {
 	if err != nil {
 		out.Die("%s", err)
 	} else if tlscfg != nil {
-		c.AddOpt(kgo.WithDialFn(func(host string) (net.Conn, error) {
+		c.AddOpt(kgo.Dial(func(host string) (net.Conn, error) {
 			cloned := tlscfg.Clone()
 			if c.cfg.TLSServerName != "" {
 				cloned.ServerName = c.cfg.TLSServerName
@@ -163,7 +163,7 @@ func (c *Client) fillOpts() {
 		}))
 	}
 
-	c.AddOpt(kgo.WithSeedBrokers(c.cfg.SeedBrokers...))
+	c.AddOpt(kgo.SeedBrokers(c.cfg.SeedBrokers...))
 }
 
 func (c *Client) parseCfgFile() {
@@ -271,7 +271,7 @@ func (c *Client) maybeAddMaxVersions() {
 		default:
 			out.Die("unknown Kafka version %s", c.asVersion)
 		}
-		c.AddOpt(kgo.WithMaxVersions(versions))
+		c.AddOpt(kgo.MaxVersions(versions))
 	}
 }
 
@@ -282,11 +282,11 @@ func (c *Client) maybeAddSASL() error {
 	switch method {
 	case "":
 	case "plain", "plaintext":
-		c.AddOpt(kgo.WithSASL(plain.Plain(func(context.Context) (string, string, error) {
+		c.AddOpt(kgo.SASL(plain.Plain(func(context.Context) (string, string, error) {
 			return c.cfg.PlainUser, c.cfg.PlainPass, nil
 		})))
 	case "scram_sha_256", "scram_256", "scram_sha256":
-		c.AddOpt(kgo.WithSASL(scram.Sha256(func(context.Context) (scram.Auth, error) {
+		c.AddOpt(kgo.SASL(scram.Sha256(func(context.Context) (scram.Auth, error) {
 			return scram.Auth{
 				User:    c.cfg.ScramUser,
 				Pass:    c.cfg.ScramPass,
@@ -294,7 +294,7 @@ func (c *Client) maybeAddSASL() error {
 			}, nil
 		})))
 	case "scram_sha_512", "scram_512", "scram_sha512":
-		c.AddOpt(kgo.WithSASL(scram.Sha512(func(context.Context) (scram.Auth, error) {
+		c.AddOpt(kgo.SASL(scram.Sha512(func(context.Context) (scram.Auth, error) {
 			return scram.Auth{
 				User:    c.cfg.ScramUser,
 				Pass:    c.cfg.ScramPass,

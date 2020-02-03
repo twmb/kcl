@@ -35,6 +35,8 @@ func Command(cl *client.Client) *cobra.Command {
 		instanceID  string
 		writeFormat string
 
+		rwFormat string
+
 		// Producing opts
 		readFormat  string
 		maxBuf      int
@@ -58,6 +60,11 @@ func Command(cl *client.Client) *cobra.Command {
 			}
 			if len(txnID) == 0 {
 				out.Die("invalid empty transactional id")
+			}
+
+			if rwFormat != "" {
+				readFormat = rwFormat
+				writeFormat = rwFormat
 			}
 
 			///////////////
@@ -89,12 +96,12 @@ func Command(cl *client.Client) *cobra.Command {
 			default:
 				out.Die("unrecognized group balancer %q", groupAlg)
 			}
-			groupOpts = append(groupOpts, kgo.GroupBalancers(balancer))
+			groupOpts = append(groupOpts, kgo.Balancers(balancer))
 			if instanceID != "" {
-				groupOpts = append(groupOpts, kgo.GroupInstanceID(instanceID))
+				groupOpts = append(groupOpts, kgo.InstanceID(instanceID))
 			}
 
-			cl.AddOpt(kgo.WithConsumeIsolationLevel(kgo.ReadCommitted())) // we will be reading committed
+			cl.AddOpt(kgo.FetchIsolationLevel(kgo.ReadCommitted())) // we will be reading committed
 
 			///////////////
 			// producing //
@@ -123,9 +130,9 @@ func Command(cl *client.Client) *cobra.Command {
 			default:
 				out.Die("invalid compression codec %q", codec)
 			}
-			cl.AddOpt(kgo.WithTransactionalID(txnID))
-			cl.AddOpt(kgo.WithProduceStopOnDataLoss())
-			cl.AddOpt(kgo.WithProduceCompression(codec))
+			cl.AddOpt(kgo.TransactionalID(txnID))
+			cl.AddOpt(kgo.StopOnDataLoss())
+			cl.AddOpt(kgo.BatchCompression(codec))
 
 			sigs := make(chan os.Signal, 2)
 			signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
@@ -157,6 +164,7 @@ func Command(cl *client.Client) *cobra.Command {
 
 	cmd.Flags().StringVarP(&writeFormat, "write-format", "w", "%t\t%k\t%v\n", "format to write to the transform program")
 	cmd.Flags().StringVarP(&readFormat, "read-format", "r", "%t\t%k\t%v\n", "format to read from the transform program")
+	cmd.Flags().StringVar(&rwFormat, "rw", "", "if non-empty, the format to use for both reading and writing (overrides w and r)")
 
 	cmd.Flags().IntVar(&maxBuf, "max-delim-buf", bufio.MaxScanTokenSize, "maximum input to buffer before a delimiter is required, if using delimiters")
 	cmd.Flags().StringVarP(&compression, "compression", "z", "snappy", "compression to use for producing batches (none, gzip, snappy, lz4, zstd)")
@@ -207,6 +215,10 @@ func transact(
 					}
 				}
 			}
+		}
+
+		if verbose {
+			fmt.Printf("Buffered records (%d bytes), executing program and writing to it...\n", len(buf))
 		}
 
 		cmd := exec.Command(args[0], args[1:]...)
@@ -272,7 +284,7 @@ func transact(
 			}
 
 			done := make(chan struct{})
-			cl.CommitOffsetsForTransaction(context.Background(), cl.Uncommitted(),
+			cl.CommitTransactionOffsets(context.Background(), cl.Uncommitted(),
 				func(_ *kmsg.TxnOffsetCommitRequest, resp *kmsg.TxnOffsetCommitResponse, err error) {
 					defer close(done)
 					if err != nil {

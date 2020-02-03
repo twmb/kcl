@@ -142,7 +142,7 @@ func probeVersion(cl *client.Client) {
 	// If we request against a Kafka older than ApiVersions,
 	// Kafka will close the connection. ErrConnDead is
 	// retried automatically, so we must stop that.
-	cl.AddOpt(kgo.WithRetries(0))
+	cl.AddOpt(kgo.RequestRetries(0))
 	kresp, err := cl.Client().Request(context.Background(), new(kmsg.ApiVersionsRequest))
 	if err != nil { // pre 0.10.0 had no api versions
 		// 0.9.0 has list groups

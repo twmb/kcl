@@ -159,7 +159,7 @@ Unfortunately, with exact sizing, the format string is unavoidably noisy.
 			default:
 				out.Die("invalid compression codec %q", codec)
 			}
-			cl.AddOpt(kgo.WithProduceCompression(codec))
+			cl.AddOpt(kgo.BatchCompression(codec))
 
 			for {
 				r, err := reader.Next()

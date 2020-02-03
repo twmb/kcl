@@ -100,19 +100,19 @@ func (c *consumption) run(topics []string) {
 	default:
 		out.Die("unrecognized group balancer %q", c.groupAlg)
 	}
-	groupOpts = append(groupOpts, kgo.GroupBalancers(balancer))
+	groupOpts = append(groupOpts, kgo.Balancers(balancer))
 
 	if c.instanceID != "" {
-		groupOpts = append(groupOpts, kgo.GroupInstanceID(c.instanceID))
+		groupOpts = append(groupOpts, kgo.InstanceID(c.instanceID))
 	}
 
 	sigs := make(chan os.Signal, 2)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 
 	if isConsumerOffsets || isTransactionState {
-		c.cl.AddOpt(kgo.WithConsumeKeepControl())
+		c.cl.AddOpt(kgo.KeepControlRecords())
 	} else {
-		c.cl.AddOpt(kgo.WithConsumeIsolationLevel(kgo.ReadCommitted()))
+		c.cl.AddOpt(kgo.FetchIsolationLevel(kgo.ReadCommitted()))
 	}
 
 	cl := c.cl.Client()
