@@ -1,0 +1,51 @@
+ kcl
+x  consume
+x  produce
+d  transact
+x  misc
+x    api-versions
+x    probe-version
+x    gen-autocomplete
+x    errcode
+x    raw-req
+     list-offsets
+   admin
+x    elect-leaders
+x    delete-records
+     alter-partition-assignments
+     list-partition-reassignments
+x    alter-replica-log-dirs
+x    describe-log-dirs
+x  dtoken
+x    create
+x    renew
+x    describe
+x    expire
+x  acl
+x    create
+x    describe
+x    delete
+x  group
+x    list
+x    describe
+x    delete
+x    offset-delete
+x  topic
+x    create
+x    delete
+x    add-partitions
+x  metadata
+x  configs
+x    alter
+x    describe
+x  myconfig
+x    unlink
+x    link
+x    dump
+x    help
+x    ls
+
+bin/kafka-consumer-groups.sh --bootstrap-server broker1:9092 --describe --group test-consumer-group
+
+  TOPIC                          PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG        CONSUMER-ID                                       HOST                           CLIENT-ID
+  test-foo                       0          1               3               2          consumer-1-a5d61779-4d04-4c50-a6d6-fb35d942642d   /127.0.0.1                     consumer-1
