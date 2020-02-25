@@ -21,7 +21,7 @@ func Command(cl *client.Client) *cobra.Command {
 		IncludeTopicAuthorizedOperations:   true,
 	}
 
-	var pcluster, pbrokers, ptopics, pinternal, detailed bool
+	var pcluster, pbrokers, ptopics, pinternal, pall, detailed bool
 
 	cmd := &cobra.Command{
 		Use:   "metadata",
@@ -41,8 +41,11 @@ If the brokers section is printed, the controller broker is marked with *.
 
 		Run: func(_ *cobra.Command, topics []string) {
 			sections := 0
-			for _, v := range []bool{pcluster, pbrokers, ptopics} {
-				if v {
+			for _, v := range []*bool{&pcluster, &pbrokers, &ptopics} {
+				if pall {
+					*v = true
+				}
+				if *v {
 					sections++
 				}
 			}
@@ -104,6 +107,7 @@ If the brokers section is printed, the controller broker is marked with *.
 	cmd.Flags().BoolVarP(&ptopics, "topics", "t", false, "print topics section")
 	cmd.Flags().BoolVarP(&pinternal, "internal", "i", false, "print internal topics if all topics are printed")
 	cmd.Flags().BoolVarP(&detailed, "detailed", "d", false, "include detailed information about all topic partitions")
+	cmd.Flags().BoolVarP(&pall, "all", "a", false, "shortcut for -cbti")
 	return cmd
 }
 
