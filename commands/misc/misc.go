@@ -21,6 +21,13 @@ import (
 	"github.com/twmb/kcl/out"
 )
 
+func apiVersionsRequest() *kmsg.ApiVersionsRequest {
+	return &kmsg.ApiVersionsRequest{
+		ClientSoftwareName:    "kcl",
+		ClientSoftwareVersion: "v0.0.0",
+	}
+}
+
 func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "misc",
@@ -103,7 +110,7 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 		Short: "Print broker API versions for each Kafka request type",
 		Args:  cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
-			kresp, err := cl.Client().Request(context.Background(), new(kmsg.ApiVersionsRequest))
+			kresp, err := cl.Client().Request(context.Background(), apiVersionsRequest())
 			out.MaybeDie(err, "unable to request API versions: %v", err)
 
 			if cl.AsJSON() {
@@ -114,6 +121,7 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 			defer tw.Flush()
 
 			resp := kresp.(*kmsg.ApiVersionsResponse)
+
 			fmt.Fprintf(tw, "NAME\tMAX\n")
 			for _, k := range resp.ApiKeys {
 				kind := kmsg.NameForKey(k.ApiKey)
@@ -143,7 +151,7 @@ func probeVersion(cl *client.Client) {
 	// Kafka will close the connection. ErrConnDead is
 	// retried automatically, so we must stop that.
 	cl.AddOpt(kgo.RequestRetries(0))
-	kresp, err := cl.Client().Request(context.Background(), new(kmsg.ApiVersionsRequest))
+	kresp, err := cl.Client().Request(context.Background(), apiVersionsRequest())
 	if err != nil { // pre 0.10.0 had no api versions
 		// 0.9.0 has list groups
 		if _, err = cl.Client().Request(context.Background(), new(kmsg.ListGroupsRequest)); err == nil {
