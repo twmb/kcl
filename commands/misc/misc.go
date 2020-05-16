@@ -16,6 +16,7 @@ import (
 	"github.com/twmb/kafka-go/pkg/kerr"
 	"github.com/twmb/kafka-go/pkg/kgo"
 	"github.com/twmb/kafka-go/pkg/kmsg"
+	"github.com/twmb/kafka-go/pkg/kversion"
 
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/out"
@@ -178,31 +179,48 @@ func probeVersion(cl *client.Client) {
 	}
 
 	resp := kresp.(*kmsg.ApiVersionsResponse)
-	keys := resp.ApiKeys
-	num := len(resp.ApiKeys)
+	got := make(kversion.Versions, len(resp.ApiKeys))
+	for i, key := range resp.ApiKeys {
+		got[i] = key.MaxVersion
+	}
+
+	eq := func(test kversion.Versions) bool {
+		if len(test) != len(got) {
+			return false
+		}
+		for i, v := range test {
+			if got[i] != v {
+				return false
+			}
+		}
+		return true
+	}
+
 	switch {
-	case num == 19:
+	case eq(kversion.V0_10_0()):
 		fmt.Println("Kafka 0.10.0")
-	case num == 21 && keys[6].MaxVersion == 2:
+	case eq(kversion.V0_10_1()):
 		fmt.Println("Kafka 0.10.1")
-	case num == 21 && keys[6].MaxVersion == 3:
+	case eq(kversion.V0_10_2()):
 		fmt.Println("Kafka 0.10.2")
-	case num == 34:
-		fmt.Println("Kafka 0.11.1")
-	case num == 38:
+	case eq(kversion.V0_11_0()):
+		fmt.Println("Kafka 0.11.0")
+	case eq(kversion.V1_0_0()):
 		fmt.Println("Kafka 1.0.0")
-	case num == 43 && keys[0].MaxVersion == 5:
+	case eq(kversion.V1_1_0()):
 		fmt.Println("Kafka 1.1.0")
-	case num == 43 && keys[0].MaxVersion == 6:
+	case eq(kversion.V2_0_0()):
 		fmt.Println("Kafka 2.0.0")
-	case num == 43 && keys[0].MaxVersion == 7:
+	case eq(kversion.V2_1_0()):
 		fmt.Println("Kafka 2.1.0")
-	case num == 44:
+	case eq(kversion.V2_2_0()):
 		fmt.Println("Kafka 2.2.0")
-	case num == 45:
+	case eq(kversion.V2_3_0()):
 		fmt.Println("Kafka 2.3.0")
-	case num == 48:
+	case eq(kversion.V2_4_0()):
 		fmt.Println("Kafka 2.4.0")
+	case eq(kversion.V2_5_0()):
+		fmt.Println("Kafka 2.5.0")
 	default:
 		fmt.Println("Unknown version: either tip or between releases")
 	}
