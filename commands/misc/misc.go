@@ -155,7 +155,7 @@ func probeVersion(cl *client.Client) {
 	kresp, err := cl.Client().Request(context.Background(), apiVersionsRequest())
 	if err != nil { // pre 0.10.0 had no api versions
 		// 0.9.0 has list groups
-		if _, err = cl.Client().Request(context.Background(), new(kmsg.ListGroupsRequest)); err == nil {
+		if _, err = cl.Client().Broker(math.MinInt32).Request(context.Background(), new(kmsg.ListGroupsRequest)); err == nil {
 			fmt.Println("Kafka 0.9.0")
 			return
 		}
@@ -230,7 +230,7 @@ func rawCommand(cl *client.Client) *cobra.Command {
 	var key int16
 	cmd := &cobra.Command{
 		Use:   "raw-req",
-		Short: "Issue an arbitrary request as parsed from JSON STDIN.",
+		Short: "Issue an arbitrary request parsed from JSON read from STDIN.",
 		Args:  cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
 			req := kmsg.RequestForKey(key)
