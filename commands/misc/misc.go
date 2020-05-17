@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"math"
 	"os"
+	"sort"
 	"strconv"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/twmb/kafka-go/pkg/kversion"
 
 	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/flagutil"
 	"github.com/twmb/kcl/out"
 )
 
@@ -40,6 +42,7 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd.AddCommand(apiVersionsCommand(cl))
 	cmd.AddCommand(probeVersionCommand(cl))
 	cmd.AddCommand(rawCommand(cl))
+	cmd.AddCommand(listOffsetsCommand(cl))
 
 	return cmd
 }
@@ -249,5 +252,197 @@ func rawCommand(cl *client.Client) *cobra.Command {
 		},
 	}
 	cmd.Flags().Int16VarP(&key, "key", "k", -1, "request key")
+	return cmd
+}
+
+func listOffsetsCommand(cl *client.Client) *cobra.Command {
+	var withEpochs bool
+	var readCommitted bool
+
+	cmd := &cobra.Command{
+		Use:   "list-offsets",
+		Short: "List start and end offsets for partitions.",
+		Long: `List start and end offsets for topics or partitions.
+
+The input format is topic:#,#,# or just topic. If a topic is given without
+partitions, a metadata request is issued to figure out all partitions for the
+topic and the output will include the start and end offsets for all partitions.
+
+Multiple topics can be listed, and multiple partitions per topic can be listed.
+
+If --with-epochs is true, the start and end offsets will have /### following
+the offset number, where ### corresponds to the broker epoch at at that given
+offset.
+`,
+		Example: "list-offsets foo:1,2,3 bar:0",
+		Args:    cobra.MinimumNArgs(1),
+		Run: func(_ *cobra.Command, topicParts []string) {
+			tps, err := flagutil.ParseTopicPartitions(topicParts)
+			out.MaybeDie(err, "unable to parse topic partitions: %v", err)
+
+			for topic, partitions := range tps {
+				var metaTopics []kmsg.MetadataRequestTopic
+				if len(partitions) == 0 {
+					metaTopics = append(metaTopics, kmsg.MetadataRequestTopic{Topic: topic})
+				}
+				if len(metaTopics) > 0 {
+					kresp, err := cl.Client().Request(context.Background(), &kmsg.MetadataRequest{Topics: metaTopics})
+					out.MaybeDie(err, "unable to get metadata: %v", err)
+					resp := kresp.(*kmsg.MetadataResponse)
+					for _, topic := range resp.Topics {
+						for _, partition := range topic.Partitions {
+							tps[topic.Topic] = append(tps[topic.Topic], partition.Partition)
+						}
+					}
+				}
+			}
+
+			req := &kmsg.ListOffsetsRequest{
+				ReplicaID:      -1,
+				IsolationLevel: 0,
+			}
+			if readCommitted {
+				req.IsolationLevel = 1
+			}
+			for topic, partitions := range tps {
+				topicReq := kmsg.ListOffsetsRequestTopic{
+					Topic: topic,
+				}
+				for _, partition := range partitions {
+					topicReq.Partitions = append(topicReq.Partitions, kmsg.ListOffsetsRequestTopicPartition{
+						Partition:          partition,
+						CurrentLeaderEpoch: -1,
+						Timestamp:          -2, // earliest
+						MaxNumOffsets:      1,  // just in case <= 0.10.0
+					})
+				}
+				req.Topics = append(req.Topics, topicReq)
+			}
+
+			kresp, err := cl.Client().Request(context.Background(), req)
+			out.MaybeDie(err, "unable to list start offsets: %v", err)
+
+			startResp := kresp.(*kmsg.ListOffsetsResponse)
+
+			for topic := range req.Topics {
+				for partition := range req.Topics[topic].Partitions {
+					req.Topics[topic].Partitions[partition].Timestamp = -1 // latest
+				}
+			}
+
+			kresp, err = cl.Client().Request(context.Background(), req)
+			out.MaybeDie(err, "unable to list end offsets: %v", err)
+
+			endResp := kresp.(*kmsg.ListOffsetsResponse)
+
+			type startEnd struct {
+				err              error
+				startOffset      int64
+				startLeaderEpoch int32
+				endOffset        int64
+				endLeaderEpoch   int32
+			}
+
+			startEnds := make(map[string]map[int32]startEnd)
+
+			for _, topic := range startResp.Topics {
+				topicStartEnds := make(map[int32]startEnd)
+				startEnds[topic.Topic] = topicStartEnds
+				for _, partition := range topic.Partitions {
+					if startResp.Version == 0 && len(partition.OldStyleOffsets) > 0 {
+						partition.Offset = partition.OldStyleOffsets[0]
+					}
+					topicStartEnds[partition.Partition] = startEnd{
+						err:              kerr.ErrorForCode(partition.ErrorCode),
+						startOffset:      partition.Offset,
+						startLeaderEpoch: partition.LeaderEpoch,
+					}
+				}
+			}
+
+			for _, topic := range endResp.Topics {
+				topicStartEnds := startEnds[topic.Topic]
+				var startErr bool
+				if topicStartEnds == nil {
+					topicStartEnds = make(map[int32]startEnd)
+					startEnds[topic.Topic] = topicStartEnds
+					startErr = true
+				}
+				for _, partition := range topic.Partitions {
+					partStartEnd, ok := topicStartEnds[partition.Partition]
+					if !ok {
+						startErr = true
+					}
+					if endResp.Version == 0 && len(partition.OldStyleOffsets) > 0 {
+						partition.Offset = partition.OldStyleOffsets[0]
+					}
+					partStartEnd.endOffset = partition.Offset
+					partStartEnd.endLeaderEpoch = partition.LeaderEpoch
+
+					if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
+						partStartEnd.err = err
+					} else if startErr {
+						partStartEnd.err = kerr.UnknownServerError
+					}
+
+					topicStartEnds[partition.Partition] = partStartEnd
+				}
+			}
+
+			type partStartEnd struct {
+				part int32
+				startEnd
+			}
+			type sortedTopic struct {
+				topic string
+				parts []partStartEnd
+			}
+			var sorted []sortedTopic
+			for topic, partitions := range startEnds {
+				st := sortedTopic{topic: topic}
+				for part, startEnd := range partitions {
+					st.parts = append(st.parts, partStartEnd{part: part, startEnd: startEnd})
+				}
+				sort.Slice(st.parts, func(i, j int) bool { return st.parts[i].part < st.parts[j].part })
+				sorted = append(sorted, st)
+			}
+			sort.Slice(sorted, func(i, j int) bool { return sorted[i].topic < sorted[j].topic })
+
+			tw := out.BeginTabWrite()
+			defer tw.Flush()
+
+			fmt.Fprintf(tw, "TOPIC\tPARTITION\tSTART\tEND\tERROR\n")
+
+			for _, topic := range sorted {
+				for _, part := range topic.parts {
+					if part.err != nil {
+						fmt.Fprintf(tw, "%s\t%d\t\t\t%v\n", topic.topic, part.part, part.err)
+						continue
+					}
+					if withEpochs {
+						fmt.Fprintf(tw, "%s\t%d\t%d/%d\t%d/%d\t\n",
+							topic.topic,
+							part.part,
+							part.startOffset,
+							part.startLeaderEpoch,
+							part.endOffset,
+							part.endLeaderEpoch,
+						)
+					} else {
+						fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t\n",
+							topic.topic,
+							part.part,
+							part.startOffset,
+							part.endOffset,
+						)
+					}
+				}
+			}
+		},
+	}
+
+	cmd.Flags().BoolVar(&readCommitted, "committed", false, "whether to list only committed offsets as opposed to latest")
+	cmd.Flags().BoolVar(&withEpochs, "with-epochs", false, "whether to include the epoch for the start and end offsets")
+
 	return cmd
 }
