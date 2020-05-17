@@ -117,7 +117,6 @@ func describeGroupVerbose(group *consumerGroup) {
 			return assignment.Topics[i].Topic < assignment.Topics[j].Topic
 		})
 
-		fmt.Println("\tASSIGNMENTS")
 		for _, topic := range assignment.Topics {
 			sort.Slice(topic.Partitions, func(i, j int) bool { return topic.Partitions[i] < topic.Partitions[j] })
 			fmt.Printf("\t%s => %v\n", topic.Topic, topic.Partitions)
