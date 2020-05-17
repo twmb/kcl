@@ -169,20 +169,20 @@ func (c *consumption) run(topics []string) {
 
 func (c *consumption) parseOffset() kgo.Offset {
 	c.end = -1
-	var opts []kgo.OffsetOpt
+	o := kgo.NewOffset()
 	switch {
 	case c.offset == "start":
-		opts = append(opts, kgo.AtStart())
+		o = o.AtStart()
 	case c.offset == "end":
-		opts = append(opts, kgo.AtEnd())
+		o = o.AtEnd()
 	case strings.HasPrefix(c.offset, "end-"):
 		v, err := strconv.Atoi(c.offset[4:])
 		out.MaybeDie(err, "unable to parse relative end offset number in %q: %v", c.offset, err)
-		opts = append(opts, kgo.AtEnd(), kgo.Relative(int64(-v)))
+		o = o.AtEnd().Relative(int64(-v))
 	case strings.HasPrefix(c.offset, "start+"):
 		v, err := strconv.Atoi(c.offset[6:])
 		out.MaybeDie(err, "unable to parse relative start offset number in %q: %v", c.offset, err)
-		opts = append(opts, kgo.AtStart(), kgo.Relative(int64(v)))
+		o = o.AtStart().Relative(int64(v))
 	default:
 		match := regexp.MustCompile(`^(\d+)(?:-(\d+))?$`).FindStringSubmatch(c.offset)
 		if len(match) == 0 {
@@ -193,9 +193,9 @@ func (c *consumption) parseOffset() kgo.Offset {
 		if match[2] != "" {
 			c.end, _ = strconv.ParseInt(match[2], 10, 64)
 		}
-		opts = append(opts, kgo.At(at))
+		o = o.At(at)
 	}
-	return kgo.NewOffset(opts...)
+	return o
 }
 
 type consumeOutput struct {
