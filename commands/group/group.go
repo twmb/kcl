@@ -127,7 +127,7 @@ is a topic and 1,2,3 are partition numbers.
 					Topic: topic,
 				}
 				for _, partition := range partitions {
-					dt.Partitions = append(dt.Partitions, kmsg.OffsetDeleteRequestTopicPartition{partition})
+					dt.Partitions = append(dt.Partitions, kmsg.OffsetDeleteRequestTopicPartition{Partition: partition})
 				}
 				req.Topics = append(req.Topics, dt)
 			}

@@ -2,9 +2,9 @@ package group
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -18,9 +18,9 @@ import (
 func describeCommand(cl *client.Client) *cobra.Command {
 	var req kmsg.DescribeGroupsRequest
 	var verbose bool
+	var readCommitted bool
 
-	// TODO --lag to also issue fetch offsets & list offsets
-	// TODO include authorized options
+	// TODO include authorized options?
 	cmd := &cobra.Command{
 		Use:   "describe GROUPS...",
 		Short: "Describe Kafka groups",
@@ -38,7 +38,7 @@ func describeCommand(cl *client.Client) *cobra.Command {
 
 			if verbose {
 				for _, group := range resp.Groups {
-					describeGroupVerbose(&group)
+					describeGroupVerbose(cl, &group, readCommitted)
 					fmt.Println()
 				}
 				return
@@ -63,12 +63,13 @@ func describeCommand(cl *client.Client) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "verbose printing including client id, host, user data")
+	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "verbose printing including client id, host, committed offset, lag, and user data")
+	cmd.Flags().BoolVar(&readCommitted, "committed", false, "if describing verbosely, whether to list only committed offsets as opposed to latest")
 
 	return cmd
 }
 
-func describeGroupVerbose(group *consumerGroup) {
+func describeGroupVerbose(cl *client.Client, group *consumerGroup, readCommitted bool) {
 	tw := out.BeginTabWrite()
 	fmt.Fprintf(tw, "ID\t%s\n", group.Group)
 	fmt.Fprintf(tw, "STATE\t%s\n", group.State)
@@ -83,43 +84,165 @@ func describeGroupVerbose(group *consumerGroup) {
 	tw.Flush()
 	fmt.Println()
 
-	var sb strings.Builder
-	tw = out.BeginTabWriteTo(&sb)
-	fmt.Fprintf(tw, "MEMBER ID\tINSTANCE ID\tCLIENT ID\tCLIENT HOST\tUSER DATA\n")
-	for _, member := range group.Members {
-		instanceID := ""
-		if member.InstanceID != nil {
-			instanceID = *member.InstanceID
-		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
-			member.MemberID,
-			instanceID,
-			member.ClientID,
-			member.ClientHost,
-			string(member.MemberAssignment.UserData))
+	type offsets struct {
+		err          error
+		endOffset    int64
+		commitOffset int64
+		member       *consumerGroupMember
 	}
-	tw.Flush()
+	allOffsets := make(map[string]map[int32]offsets)
 
-	lines := strings.Split(sb.String(), "\n")
-	lines = lines[:len(lines)-1] // trim trailing empty line
-	fmt.Println(lines[0])
-
-	for i, line := range lines[1:] {
-		fmt.Println(line)
-
-		member := group.Members[i]
-		assignment := &member.MemberAssignment
-		if len(assignment.Topics) == 0 {
-			continue
+	// For the group, first get the last committed offsets. This will
+	// also tell us the topics and partitions in the group, which we
+	// will use for listing offsets.
+	{
+		req := &kmsg.OffsetFetchRequest{
+			Group:         group.Group,
+			RequireStable: false,
 		}
 
-		sort.Slice(assignment.Topics, func(i, j int) bool {
-			return assignment.Topics[i].Topic < assignment.Topics[j].Topic
-		})
+		kresp, err := cl.Client().Request(context.Background(), req)
+		out.MaybeDie(err, "unable to fetch offsets: %v", err)
+		resp := kresp.(*kmsg.OffsetFetchResponse)
 
-		for _, topic := range assignment.Topics {
-			sort.Slice(topic.Partitions, func(i, j int) bool { return topic.Partitions[i] < topic.Partitions[j] })
-			fmt.Printf("\t%s => %v\n", topic.Topic, topic.Partitions)
+		for _, topic := range resp.Topics {
+			topicPartitions := allOffsets[topic.Topic]
+			if topicPartitions == nil {
+				topicPartitions = make(map[int32]offsets)
+				allOffsets[topic.Topic] = topicPartitions
+			}
+			for _, partition := range topic.Partitions {
+				topicPartitions[partition.Partition] = offsets{
+					err:          kerr.ErrorForCode(partition.ErrorCode),
+					commitOffset: partition.Offset,
+				}
+			}
+		}
+	}
+
+	// Now we load the partition's latest offsets with list offsets.
+	{
+		req := &kmsg.ListOffsetsRequest{
+			ReplicaID:      -1,
+			IsolationLevel: 0,
+		}
+		if readCommitted {
+			req.IsolationLevel = 1
+		}
+		for topic, partitions := range allOffsets {
+			reqTopic := kmsg.ListOffsetsRequestTopic{
+				Topic: topic,
+			}
+			for partition, _ := range partitions {
+				reqTopic.Partitions = append(reqTopic.Partitions, kmsg.ListOffsetsRequestTopicPartition{
+					Partition:          partition,
+					CurrentLeaderEpoch: -1,
+					Timestamp:          -1,
+				})
+			}
+			req.Topics = append(req.Topics, reqTopic)
+		}
+
+		kresp, err := cl.Client().Request(context.Background(), req)
+		out.MaybeDie(err, "unable to list offsets: %v", err)
+		resp := kresp.(*kmsg.ListOffsetsResponse)
+
+		for _, topic := range resp.Topics {
+			for _, partition := range topic.Partitions {
+				offsets := allOffsets[topic.Topic][partition.Partition]
+				if offsets.err == nil {
+					offsets.err = kerr.ErrorForCode(partition.ErrorCode)
+				}
+				offsets.endOffset = partition.Offset
+				allOffsets[topic.Topic][partition.Partition] = offsets
+			}
+		}
+	}
+
+	// Now we pair the member to the partitions.
+	for i := range group.Members {
+		member := &group.Members[i]
+		for _, topic := range member.MemberAssignment.Topics {
+			if allOffsets[topic.Topic] == nil {
+				allOffsets[topic.Topic] = make(map[int32]offsets)
+			}
+			topicOffsets := allOffsets[topic.Topic]
+			for _, partition := range topic.Partitions {
+				partOffsets, exists := topicOffsets[partition]
+				if !exists {
+					partOffsets = offsets{
+						err:          errors.New("UNKNOWN_YET_ASSIGNED"),
+						endOffset:    -1,
+						commitOffset: -1,
+					}
+				}
+				partOffsets.member = member
+				topicOffsets[partition] = partOffsets
+			}
+		}
+	}
+
+	// Now we sort the map so that our output will be nice.
+	type partOffsets struct {
+		part int32
+		offsets
+	}
+	type topicOffsets struct {
+		topic string
+		parts []partOffsets
+	}
+	var sortedOffsets []topicOffsets
+	for topic, partitions := range allOffsets {
+		to := topicOffsets{
+			topic: topic,
+		}
+		for partition, offsets := range partitions {
+			to.parts = append(to.parts, partOffsets{
+				part:    partition,
+				offsets: offsets,
+			})
+		}
+		sort.Slice(to.parts, func(i, j int) bool { return to.parts[i].part < to.parts[j].part })
+		sortedOffsets = append(sortedOffsets, to)
+	}
+	sort.Slice(sortedOffsets, func(i, j int) bool { return sortedOffsets[i].topic < sortedOffsets[j].topic })
+
+	// Finally, we can print everything.
+	tw = out.BeginTabWrite()
+	defer tw.Flush()
+	fmt.Fprintf(tw, "TOPIC\tPARTITION\tCURRENT OFFSET\tLOG END OFFSET\tLAG\tMEMBER ID\tINSTANCE ID\tCLIENT ID\tHOST\tUSER DATA\tLOAD ERR\n")
+	for _, topic := range sortedOffsets {
+		for _, part := range topic.parts {
+			memberID, instanceID, clientID, host, userData := "", "", "", "", ""
+			loadErr := "UNASSIGNED"
+			if part.member != nil {
+				loadErr = ""
+				m := part.member
+				memberID = m.MemberID
+				if m.InstanceID != nil {
+					instanceID = *m.InstanceID
+				}
+				clientID = m.ClientID
+				host = m.ClientHost
+				userData = string(m.MemberAssignment.UserData)
+			}
+			if part.err != nil {
+				loadErr = part.err.Error()
+			}
+
+			fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				topic.topic,
+				part.part,
+				part.commitOffset,
+				part.endOffset,
+				part.endOffset-part.commitOffset,
+				memberID,
+				instanceID,
+				clientID,
+				host,
+				userData,
+				loadErr,
+			)
 		}
 	}
 }
