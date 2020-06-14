@@ -35,6 +35,8 @@ type consumption struct {
 	format     string
 	escapeChar string
 
+	fetchMaxBytes int32
+
 	start int64 // if exact range
 	end   int64 // if exact range
 }
@@ -115,6 +117,8 @@ func (c *consumption) run(topics []string) {
 		c.cl.AddOpt(kgo.FetchIsolationLevel(kgo.ReadCommitted()))
 	}
 
+	c.cl.AddOpt(kgo.FetchMaxBytes(c.fetchMaxBytes))
+
 	cl := c.cl.Client()
 	if len(c.group) > 0 && !(isConsumerOffsets || isTransactionState) {
 		cl.AssignGroup(c.group, groupOpts...)
@@ -153,12 +157,10 @@ func (c *consumption) run(topics []string) {
 		atomic.StoreUint32(&co.quit, 1)
 		co.cancel()
 		<-co.done
-		commitDone := make(chan struct{})
-		wait := func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, _ error) {
-			close(commitDone)
-		}
-		cl.CommitOffsets(context.Background(), cl.Uncommitted(), wait)
-		<-commitDone
+		cl.BlockingCommitOffsets(context.Background(), cl.UncommittedOffsets(),
+			func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, _ error) {
+				// TODO log to stderr on any partition failure
+			})
 		cl.Close() // leaves group
 	}()
 	select {

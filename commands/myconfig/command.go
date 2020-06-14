@@ -79,6 +79,18 @@ OPTIONS
   tls_server_name="127.0.0.1"
      Server name to use for connecting to brokers over TLS.
 
+  sasl_method="scram_sha_256"
+     SASL method to use. Must be paired with sasl_user and sasl_pass.
+     Possible values are "plaintext", "scram-sha-256", or "scram-sha-512".
+     Dashes and underscores are stripped.
+
+  sasl_zid="zid"
+  sasl_user="user"
+  sasl_pass="pass"
+     SASL authzid (always optional), user, and pass.
+
+  sasl_scram_is_token=false
+     Specifies that the sasl user and pass came from a delegation token.
 `
 	return &cobra.Command{
 		Use:   "help",

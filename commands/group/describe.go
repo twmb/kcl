@@ -2,7 +2,6 @@ package group
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 
@@ -29,6 +28,7 @@ func describeCommand(cl *client.Client) *cobra.Command {
 			req.Groups = args
 
 			kresp, err := cl.Client().Request(context.Background(), &req)
+
 			out.MaybeDie(err, "unable to describe groups: %v", err)
 			resp := unbinaryGroupDescribeMembers(kresp.(*kmsg.DescribeGroupsResponse))
 
@@ -82,7 +82,6 @@ func describeGroupVerbose(cl *client.Client, group *consumerGroup, readCommitted
 	}
 	fmt.Fprintf(tw, "ERROR\t%s\n", errStr)
 	tw.Flush()
-	fmt.Println()
 
 	type offsets struct {
 		err          error
@@ -170,8 +169,9 @@ func describeGroupVerbose(cl *client.Client, group *consumerGroup, readCommitted
 			for _, partition := range topic.Partitions {
 				partOffsets, exists := topicOffsets[partition]
 				if !exists {
+					// assigned, but partition is empty
 					partOffsets = offsets{
-						err:          errors.New("UNKNOWN_YET_ASSIGNED"),
+						err:          nil,
 						endOffset:    -1,
 						commitOffset: -1,
 					}
@@ -214,7 +214,7 @@ func describeGroupVerbose(cl *client.Client, group *consumerGroup, readCommitted
 	for _, topic := range sortedOffsets {
 		for _, part := range topic.parts {
 			memberID, instanceID, clientID, host, userData := "", "", "", "", ""
-			loadErr := "UNASSIGNED"
+			loadErr := ""
 			if part.member != nil {
 				loadErr = ""
 				m := part.member
@@ -230,12 +230,18 @@ func describeGroupVerbose(cl *client.Client, group *consumerGroup, readCommitted
 				loadErr = part.err.Error()
 			}
 
-			fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			lag := part.endOffset - part.commitOffset
+			lagstr := fmt.Sprintf("%d", lag)
+			if lag < 0 {
+				lagstr = "???"
+			}
+
+			fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				topic.topic,
 				part.part,
 				part.commitOffset,
 				part.endOffset,
-				part.endOffset-part.commitOffset,
+				lagstr,
 				memberID,
 				instanceID,
 				clientID,

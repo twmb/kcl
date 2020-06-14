@@ -3,7 +3,6 @@ package produce
 import (
 	"bufio"
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"unicode/utf8"
@@ -18,11 +17,11 @@ import (
 
 func Command(cl *client.Client) *cobra.Command {
 	var (
-		informat    string
-		maxBuf      int
-		verbose     bool
-		compression string
-		escapeChar  string
+		informat      string
+		maxBuf        int
+		verboseFormat string
+		compression   string
+		escapeChar    string
 	)
 
 	cmd := &cobra.Command{
@@ -140,6 +139,14 @@ Unfortunately, with exact sizing, the format string is unavoidably noisy.
 			if reader.ParsesTopic() && len(args) == 1 {
 				out.Die("cannot produce to a specific topic; the parse format specifies that it parses a topic")
 			}
+
+			var verboseFn func([]byte, *kgo.Record) []byte
+			var verboseBuf []byte
+			if verboseFormat != "" {
+				verboseFn, err = format.ParseWriteFormat(verboseFormat, escape)
+				out.MaybeDie(err, "unable to parse verbose-format: %v", err)
+			}
+
 			if !reader.ParsesTopic() && len(args) == 0 {
 				out.Die("topic missing from both produce line and from parse format")
 			}
@@ -174,9 +181,9 @@ Unfortunately, with exact sizing, the format string is unavoidably noisy.
 				}
 				err = cl.Client().Produce(context.Background(), r, func(r *kgo.Record, err error) {
 					out.MaybeDie(err, "unable to produce record: %v", err)
-					if verbose {
-						fmt.Printf("Successful send to topic %s partition %d offset %d\n",
-							r.Topic, r.Partition, r.Offset)
+					if verboseFn != nil {
+						verboseBuf = verboseFn(verboseBuf[:0], r)
+						os.Stdout.Write(verboseBuf)
 					}
 				})
 				out.MaybeDie(err, "unable to produce record: %v", err)
@@ -187,10 +194,10 @@ Unfortunately, with exact sizing, the format string is unavoidably noisy.
 	}
 
 	cmd.Flags().StringVarP(&informat, "format", "f", "%v\n", "record only delimiter")
-	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "verbose information of the producing of records")
+	cmd.Flags().StringVarP(&verboseFormat, "verbose-format", "v", "", "if non-empty, what to write to stdout when a record is successfully produced")
 	cmd.Flags().IntVar(&maxBuf, "max-delim-buf", bufio.MaxScanTokenSize, "maximum input to buffer before a delimiter is required, if using delimiters")
 	cmd.Flags().StringVarP(&compression, "compression", "z", "snappy", "compression to use for producing batches (none, gzip, snappy, lz4, zstd)")
-	cmd.Flags().StringVarP(&escapeChar, "escape-char", "c", "%", "character to use for beginning a record field escape (accepts any utf8)")
+	cmd.Flags().StringVarP(&escapeChar, "escape-char", "c", "%", "character to use for beginning a record field escape (accepts any utf8, for both format and verbose-format)")
 
 	return cmd
 }

@@ -49,7 +49,6 @@ topic and 1,2,3 are partition numbers.
 To avoid accidental triggers, this command requires a --run flag to run.
 `,
 		Example: "elect-leaders --run foo:1,2,3 bar:9",
-		Args:    cobra.MinimumNArgs(1),
 		Run: func(_ *cobra.Command, topicParts []string) {
 			tps, err := flagutil.ParseTopicPartitions(topicParts)
 			out.MaybeDie(err, "unable to parse topic partitions: %v", err)

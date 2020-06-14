@@ -21,6 +21,7 @@ func (c *consumption) command() *cobra.Command {
 	cmd.Flags().StringVarP(&c.format, "format", "f", `%v\n`, "output format")
 	cmd.Flags().BoolVarP(&c.regex, "regex", "r", false, "parse topics as regex; consume any topic that matches any expression")
 	cmd.Flags().StringVarP(&c.escapeChar, "escape-char", "c", "%", "character to use for beginning a record field escape (accepts any utf8)")
+	cmd.Flags().Int32Var(&c.fetchMaxBytes, "fetch-max-bytes", 1<<20, "maximum amount of bytes per fetch request per broker")
 	// TODO: wait millis, size
 	return cmd
 }
@@ -46,6 +47,7 @@ Format options:
   %o    record offset
   %e    record leader epoch
   %d    record timestamp (date)
+  %i    format iteration number (starts at 1)
   %%    percent sign
   %{    left brace
   \n    newline
@@ -111,7 +113,7 @@ The Go time formatting follows the same delimiting rules as strftime.
 
 For example,
   %d{go#06-01-02 15:04:05.999#}
-will output the timestamp as HH:MM:SS.ms.
+will output the timestamp as YY-MM-DD HH:MM:SS.ms.
 
 
 EXAMPLES

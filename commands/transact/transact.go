@@ -1,5 +1,4 @@
 // Package transact provides transactions.
-// TODO docs, Long help.
 package transact
 
 import (
@@ -15,13 +14,30 @@ import (
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
-	"github.com/twmb/kafka-go/pkg/kerr"
+
 	"github.com/twmb/kafka-go/pkg/kgo"
-	"github.com/twmb/kafka-go/pkg/kmsg"
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/format"
 	"github.com/twmb/kcl/out"
 )
+
+const help = `Consume records, exec a program to modify them, and then produce.
+
+This command is wraps consuming and producing in transactions. Since this is
+mostly a combination of consuming and producing, docs for consuming and
+producing are elided. See the docs under the consume and produce commands.
+
+Transactions require a globally unique transactional ID. If the transactional
+ID is shared with anything else, either kcl will be fenced or that other thing
+will be fenced.
+
+kcl executes the ETL_COMMAND for every batch of records received, formatting
+the records as requested per the -w flag to the commands STDIN, and reading
+back modified records from the commands STDOUT as per the -r flag.
+
+Once all records are read, kcl begins a transaction, writes all records to
+Kafka, and finishes the transaction.
+`
 
 func Command(cl *client.Client) *cobra.Command {
 	var (
@@ -47,8 +63,9 @@ func Command(cl *client.Client) *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "transact ARG...",
+		Use:   "transact [FLAGS] ETL_COMMAND...",
 		Short: "Transactionally consume, exec a program, and write back to Kafka",
+		Long:  help,
 		Args:  cobra.MinimumNArgs(1), // exec
 		Run: func(_ *cobra.Command, args []string) {
 			if len(escapeChar) == 0 {
@@ -143,10 +160,10 @@ func Command(cl *client.Client) *cobra.Command {
 
 			// If we made it this far, our options are valid:
 			// assign our group and begin execing.
-			cl.Client().AssignGroup(group, groupOpts...)
+			txnSess := cl.Client().AssignGroupTransactSession(group, groupOpts...)
 
 			quitCtx, cancel := context.WithCancel(context.Background())
-			go transact(quitCtx, cl.Client(), w, r, destTopic, verbose, args...)
+			go transact(quitCtx, cl.Client(), txnSess, w, r, destTopic, verbose, args...)
 
 			<-sigs
 			cancel()
@@ -168,7 +185,7 @@ func Command(cl *client.Client) *cobra.Command {
 
 	cmd.Flags().IntVar(&maxBuf, "max-delim-buf", bufio.MaxScanTokenSize, "maximum input to buffer before a delimiter is required, if using delimiters")
 	cmd.Flags().StringVarP(&compression, "compression", "z", "snappy", "compression to use for producing batches (none, gzip, snappy, lz4, zstd)")
-	cmd.Flags().StringVarP(&destTopic, "destination-topic", "d", "", "if non-empty, the topic to produce to (read-format must not contain %t")
+	cmd.Flags().StringVarP(&destTopic, "destination-topic", "d", "", "if non-empty, the topic to produce to (read-format must not contain %t)")
 	cmd.Flags().StringVarP(&txnID, "txn-id", "x", "", "transactional ID")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "verbose printing of transactions")
 
@@ -182,6 +199,7 @@ func Command(cl *client.Client) *cobra.Command {
 func transact(
 	quitCtx context.Context,
 	cl *kgo.Client,
+	txnSess *kgo.GroupTransactSession,
 	w func([]byte, *kgo.Record) []byte,
 	r *format.Reader,
 	destTopic string,
@@ -261,16 +279,17 @@ func transact(
 			fmt.Printf("Finished receiving %d records, beginning a transaction to produce them...\n", len(received))
 		}
 
-		err = cl.BeginTransaction()
-		out.MaybeDie(err, "error beginning transaction: %v", err)
+		if err = txnSess.Begin(); err != nil {
+			out.MaybeDie(err, "error beginning transaction: %v", err)
+		}
 
-		var abort uint32
+		var stopProduction uint32
 		var firstProduceErr error
 		ctx, cancel := context.WithCancel(context.Background())
 		for _, record := range received {
-			cl.Produce(context.Background(), record, func(_ *kgo.Record, err error) {
+			cl.Produce(ctx, record, func(_ *kgo.Record, err error) {
 				if err != nil {
-					if atomic.SwapUint32(&abort, 1) == 0 {
+					if atomic.SwapUint32(&stopProduction, 1) == 0 {
 						firstProduceErr = err
 						cancel()
 					}
@@ -278,45 +297,22 @@ func transact(
 			})
 		}
 
-		if err = cl.Flush(ctx); err == nil {
-			if verbose {
-				fmt.Println("Finished producing records, committing offsets...")
+		if verbose {
+			if firstProduceErr == nil {
+				fmt.Println("Production complete, flushing and potentially committing...")
+			} else {
+				fmt.Fprintf(os.Stderr, "Production of records failed, first produce error: %v; aborting transaction...\n", firstProduceErr)
 			}
-
-			done := make(chan struct{})
-			cl.CommitTransactionOffsets(context.Background(), cl.Uncommitted(),
-				func(_ *kmsg.TxnOffsetCommitRequest, resp *kmsg.TxnOffsetCommitResponse, err error) {
-					defer close(done)
-					if err != nil {
-						abort = 1
-						fmt.Fprintf(os.Stderr, "Offset commit failure: %v", err)
-						return
-					}
-
-					for _, t := range resp.Topics {
-						for _, p := range t.Partitions {
-							if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
-								abort = 1
-								fmt.Fprintf(os.Stderr, "Offset commit failure on topic %s partition %d: %v\n",
-									t.Topic, p.Partition, err)
-							}
-						}
-					}
-				})
-			<-done
 		}
 
-		if abort == 1 {
-			if firstProduceErr != nil {
-				fmt.Fprintf(os.Stderr, "Produce error, first error encountered: %v\n", err)
-			}
-			fmt.Fprintln(os.Stderr, "Aborting transaction...")
-		} else if verbose {
-			fmt.Println("Committing transaction")
-		}
-
-		err = cl.EndTransaction(context.Background(), abort == 0)
+		committed, err := txnSess.End(context.Background(), kgo.TransactionEndTry(firstProduceErr == nil))
 		out.MaybeDie(err, "unable to end transaction: %v", err)
+
+		if !committed {
+			fmt.Fprintln(os.Stderr, "Transaction was aborted.")
+		} else if verbose {
+			fmt.Println("Transaction was committed.")
+		}
 	}
 
 }

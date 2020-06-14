@@ -48,11 +48,9 @@ type Cfg struct {
 
 	SASLMethod string `toml:"sasl_method,omitempty"`
 
-	PlainUser string `toml:"sasl_plain_user,omitempty"`
-	PlainPass string `toml:"sasl_plain_pass,omitempty"`
-
-	ScramUser    string `toml:"sasl_scram_user,omitempty"`
-	ScramPass    string `toml:"sasl_scram_pass,omitempty"`
+	SASLZid      string `toml:"sasl_zid,omitempty"`
+	SASLUser     string `toml:"sasl_user,omitempty"`
+	SASLPass     string `toml:"sasl_pass,omitempty"`
 	ScramIsToken bool   `toml:"sasl_scram_is_token,omitempty"`
 }
 
@@ -61,6 +59,9 @@ type Client struct {
 	opts   []kgo.Opt
 	once   sync.Once
 	client *kgo.Client
+
+	logLevel string
+	logFile  string
 
 	asVersion string
 	asJSON    bool
@@ -97,6 +98,8 @@ func New(root *cobra.Command) *Client {
 		c.defaultCfgPath = filepath.Join(cfgDir, "kcl", "config.toml")
 	}
 
+	root.PersistentFlags().StringVar(&c.logLevel, "log-level", "none", "log level to use for basic logging (none, error, warn, info, debug)")
+	root.PersistentFlags().StringVar(&c.logFile, "log-file", "", "log to this file rather than STDERR (if log-level is not none; file must not exist)")
 	root.PersistentFlags().StringVar(&c.cfgPath, "config-path", c.defaultCfgPath, "path to confile file (lowest priority)")
 	root.PersistentFlags().BoolVarP(&c.noCfgFile, "no-config", "Z", false, "do not load any config file")
 	root.PersistentFlags().StringArrayVarP(&c.cfgOverrides, "config-opt", "X", nil, "flag provided config option (highest priority)")
@@ -143,6 +146,7 @@ func (c *Client) fillOpts() {
 	c.parseCfgFile()        // loads config file if needed
 	c.processOverrides()    // overrides config values just loaded
 	c.maybeAddMaxVersions() // fills MaxVersions if necessary
+	c.parseLogLevel()       // adds basic logger if necessary
 
 	if err := c.maybeAddSASL(); err != nil {
 		out.Die("sasl error: %v", err)
@@ -152,7 +156,7 @@ func (c *Client) fillOpts() {
 	if err != nil {
 		out.Die("%s", err)
 	} else if tlscfg != nil {
-		c.AddOpt(kgo.Dial(func(host string) (net.Conn, error) {
+		c.AddOpt(kgo.Dialer(func(host string) (net.Conn, error) {
 			cloned := tlscfg.Clone()
 			if c.cfg.TLSServerName != "" {
 				cloned.ServerName = c.cfg.TLSServerName
@@ -279,27 +283,34 @@ func (c *Client) maybeAddMaxVersions() {
 
 func (c *Client) maybeAddSASL() error {
 	method := strings.ToLower(strings.TrimSpace(c.cfg.SASLMethod))
-	method = strings.Replace(method, "-", "_", -1)
+	method = strings.Replace(method, "-", "", -1)
+	method = strings.Replace(method, "_", "", -1)
 
 	switch method {
 	case "":
-	case "plain", "plaintext":
-		c.AddOpt(kgo.SASL(plain.Plain(func(context.Context) (string, string, error) {
-			return c.cfg.PlainUser, c.cfg.PlainPass, nil
+	case "plaintext":
+		c.AddOpt(kgo.SASL(plain.Plain(func(context.Context) (plain.Auth, error) {
+			return plain.Auth{
+				Zid:  c.cfg.SASLZid,
+				User: c.cfg.SASLUser,
+				Pass: c.cfg.SASLPass,
+			}, nil
 		})))
-	case "scram_sha_256", "scram_256", "scram_sha256":
+	case "scramsha256":
 		c.AddOpt(kgo.SASL(scram.Sha256(func(context.Context) (scram.Auth, error) {
 			return scram.Auth{
-				User:    c.cfg.ScramUser,
-				Pass:    c.cfg.ScramPass,
+				Zid:     c.cfg.SASLZid,
+				User:    c.cfg.SASLUser,
+				Pass:    c.cfg.SASLPass,
 				IsToken: c.cfg.ScramIsToken,
 			}, nil
 		})))
-	case "scram_sha_512", "scram_512", "scram_sha512":
+	case "scramsha512":
 		c.AddOpt(kgo.SASL(scram.Sha512(func(context.Context) (scram.Auth, error) {
 			return scram.Auth{
-				User:    c.cfg.ScramUser,
-				Pass:    c.cfg.ScramPass,
+				Zid:     c.cfg.SASLZid,
+				User:    c.cfg.SASLUser,
+				Pass:    c.cfg.SASLPass,
 				IsToken: c.cfg.ScramIsToken,
 			}, nil
 		})))
@@ -377,4 +388,29 @@ func (c *Client) loadTLS() (*tls.Config, error) {
 	}
 
 	return tlscfg, nil
+}
+
+func (c *Client) parseLogLevel() {
+	var level kgo.LogLevel
+	switch ll := strings.ToLower(c.logLevel); ll {
+	default:
+		out.Die("unknown log level %q", ll)
+	case "none":
+		return // no opt added
+	case "error":
+		level = kgo.LogLevelError
+	case "warn":
+		level = kgo.LogLevelWarn
+	case "info":
+		level = kgo.LogLevelInfo
+	case "debug":
+		level = kgo.LogLevelDebug
+	}
+	of := os.Stderr
+	if c.logFile != "" {
+		f, err := os.OpenFile(c.logFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0666)
+		out.MaybeDie(err, "unable to open log-file %q: %v", c.logFile, err)
+		of = f
+	}
+	c.opts = append(c.opts, kgo.WithLogger(kgo.BasicLogger(of, level, nil)))
 }

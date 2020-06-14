@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"github.com/twmb/go-strftime"
@@ -19,6 +20,7 @@ func ParseWriteFormat(format string, escape rune) (func([]byte, *kgo.Record) []b
 	var pieces [][]byte
 	var piece []byte
 	var escstr = string(escape) // for error messages
+	var calls int64
 
 	for len(format) > 0 {
 		char, size := utf8.DecodeRuneInString(format)
@@ -59,7 +61,7 @@ func ParseWriteFormat(format string, escape rune) (func([]byte, *kgo.Record) []b
 			}
 
 			switch next {
-			case 'T', 'K', 'V', 'H', 'p', 'o', 'e':
+			case 'T', 'K', 'V', 'H', 'p', 'o', 'e', 'i':
 				var numfn func([]byte, int64) []byte
 				if handledBrace = openBrace; handledBrace {
 					numfn2, n, err := parseWriteSize(format)
@@ -86,6 +88,8 @@ func ParseWriteFormat(format string, escape rune) (func([]byte, *kgo.Record) []b
 					argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return numfn(out, r.Offset) })
 				case 'e':
 					argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return numfn(out, int64(r.LeaderEpoch)) })
+				case 'i':
+					argFns = append(argFns, func(out []byte, _ *kgo.Record) []byte { return numfn(out, atomic.AddInt64(&calls, 1)) })
 				}
 
 			case 't', 'k', 'v':
