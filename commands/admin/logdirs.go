@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/twmb/kafka-go/pkg/kerr"
 	"github.com/twmb/kafka-go/pkg/kmsg"
+
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/flagutil"
 	"github.com/twmb/kcl/out"
@@ -17,7 +18,7 @@ func logdirsDescribeCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "describe-log-dirs",
 		Short: "Describe log directories for topic partitions.",
-		Long: `Describe log directories for topic partitions.
+		Long: `Describe log directories for topic partitions (Kafka 1.0.0+).
 
 Log directories are partition specific. The size of a directory is the absolute
 size of log segments of a partition, in bytes.
@@ -94,7 +95,7 @@ func logdirsAlterReplicasCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "alter-replica-log-dirs",
 		Short: "Move topic replicas to a destination directory",
-		Long: `Move topic partitions to specified directories.
+		Long: `Move topic partitions to specified directories (Kafka 1.0.0+).
 
 Introduced in Kafka 1.0.0, this command allows for moving replica log
 directories. See KIP-113 for the motivation.

@@ -40,7 +40,7 @@ func electLeaderCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "elect-leaders",
 		Short: "Trigger leader elections for partitions",
-		Long: `Trigger leader elections for topic partitions.
+		Long: `Trigger leader elections for topic partitions (Kafka 2.2.0+).
 
 This command allows for triggering leader elections on any topic and any
 partition, as well as on all topic partitions. To run on all, you must not
@@ -116,8 +116,8 @@ To avoid accidental triggers, this command requires a --run flag to run.
 	}
 
 	cmd.Flags().BoolVar(&allPartitions, "all-partitions", false, "trigger leader election on all topics for all partitions")
-	cmd.Flags().BoolVar(&unclean, "unclean", false, "allow unclean leader election (requires at least Kafka 2.4.0)")
-	cmd.Flags().BoolVarP(&run, "run", "r", false, "actually run the command (avoids accidental elections without this flag)")
+	cmd.Flags().BoolVar(&unclean, "unclean", false, "allow unclean leader election (Kafka 2.4.0+)")
+	cmd.Flags().BoolVar(&run, "run", false, "actually run the command (avoids accidental elections without this flag)")
 
 	return cmd
 }

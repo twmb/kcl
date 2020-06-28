@@ -24,9 +24,9 @@ func Command(cl *client.Client) *cobra.Command {
 	var pcluster, pbrokers, ptopics, pinternal, pall, detailed bool
 
 	cmd := &cobra.Command{
-		Use:   "metadata",
+		Use:   "metadata [TOPICS]",
 		Short: "Issue a metadata command and dump the results",
-		Long: `Request metadata.
+		Long: `Request metadata (0.8.0+).
 
 Kafka's metadata contains a good deal of information about brokers, topics,
 and the cluster as a whole. This is the command to use to get general info
@@ -34,7 +34,8 @@ on the what of everything.
 
 To avoid noise, this command only prints requested sections. Additionally,
 since there is a lot of information in topics, this prints short information
-for topics unless detailed is requested.
+for topics unless detailed is requested. It is optional to specify which
+topics to list metadata for; by default, all topics are listed.
 
 If the brokers section is printed, the controller broker is marked with *.
 `,

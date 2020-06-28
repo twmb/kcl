@@ -38,7 +38,7 @@ func listCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
-		Short:   "List all groups",
+		Short:   "List all groups (Kafka 0.9.0+).",
 		Long: `List all Kafka groups.
 
 This command simply lists groups and their protocol types; it does not describe
@@ -99,7 +99,7 @@ the groups listed. This prints all of the information from a ListGroups request.
 func deleteCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "delete GROUPS...",
-		Short: "Delete all listed Kafka groups",
+		Short: "Delete all listed Kafka groups (Kafka 1.1.0+).",
 		Args:  cobra.MinimumNArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
 			kresp, err := cl.Client().Request(context.Background(), &kmsg.DeleteGroupsRequest{
@@ -129,7 +129,7 @@ func offsetDeleteCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "offset-delete GROUP",
 		Short: "Delete offsets for a Kafka group.",
-		Long: `Forcefully delete offsets for a Kafka group.
+		Long: `Forcefully delete offsets for a Kafka group (Kafka 2.4.0+).
 
 Introduced in Kafka 2.4.0, this command forcefully deletes committed offsets
 for a group. Why, you ask? Group commit expiration semantics have changed

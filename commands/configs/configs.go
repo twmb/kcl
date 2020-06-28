@@ -86,7 +86,7 @@ func alterCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "alter [ENTITY]",
 		Short: "Alter a topic, broker, or broker logger's configs.",
-		Long: `Alter configurations.
+		Long: `Alter configurations (0.11.0+).
 
 Kafka has two modes of altering configurations: wholesale altering, and
 incremental altering. The original altering method requires specifying all
@@ -96,10 +96,13 @@ method, introduced in Kafka 2.3.0, allows modifying individual values.
 To opt into the new method, use the --inc flag. If using the old method, this
 command by default checks for existing config key/value pairs that may be lost
 in the alter and prompts if it is OK to lose those values. To skip this check,
-use the --no-confirm flag.
+use the --no-confirm flag. As well, with incremental altering, keys require
+a prefix of either set, del, +, or - to indicate whether the value is to be
+set, deleted, added to an array, or removed from an array.
 
 Altering requires specifying the "entity type" being altered. This is either
-"topic" ("t"), "broker" ("b"), or "broker logger" ("bl").
+"topic" ("t"), "broker" ("b"), or "broker logger" ("bl"). Broker logger support
+only exists for incrementally altering configs.
 
 Altering topics always requires the topic name being altered. Altering brokers
 allows for leaving off the broker being altered; this will update the dynamic
@@ -118,8 +121,8 @@ alter foo --no-confirm --type topic --kv preallocate=true // loses other dynamic
 		},
 	}
 
-	cmd.Flags().StringVarP(&cfger.rawEntity, "type", "t", "topic", "entity type (t|topic, b|broker, bl|broker logger)")
-	cmd.Flags().BoolVarP(&cfger.incremental, "inc", "i", false, "perform an incremental alter")
+	cmd.Flags().StringVarP(&cfger.rawEntity, "type", "t", "topic", "entity type (t or topic, b or broker, bl or broker logger)")
+	cmd.Flags().BoolVarP(&cfger.incremental, "inc", "i", false, "perform an incremental alter (Kafka 2.3.0+)")
 	cmd.Flags().StringArrayVarP(&cfger.rawKVs, "kv", "k", nil, "key value config parameters; repeatable; if incremental, keys require prefix in [set:, del:, +:, -:]")
 	cmd.Flags().BoolVarP(&cfger.dryRun, "dry", "d", false, "dry run: validate the config alter request, but do not apply")
 	cmd.Flags().BoolVar(&cfger.noConfirm, "no-confirm", false, "skip confirmation of to-be-lost unspecified existing dynamic config keys")
@@ -357,7 +360,7 @@ func describeCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "describe [ENTITY]",
 		Short: "Describe a topic, broker, or broker logger's configs.",
-		Long: `Describe configurations.
+		Long: `Describe configurations (Kafka 0.11.0+).
 
 This command prints all key/value config values for a topic, broker, or broker
 logger. Read onlykeys are suffixed with *.

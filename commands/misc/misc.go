@@ -110,7 +110,7 @@ This command supports completion for bash, zsh, and powershell.
 func apiVersionsCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "api-versions",
-		Short: "Print broker API versions for each Kafka request type",
+		Short: "Print broker API versions for each Kafka request type (Kafka 0.10.0+).",
 		Args:  cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
 			kresp, err := cl.Client().Request(context.Background(), apiVersionsRequest())
@@ -257,7 +257,7 @@ func listOffsetsCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list-offsets",
 		Short: "List start and end offsets for partitions.",
-		Long: `List start and end offsets for topics or partitions.
+		Long: `List start and end offsets for topics or partitions (Kafka 0.8.0+).
 
 The input format is topic:#,#,# or just topic. If a topic is given without
 partitions, a metadata request is issued to figure out all partitions for the
@@ -436,8 +436,8 @@ offset.
 		},
 	}
 
-	cmd.Flags().BoolVar(&readCommitted, "committed", false, "whether to list only committed offsets as opposed to latest")
-	cmd.Flags().BoolVar(&withEpochs, "with-epochs", false, "whether to include the epoch for the start and end offsets")
+	cmd.Flags().BoolVar(&readCommitted, "committed", false, "whether to list only committed offsets as opposed to latest (Kafka 0.11.0+)")
+	cmd.Flags().BoolVar(&withEpochs, "with-epochs", false, "whether to include the epoch for the start and end offsets (Kafka 2.1.0+)")
 
 	return cmd
 }

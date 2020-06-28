@@ -14,7 +14,7 @@ func (c *consumption) command() *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&c.group, "group", "g", "", "group to assign")
 	cmd.Flags().StringVarP(&c.groupAlg, "balancer", "b", "cooperative-sticky", "group balancer to use if group consuming (range, roundrobin, sticky, cooperative-sticky)")
-	cmd.Flags().StringVarP(&c.instanceID, "instance-id", "i", "", "group instance ID to use for consuming; empty means none (implies static membership)")
+	cmd.Flags().StringVarP(&c.instanceID, "instance-id", "i", "", "group instance ID to use for consuming; empty means none (implies static membership, Kafka 2.3.0+)")
 	cmd.Flags().Int32SliceVarP(&c.partitions, "partitions", "p", nil, "comma delimited list of specific partitions to consume")
 	cmd.Flags().StringVarP(&c.offset, "offset", "o", "start", "offset to start consuming from (start, end, 47, start+2, end-3)")
 	cmd.Flags().IntVarP(&c.num, "num", "n", 0, "quit after consuming this number of records; 0 is unbounded")

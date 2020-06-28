@@ -25,7 +25,7 @@ func deleteRecordsCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete-records",
 		Short: "Delete records for topics.",
-		Long: `Delete records for topics.
+		Long: `Delete records for topics (Kafka 0.11.0+).
 
 Normally, Kafka records are deleted based off time or log file size. Sometimes,
 that does not play well with processing. To address this limitation, Kafka

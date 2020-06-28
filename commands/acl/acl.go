@@ -157,7 +157,7 @@ func describeCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "describe",
 		Short: "Describe ACLs.",
-		Long: `Describe ACLs on a filter basis.
+		Long: `Describe ACLs on a filter basis (Kafka 0.11.0+).
 
 Describing ACLs works on a filter basis: anything matching the requested filter
 is described. Note that for resource names, principals, and hosts, using a
@@ -222,7 +222,7 @@ For more detailed information about ACLs, read kcl acl --help.
 
 	cmd.Flags().StringVar(&resourceType, "type", "", "resource type filter; any matches all")
 	cmd.Flags().StringVar(&resourceName, "name", "", "resource name filter; empty matches all")
-	cmd.Flags().StringVar(&resourcePattern, "pattern", "match", "resource name pattern filter; match means all")
+	cmd.Flags().StringVar(&resourcePattern, "pattern", "match", "resource name pattern filter; match means all (Kafka 2.0.0+)")
 	cmd.Flags().StringVar(&principal, "principal", "", "principal filter; empty matches all")
 	cmd.Flags().StringVar(&host, "host", "", "host filter; empty matches all")
 	cmd.Flags().StringVar(&operation, "op", "any", "operation filter; any matches all")
@@ -245,7 +245,7 @@ func createCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create ACLs.",
-		Long: `Create ACLs on a combinatorial basis.
+		Long: `Create ACLs on a combinatorial basis (Kafka 0.11.0+).
 
 In a request to Kafka, creating ACLs works on an individual basis: one ACL
 creation is one ACL entry. This command, however, works on a combinatorial
@@ -337,7 +337,7 @@ For more detailed information about ACLs, read kcl acl --help.
 
 	cmd.Flags().StringArrayVar(&types, "type", nil, "resource type this ACL will be for; repeatable")
 	cmd.Flags().StringArrayVar(&names, "name", nil, "resource name this ACL will be for; repeatable")
-	cmd.Flags().StringVar(&pattern, "pattern", "prefixed", "how the resource names are understood")
+	cmd.Flags().StringVar(&pattern, "pattern", "prefixed", "how the resource names are understood (Kafka 2.0.0+)")
 	cmd.Flags().StringArrayVar(&principals, "principal", nil, "principal to create the ACL for; repeatable")
 	cmd.Flags().StringArrayVar(&hosts, "host", nil, "host to create the ACL for; repeatable")
 	cmd.Flags().StringArrayVar(&operations, "op", nil, "operation to allow or deny for the principal on this resource")
@@ -360,7 +360,7 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete",
 		Short: "Delete ACLs.",
-		Long: `Delete ACLs on a filter basis.
+		Long: `Delete ACLs on a filter basis (Kafka 0.11.0+).
 
 Like describing, deleting ACLs works on a filter basis: anything matching the
 requested filter is described. Note that for resource names, principals, and
@@ -457,7 +457,7 @@ For more detailed information about ACLs, read kcl acl --help.
 
 	cmd.Flags().StringVar(&resourceType, "type", "", "resource type filter; any matches all")
 	cmd.Flags().StringVar(&resourceName, "name", "", "resource name filter; empty matches all")
-	cmd.Flags().StringVar(&resourcePattern, "pattern", "", "resource name pattern filter; match means all")
+	cmd.Flags().StringVar(&resourcePattern, "pattern", "", "resource name pattern filter; match means all (Kafka 2.0.0+)")
 	cmd.Flags().StringVar(&principal, "principal", "", "principal filter; empty matches all")
 	cmd.Flags().StringVar(&host, "host", "", "host filter; empty matches all")
 	cmd.Flags().StringVar(&operation, "op", "", "operation filter; any matches all")

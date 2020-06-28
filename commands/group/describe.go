@@ -19,10 +19,10 @@ func describeCommand(cl *client.Client) *cobra.Command {
 	var verbose bool
 	var readCommitted bool
 
-	// TODO include authorized options?
+	// TODO include authorized options (Kafka 2.3.0+)?
 	cmd := &cobra.Command{
 		Use:   "describe GROUPS...",
-		Short: "Describe Kafka groups",
+		Short: "Describe Kafka groups (Kafka 0.9.0+)",
 		Args:  cobra.MinimumNArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
 			req.Groups = args
@@ -64,7 +64,7 @@ func describeCommand(cl *client.Client) *cobra.Command {
 	}
 
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "verbose printing including client id, host, committed offset, lag, and user data")
-	cmd.Flags().BoolVar(&readCommitted, "committed", false, "if describing verbosely, whether to list only committed offsets as opposed to latest")
+	cmd.Flags().BoolVar(&readCommitted, "committed", false, "if describing verbosely, whether to list only committed offsets as opposed to latest (Kafka 0.11.0+)")
 
 	return cmd
 }

@@ -41,7 +41,7 @@ func topicCreateCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create TOPICS",
 		Short: "Create topics",
-		Long: `Create topics.
+		Long: `Create topics (Kafka 0.10.1+).
 
 All topics created with this command will have the same number of partitions,
 replication factor, and key/value configs.
@@ -86,7 +86,7 @@ replication factor, and key/value configs.
 		},
 	}
 
-	cmd.Flags().BoolVarP(&req.ValidateOnly, "dry", "d", false, "dry run: validate the topic creation request; do not create topics")
+	cmd.Flags().BoolVarP(&req.ValidateOnly, "dry", "d", false, "dry run: validate the topic creation request; do not create topics (Kafka 0.10.2+)")
 	cmd.Flags().Int32VarP(&numPartitions, "num-partitions", "p", 20, "number of partitions to create")
 	cmd.Flags().Int16VarP(&replicationFactor, "replication-factor", "r", 1, "number of replicas to have of each partition")
 	cmd.Flags().StringArrayVarP(&configKVs, "kv", "k", nil, "list of key=value config parameters (repeatable, e.g. -k cleanup.policy=compact -k preallocate=true)")
@@ -97,7 +97,7 @@ replication factor, and key/value configs.
 func topicDeleteCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "delete TOPICS...",
-		Short: "Delete all listed topics",
+		Short: "Delete all listed topics (Kafka 0.10.1+).",
 		Run: func(_ *cobra.Command, args []string) {
 			resp, err := cl.Client().Request(context.Background(), &kmsg.DeleteTopicsRequest{
 				TimeoutMillis: cl.TimeoutMillis(),
@@ -125,9 +125,9 @@ func topicAddPartitionsCommand(cl *client.Client) *cobra.Command {
 	var topics []string
 
 	cmd := &cobra.Command{
-		Use:   "add-partitions -tTOPIC ASSIGNMENTS",
+		Use:   "add-partitions -t TOPIC ASSIGNMENTS",
 		Short: "Add partitions to a topic",
-		Long: `Add partitions to a topic.
+		Long: `Add partitions to a topic (Kafka 1.0.0+).
 
 As a client, adding partitions to topics is done by requesting a total amount
 of partitions for a topic combined with an assignment of which brokers should
@@ -137,6 +137,12 @@ This CLI handles the total count of final partitions; you as a user just need
 to specify the where new partitions and their replicas should go.
 
 When adding partitions to multiple topics, all topics use the same assignment.
+
+The assignment format is
+
+  replica,replica : replica,replica
+  \             /   \             /
+   one partition     one partition
 `,
 
 		Example: `To add three partitions with two replicas each,

@@ -61,7 +61,7 @@ func createTokenCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a delegation token",
-		Long: `Create a delegation token.
+		Long: `Create a delegation token (Kafka 1.1.0+).
 
 A delegation token inherits all ACLs from the creator. Without any manual
 extra renewers, only the creator can renew.
@@ -122,7 +122,7 @@ func renewTokenCommand(cl *client.Client) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:     "renew",
-		Short:   "Renew a delegation token",
+		Short:   "Renew a delegation token (Kafka 1.1.0+)",
 		Example: "renew [base64 hmac here]",
 		Args:    cobra.ExactArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
@@ -160,7 +160,7 @@ func expireTokenCommand(cl *client.Client) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:     "expire",
-		Short:   "Change a delegation token expiry time",
+		Short:   "Change a delegation token expiry time (Kafka 1.1.0+)",
 		Example: "expire [base64 hmac here]",
 		Args:    cobra.ExactArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
@@ -198,7 +198,7 @@ func describeTokensCommand(cl *client.Client) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "describe",
-		Short: "Describe delegation tokens",
+		Short: "Describe delegation tokens (Kafka 1.1.0+)",
 		Example: ` describe // to display all tokens
 
 describe -o User:admin // to display tokens owned by the admin user`,

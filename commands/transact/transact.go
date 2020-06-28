@@ -64,7 +64,7 @@ func Command(cl *client.Client) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "transact [FLAGS] ETL_COMMAND...",
-		Short: "Transactionally consume, exec a program, and write back to Kafka",
+		Short: "Transactionally consume, exec a program, and write back to Kafka; requires Kafka 0.11.0+.",
 		Long:  help,
 		Args:  cobra.MinimumNArgs(1), // exec
 		Run: func(_ *cobra.Command, args []string) {
@@ -177,7 +177,7 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd.Flags().BoolVar(&regex, "regex", false, "parse topics as regex; consume any topic that matches any expression")
 	cmd.Flags().StringVarP(&group, "group", "g", "", "group to assign")
 	cmd.Flags().StringVarP(&groupAlg, "balancer", "b", "cooperative-sticky", "group balancer to use if group consuming (range, roundrobin, sticky, cooperative-sticky)")
-	cmd.Flags().StringVarP(&instanceID, "instance-id", "i", "", "group instance ID to use for consuming; empty means none (implies static membership)")
+	cmd.Flags().StringVarP(&instanceID, "instance-id", "i", "", "group instance ID to use for consuming; empty means none (implies static membership; Kafka 2.5.0+)")
 
 	cmd.Flags().StringVarP(&writeFormat, "write-format", "w", "%t\t%k\t%v\n", "format to write to the transform program")
 	cmd.Flags().StringVarP(&readFormat, "read-format", "r", "%t\t%k\t%v\n", "format to read from the transform program")
@@ -192,10 +192,6 @@ func Command(cl *client.Client) *cobra.Command {
 	return cmd
 }
 
-// TODO
-// Save args to struct
-// Add rebalanced field
-// Add OnRebalance in setup above
 func transact(
 	quitCtx context.Context,
 	cl *kgo.Client,
