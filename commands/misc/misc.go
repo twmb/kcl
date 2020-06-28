@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"math"
 	"os"
 	"sort"
 	"strconv"
@@ -157,23 +156,19 @@ func probeVersion(cl *client.Client) {
 	cl.AddOpt(kgo.RequestRetries(0))
 	kresp, err := cl.Client().Request(context.Background(), apiVersionsRequest())
 	if err != nil { // pre 0.10.0 had no api versions
+		seedBrokers := cl.Client().SeedBrokers()
 		// 0.9.0 has list groups
-		if _, err = cl.Client().Broker(math.MinInt32).Request(context.Background(), new(kmsg.ListGroupsRequest)); err == nil {
+		if _, err = seedBrokers[0].Request(context.Background(), new(kmsg.ListGroupsRequest)); err == nil {
 			fmt.Println("Kafka 0.9.0")
 			return
 		}
 		// 0.8.2 has find coordinator
-		if _, err = cl.Client().Request(context.Background(), new(kmsg.FindCoordinatorRequest)); err == nil {
+		if _, err = seedBrokers[0].Request(context.Background(), new(kmsg.FindCoordinatorRequest)); err == nil {
 			fmt.Println("Kafka 0.8.2")
 			return
 		}
 		// 0.8.1 has offset fetch
-		// OffsetFetch triggers FindCoordinator, which does not
-		// exist and will fail. We need to directly ask a broker.
-		// kgo's seed brokers start at MinInt32, so we know we are
-		// getting a broker with this number.
-		// TODO maybe not make specific to impl...
-		if _, err = cl.Client().Broker(math.MinInt32).Request(context.Background(), new(kmsg.OffsetFetchRequest)); err == nil {
+		if _, err = seedBrokers[0].Request(context.Background(), new(kmsg.OffsetFetchRequest)); err == nil {
 			fmt.Println("Kafka 0.8.1")
 			return
 		}
