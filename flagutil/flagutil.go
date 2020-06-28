@@ -33,3 +33,45 @@ func ParseTopicPartitions(list []string) (map[string][]int32, error) {
 	}
 	return tps, nil
 }
+
+// ParseTopicPartitionReplicas parses a list of the following, spaces trimmed:
+//
+//     topic: 4->3,2,1 ; 5->3,2,1
+func ParseTopicPartitionReplicas(list []string) (map[string]map[int32][]int32, error) {
+	tprs := make(map[string]map[int32][]int32)
+	for _, item := range list {
+		tps := strings.SplitN(item, ":", 2)
+		if len(tps) != 2 {
+			return nil, fmt.Errorf("item %q invalid empty topic", item)
+		}
+
+		topic := strings.TrimSpace(tps[0])
+		prs := make(map[int32][]int32)
+		tprs[topic] = prs
+
+		for _, partitionReplicasRaw := range strings.Split(tps[1], ";") {
+			partitionReplicas := strings.SplitN(partitionReplicasRaw, "->", 2)
+			if len(partitionReplicas) != 2 {
+				return nil, fmt.Errorf("item %q invalid partition->replicas bit %q", item, partitionReplicasRaw)
+			}
+			partition, err := strconv.Atoi(strings.TrimSpace(partitionReplicas[0]))
+			if err != nil {
+				return nil, fmt.Errorf("item %q invalid partition in %q", item, partitionReplicasRaw)
+			}
+			p := int32(partition)
+			prs[p] = nil
+			for _, r := range strings.Split(partitionReplicas[1], ",") {
+				r = strings.TrimSpace(r)
+				if len(r) == 0 {
+					continue
+				}
+				replica, err := strconv.Atoi(r)
+				if err != nil {
+					return nil, fmt.Errorf("item %q invalid replica in %q", item, partitionReplicasRaw)
+				}
+				prs[p] = append(prs[p], int32(replica))
+			}
+		}
+	}
+	return tprs, nil
+}
