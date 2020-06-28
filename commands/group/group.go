@@ -4,6 +4,7 @@ package group
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -33,7 +34,8 @@ func Command(cl *client.Client) *cobra.Command {
 }
 
 func listCommand(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
+	var statesFilter []string
+	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List all groups",
@@ -44,7 +46,25 @@ the groups listed. This prints all of the information from a ListGroups request.
 `,
 		Args: cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
-			kresp, err := cl.Client().Request(context.Background(), new(kmsg.ListGroupsRequest))
+			for i, f := range statesFilter {
+				switch strings.ToLower(strings.Replace(f, "_", "", -1)) {
+				case "preparing":
+					statesFilter[i] = "Preparing"
+				case "preparingrebalance":
+					statesFilter[i] = "PreparingRebalance"
+				case "completingrebalance":
+					statesFilter[i] = "CompletingRebalance"
+				case "stable":
+					statesFilter[i] = "Stable"
+				case "dead":
+					statesFilter[i] = "Dead"
+				case "empty":
+					statesFilter[i] = "Empty"
+				}
+			}
+			kresp, err := cl.Client().Request(context.Background(), &kmsg.ListGroupsRequest{
+				StatesFilter: statesFilter,
+			})
 			out.MaybeDie(err, "unable to list groups: %v", err)
 			resp := kresp.(*kmsg.ListGroupsResponse)
 
@@ -59,12 +79,21 @@ the groups listed. This prints all of the information from a ListGroups request.
 
 			tw := out.BeginTabWrite()
 			defer tw.Flush()
-			fmt.Fprintf(tw, "GROUP ID\tPROTO TYPE\n")
-			for _, group := range resp.Groups {
-				fmt.Fprintf(tw, "%s\t%s\n", group.Group, group.ProtocolType)
+			if resp.Version >= 4 {
+				fmt.Fprintf(tw, "GROUP ID\tPROTO TYPE\tSTATE\n")
+				for _, group := range resp.Groups {
+					fmt.Fprintf(tw, "%s\t%s\t%s\n", group.Group, group.ProtocolType, group.GroupState)
+				}
+			} else {
+				fmt.Fprintf(tw, "GROUP ID\tPROTO TYPE\n")
+				for _, group := range resp.Groups {
+					fmt.Fprintf(tw, "%s\t%s\n", group.Group, group.ProtocolType)
+				}
 			}
 		},
 	}
+	cmd.Flags().StringArrayVar(&statesFilter, "filter", nil, "filter groups listed by state (Preparing, PreparingRebalance, CompletingRebalance, Stable, Dead, Empty; Kafka 2.6.0+)")
+	return cmd
 }
 
 func deleteCommand(cl *client.Client) *cobra.Command {
