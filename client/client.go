@@ -35,23 +35,29 @@ type Requestor interface {
 	Request(context.Context, kmsg.Request) (kmsg.Response, error)
 }
 
+type CfgTLS struct {
+	CACert         string `toml:"ca_cert_path,omitempty"`
+	ClientCertPath string `toml:"client_cert_path,omitempty"`
+	ClientKeyPath  string `toml:"client_key_path,omitempty"`
+	ServerName     string `toml:"server_name,omitempty"`
+}
+
+type CfgSASL struct {
+	Method  string `toml:"method,omitempty"`
+	Zid     string `toml:"zid,omitempty"`
+	User    string `toml:"user,omitempty"`
+	Pass    string `toml:"pass,omitempty"`
+	IsToken bool   `toml:"is_token,omitempty"`
+}
+
 // cfg contains kcl options that can be defined in a file.
 type Cfg struct {
 	SeedBrokers []string `toml:"seed_brokers,omitempty"`
 
 	TimeoutMillis int32 `toml:"timeout_ms,omitempty"`
 
-	TLSCACert         string `toml:"tls_ca_cert_path,omitempty"`
-	TLSClientCertPath string `toml:"tls_client_cert_path,omitempty"`
-	TLSClientKeyPath  string `toml:"tls_client_key_path,omitempty"`
-	TLSServerName     string `toml:"tls_server_name,omitempty"`
-
-	SASLMethod string `toml:"sasl_method,omitempty"`
-
-	SASLZid      string `toml:"sasl_zid,omitempty"`
-	SASLUser     string `toml:"sasl_user,omitempty"`
-	SASLPass     string `toml:"sasl_pass,omitempty"`
-	ScramIsToken bool   `toml:"sasl_scram_is_token,omitempty"`
+	TLS  *CfgTLS `toml:"tls,omitempty"`
+	SASL CfgSASL `toml:"sasl,omitempty"`
 }
 
 // Client contains kgo client options and a kgo client.
@@ -70,7 +76,8 @@ type Client struct {
 	defaultCfgPath string
 	cfgPath        string
 	noCfgFile      bool
-	cfgOverrides   []string
+	envPfx         string
+	flagOverrides  []string
 	cfg            Cfg
 }
 
@@ -88,7 +95,7 @@ func New(root *cobra.Command) *Client {
 			kgo.MetadataMinAge(time.Second),
 		},
 		cfg: Cfg{
-			SeedBrokers:   []string{"localhost"},
+			SeedBrokers:   []string{"localhost:9092"},
 			TimeoutMillis: 5000,
 		},
 	}
@@ -101,8 +108,9 @@ func New(root *cobra.Command) *Client {
 	root.PersistentFlags().StringVar(&c.logLevel, "log-level", "none", "log level to use for basic logging (none, error, warn, info, debug)")
 	root.PersistentFlags().StringVar(&c.logFile, "log-file", "", "log to this file rather than STDERR (if log-level is not none; file must not exist)")
 	root.PersistentFlags().StringVar(&c.cfgPath, "config-path", c.defaultCfgPath, "path to confile file (lowest priority)")
-	root.PersistentFlags().BoolVarP(&c.noCfgFile, "no-config", "Z", false, "do not load any config file")
-	root.PersistentFlags().StringArrayVarP(&c.cfgOverrides, "config-opt", "X", nil, "flag provided config option (highest priority)")
+	root.PersistentFlags().BoolVar(&c.noCfgFile, "no-config", false, "do not load any config file")
+	root.PersistentFlags().StringVar(&c.envPfx, "config-env-prefix", "KCL_", "environment variable prefix for config overrides (middle priority)")
+	root.PersistentFlags().StringArrayVarP(&c.flagOverrides, "config-opt", "X", nil, "flag provided config option (highest priority)")
 	root.PersistentFlags().StringVar(&c.asVersion, "as-version", "", "if nonempty, which version of Kafka versions to use (e.g. '0.8.0', '2.3.0')")
 	root.PersistentFlags().BoolVarP(&c.asJSON, "dump-json", "j", false, "dump response as json if supported")
 
@@ -156,14 +164,15 @@ func (c *Client) fillOpts() {
 	if err != nil {
 		out.Die("%s", err)
 	} else if tlscfg != nil {
-		c.AddOpt(kgo.Dialer(func(host string) (net.Conn, error) {
+		dialer := &net.Dialer{Timeout: 10 * time.Second}
+		c.AddOpt(kgo.Dialer(func(_ context.Context, host string) (net.Conn, error) {
 			cloned := tlscfg.Clone()
-			if c.cfg.TLSServerName != "" {
-				cloned.ServerName = c.cfg.TLSServerName
+			if c.cfg.TLS.ServerName != "" {
+				cloned.ServerName = c.cfg.TLS.ServerName
 			} else if h, _, err := net.SplitHostPort(host); err == nil {
 				cloned.ServerName = h
 			}
-			return tls.Dial("tcp", host, cloned)
+			return tls.DialWithDialer(dialer, "tcp", host, cloned)
 		}))
 	}
 
@@ -210,34 +219,54 @@ func (c *Client) processOverrides() {
 		return nil
 	}
 
-	var err error
-	for _, opt := range c.cfgOverrides {
-		kv := strings.Split(opt, "=")
-		if len(kv) != 2 {
-			out.Die("opt %q not a key=value", opt)
-		}
-		k, v := kv[0], kv[1]
-
-		switch k {
-		default:
-			err = fmt.Errorf("unknown opt key %q", k)
-		case "seed_brokers":
-			err = intoStrSlice(v, &c.cfg.SeedBrokers)
-		case "timeout_ms":
-			err = intoInt32(v, &c.cfg.TimeoutMillis)
-		case "tls_ca_cert_path":
-			c.cfg.TLSCACert = v
-		case "tls_client_cert_path":
-			c.cfg.TLSClientCertPath = v
-		case "tls_client_key_path":
-			c.cfg.TLSClientKeyPath = v
-		case "tls_server_name":
-			c.cfg.TLSServerName = v
-		}
-		if err != nil {
-			out.Die("%s", err)
+	mktls := func(c *Cfg) {
+		if c.TLS == nil {
+			c.TLS = new(CfgTLS)
 		}
 	}
+
+	fns := map[string]func(*Cfg, string) error{
+		"seed_brokers":         func(c *Cfg, v string) error { return intoStrSlice(v, &c.SeedBrokers) },
+		"timeout_ms":           func(c *Cfg, v string) error { return intoInt32(v, &c.TimeoutMillis) },
+		"use_tls":              func(c *Cfg, _ string) error { mktls(c); return nil },
+		"tls_ca_cert_path":     func(c *Cfg, v string) error { mktls(c); c.TLS.CACert = v; return nil },
+		"tls_client_cert_path": func(c *Cfg, v string) error { mktls(c); c.TLS.ClientCertPath = v; return nil },
+		"tls_client_key_path":  func(c *Cfg, v string) error { mktls(c); c.TLS.ClientKeyPath = v; return nil },
+		"tls_server_name":      func(c *Cfg, v string) error { mktls(c); c.TLS.ServerName = v; return nil },
+		"sasl_method":          func(c *Cfg, v string) error { c.SASL.Method = v; return nil },
+		"sasl_zid":             func(c *Cfg, v string) error { c.SASL.Zid = v; return nil },
+		"sasl_user":            func(c *Cfg, v string) error { c.SASL.User = v; return nil },
+		"sasl_pass":            func(c *Cfg, v string) error { c.SASL.Pass = v; return nil },
+		"sasl_is_token":        func(c *Cfg, _ string) error { c.SASL.IsToken = true; return nil }, // accepts any val
+	}
+
+	parse := func(kvs []string) {
+		for _, opt := range kvs {
+			kv := strings.Split(opt, "=")
+			if len(kv) != 2 {
+				out.Die("opt %q not a key=value", opt)
+			}
+			k, v := kv[0], kv[1]
+
+			fn, exists := fns[strings.ToLower(k)]
+			if !exists {
+				out.Die("unknown opt key %q", k)
+			}
+			if err := fn(&c.cfg, v); err != nil {
+				out.Die("%s", err)
+			}
+		}
+	}
+
+	var envOverrides []string
+	for k := range fns {
+		if v, exists := os.LookupEnv(c.envPfx + strings.ToUpper(k)); exists {
+			envOverrides = append(envOverrides, k+"="+v)
+		}
+	}
+
+	parse(envOverrides)
+	parse(c.flagOverrides)
 }
 
 func (c *Client) maybeAddMaxVersions() {
@@ -274,6 +303,8 @@ func (c *Client) maybeAddMaxVersions() {
 			versions = kversion.V2_3_0()
 		case "2.4.0":
 			versions = kversion.V2_4_0()
+		case "2.5.0":
+			versions = kversion.V2_5_0()
 		default:
 			out.Die("unknown Kafka version %s", c.asVersion)
 		}
@@ -282,7 +313,7 @@ func (c *Client) maybeAddMaxVersions() {
 }
 
 func (c *Client) maybeAddSASL() error {
-	method := strings.ToLower(strings.TrimSpace(c.cfg.SASLMethod))
+	method := strings.ToLower(strings.TrimSpace(c.cfg.SASL.Method))
 	method = strings.Replace(method, "-", "", -1)
 	method = strings.Replace(method, "_", "", -1)
 
@@ -291,39 +322,37 @@ func (c *Client) maybeAddSASL() error {
 	case "plaintext":
 		c.AddOpt(kgo.SASL(plain.Plain(func(context.Context) (plain.Auth, error) {
 			return plain.Auth{
-				Zid:  c.cfg.SASLZid,
-				User: c.cfg.SASLUser,
-				Pass: c.cfg.SASLPass,
+				Zid:  c.cfg.SASL.Zid,
+				User: c.cfg.SASL.User,
+				Pass: c.cfg.SASL.Pass,
 			}, nil
 		})))
 	case "scramsha256":
 		c.AddOpt(kgo.SASL(scram.Sha256(func(context.Context) (scram.Auth, error) {
 			return scram.Auth{
-				Zid:     c.cfg.SASLZid,
-				User:    c.cfg.SASLUser,
-				Pass:    c.cfg.SASLPass,
-				IsToken: c.cfg.ScramIsToken,
+				Zid:     c.cfg.SASL.Zid,
+				User:    c.cfg.SASL.User,
+				Pass:    c.cfg.SASL.Pass,
+				IsToken: c.cfg.SASL.IsToken,
 			}, nil
 		})))
 	case "scramsha512":
 		c.AddOpt(kgo.SASL(scram.Sha512(func(context.Context) (scram.Auth, error) {
 			return scram.Auth{
-				Zid:     c.cfg.SASLZid,
-				User:    c.cfg.SASLUser,
-				Pass:    c.cfg.SASLPass,
-				IsToken: c.cfg.ScramIsToken,
+				Zid:     c.cfg.SASL.Zid,
+				User:    c.cfg.SASL.User,
+				Pass:    c.cfg.SASL.Pass,
+				IsToken: c.cfg.SASL.IsToken,
 			}, nil
 		})))
 	default:
-		return fmt.Errorf("unrecognized / unhandled sasl method %q", c.cfg.SASLMethod)
+		return fmt.Errorf("unrecognized / unhandled sasl method %q", c.cfg.SASL.Method)
 	}
 	return nil
 }
 
 func (c *Client) loadTLS() (*tls.Config, error) {
-	if c.cfg.TLSCACert == "" &&
-		c.cfg.TLSClientCertPath == "" &&
-		c.cfg.TLSClientKeyPath == "" {
+	if c.cfg.TLS == nil {
 		return nil, nil
 	}
 
@@ -348,34 +377,34 @@ func (c *Client) loadTLS() (*tls.Config, error) {
 		},
 	}
 
-	if c.cfg.TLSCACert != "" {
-		ca, err := ioutil.ReadFile(c.cfg.TLSCACert)
+	if c.cfg.TLS.CACert != "" {
+		ca, err := ioutil.ReadFile(c.cfg.TLS.CACert)
 		if err != nil {
 			return nil, fmt.Errorf("unable to read CA file %q: %v",
-				c.cfg.TLSCACert, err)
+				c.cfg.TLS.CACert, err)
 		}
 
 		tlscfg.RootCAs = x509.NewCertPool()
 		tlscfg.RootCAs.AppendCertsFromPEM(ca)
 	}
 
-	if c.cfg.TLSClientCertPath != "" ||
-		c.cfg.TLSClientKeyPath != "" {
+	if c.cfg.TLS.ClientCertPath != "" ||
+		c.cfg.TLS.ClientKeyPath != "" {
 
-		if c.cfg.TLSClientCertPath == "" ||
-			c.cfg.TLSClientKeyPath == "" {
+		if c.cfg.TLS.ClientCertPath == "" ||
+			c.cfg.TLS.ClientKeyPath == "" {
 			return nil, errors.New("both client and key cert paths must be specified, but saw only one")
 		}
 
-		cert, err := ioutil.ReadFile(c.cfg.TLSClientCertPath)
+		cert, err := ioutil.ReadFile(c.cfg.TLS.ClientCertPath)
 		if err != nil {
 			return nil, fmt.Errorf("unable to read client cert file %q: %v",
-				c.cfg.TLSClientCertPath, err)
+				c.cfg.TLS.ClientCertPath, err)
 		}
-		key, err := ioutil.ReadFile(c.cfg.TLSClientKeyPath)
+		key, err := ioutil.ReadFile(c.cfg.TLS.ClientKeyPath)
 		if err != nil {
 			return nil, fmt.Errorf("unable to read client key file %q: %v",
-				c.cfg.TLSClientKeyPath, err)
+				c.cfg.TLS.ClientKeyPath, err)
 		}
 
 		pair, err := tls.X509KeyPair(cert, key)

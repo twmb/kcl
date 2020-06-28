@@ -46,7 +46,7 @@ func helpCommand(cl *client.Client) *cobra.Command {
 
   ` + cl.DefaultCfgPath() + `
 
-The config path can be set with --config-path, while --no-config (-Z) disables
+The config path can be set with --config-path, while --no-config disables
 loading a config file entirely. To show the configuration that kcl is running
 with, use the dump command.
 
@@ -57,6 +57,23 @@ Options are described below, with examples being how they would look in a
 config.toml. Overrides generally look the same, but quotes can be dropped and
 arrays do not use brackets (-X foo=bar,baz).
 
+For overrides of an option in a nested section, lowercase and underscore-suffix
+any option you want to override. For example, tls_ca_cert_path overrides
+ca_cert_path in the tls section.
+
+Environment variables can be set to override the config as well. Environment
+variables take middle priority (higher than the config file, lower than config
+file overrides from the -X flag). The default environment variable prefix is
+KCL_ but can be overridden with the --config-env-prefix flag.  Environment
+variable overrides operate similarly to the -X flag, but are all uppercase. For
+example, KCL_TLS_CA_CERT_PATH overrides ca_cert_path in the tls section.
+
+For tls specifically, one additional option exists for flags/environment
+variables: use_tls=true or KCL_USE_TLS with any value. This will opt in to
+using TLS without any additional options (ca cert, client certs, server name).
+This would be used if you are connecting to brokers that are using certs from
+well known CAs.
+
 OPTIONS
 
   seed_brokers=["localhost", "127.0.0.1:9092"]
@@ -65,32 +82,37 @@ OPTIONS
   timeout_ms=1000
      Timeout to use for any command that takes a timeout.
 
-  tls_ca_cert_path="/path/to/my/ca.cert"
+The [tls] section
+
+  ca_cert_path="/path/to/my/ca.cert"
      Path to a CA cert to load and use for connecting to brokers over TLS.
 
-  tls_client_cert_path="/path/to/my/ca.cert"
+  client_cert_path="/path/to/my/ca.cert"
      Path to a client cert to load and use for connecting to brokers over TLS.
      This must be paired with tls_client_key_path.
 
-  tls_client_key_path="/path/to/my/ca.cert"
+  client_key_path="/path/to/my/ca.cert"
      Path to a client key to load and use for connecting to brokers over TLS.
      This must be paired with tls_client_cert_path.
 
-  tls_server_name="127.0.0.1"
+  server_name="127.0.0.1"
      Server name to use for connecting to brokers over TLS.
 
-  sasl_method="scram_sha_256"
+The [sasl] section
+
+  method="scram_sha_256"
      SASL method to use. Must be paired with sasl_user and sasl_pass.
      Possible values are "plaintext", "scram-sha-256", or "scram-sha-512".
      Dashes and underscores are stripped.
 
-  sasl_zid="zid"
-  sasl_user="user"
-  sasl_pass="pass"
+  zid="zid"
+  user="user"
+  pass="pass"
      SASL authzid (always optional), user, and pass.
 
-  sasl_scram_is_token=false
+  is_token=false
      Specifies that the sasl user and pass came from a delegation token.
+     This is only relevant for scram methods.
 `
 	return &cobra.Command{
 		Use:   "help",
