@@ -137,19 +137,29 @@ func (r *Reader) parseReadFormat(format string, escape rune) error {
 				format = format[1:]
 			}
 
+			parseSize := func(dst *uint64, letter string) error {
+				var fn func(*Reader) error
+				var n int
+				var err error
+				if handledBrace = openBrace; handledBrace {
+					fn, n, err = parseReadSize(format, dst, true)
+				} else {
+					fn, _, err = parseReadSize("ascii", dst, false)
+				}
+				if err != nil {
+					return fmt.Errorf("unable to parse %s%s: %s", escstr, letter, err)
+				}
+				format = format[n:]
+				sizeFns = append(sizeFns, fn)
+				return nil
+			}
+
 			switch next {
 
 			case 'T':
 				sized, sawTopicSize = true, true
-				if handledBrace = openBrace; handledBrace {
-					fn, n, err := parseReadSize(format, &topicSize)
-					if err != nil {
-						return fmt.Errorf("unable to parse %sT: %s", escstr, err)
-					}
-					format = format[n:]
-					sizeFns = append(sizeFns, fn)
-				} else {
-					return fmt.Errorf("missing open brace sequence on %sT signifying how the topic size is encoded", escstr)
+				if err := parseSize(&topicSize, "T"); err != nil {
+					return err
 				}
 
 			case 't':
@@ -169,15 +179,8 @@ func (r *Reader) parseReadFormat(format string, escape rune) error {
 
 			case 'K':
 				sized, sawKeySize = true, true
-				if handledBrace = openBrace; handledBrace {
-					fn, n, err := parseReadSize(format, &keySize)
-					if err != nil {
-						return fmt.Errorf("unable to parse %sK: %s", escstr, err)
-					}
-					format = format[n:]
-					sizeFns = append(sizeFns, fn)
-				} else {
-					return fmt.Errorf("missing open brace sequence on %sK signifying how the key size is encoded", escstr)
+				if err := parseSize(&keySize, "K"); err != nil {
+					return err
 				}
 
 			case 'k':
@@ -196,15 +199,8 @@ func (r *Reader) parseReadFormat(format string, escape rune) error {
 
 			case 'V':
 				sized, sawValueSize = true, true
-				if handledBrace = openBrace; handledBrace {
-					fn, n, err := parseReadSize(format, &valueSize)
-					if err != nil {
-						return fmt.Errorf("unable to parse %sV: %s", escstr, err)
-					}
-					format = format[n:]
-					sizeFns = append(sizeFns, fn)
-				} else {
-					return fmt.Errorf("missing open brace sequence on %sV signifying how the value size is encoded", escstr)
+				if err := parseSize(&valueSize, "V"); err != nil {
+					return err
 				}
 
 			case 'v':
@@ -223,15 +219,8 @@ func (r *Reader) parseReadFormat(format string, escape rune) error {
 
 			case 'H':
 				sized, sawHeadersNum = true, true
-				if handledBrace = openBrace; handledBrace {
-					fn, n, err := parseReadSize(format, &headersNum)
-					if err != nil {
-						return fmt.Errorf("unable to parse %sH: %s", escstr, err)
-					}
-					format = format[n:]
-					sizeFns = append(sizeFns, fn)
-				} else {
-					return fmt.Errorf("missing open brace sequence on %sH signifying how the header count num is encoded", escstr)
+				if err := parseSize(&headersNum, "H"); err != nil {
+					return err
 				}
 
 			case 'h':
@@ -396,15 +385,19 @@ func (d *delimiter) split(data []byte, atEOF bool) (advance int, token []byte, e
 	return 0, nil, nil
 }
 
-func parseReadSize(format string, dst *uint64) (func(*Reader) error, int, error) {
-	braceEnd := strings.IndexByte(format, '}')
-	if braceEnd == -1 {
-		return nil, 0, errors.New("missing brace end } to close number size specification")
+func parseReadSize(format string, dst *uint64, needBrace bool) (func(*Reader) error, int, error) {
+	var end int
+	if needBrace {
+		braceEnd := strings.IndexByte(format, '}')
+		if braceEnd == -1 {
+			return nil, 0, errors.New("missing brace end } to close number size specification")
+		}
+		format = format[:braceEnd]
+		end = braceEnd + 1
 	}
-	end := braceEnd + 1
 
 	var buf [8]byte
-	switch format = format[:braceEnd]; format {
+	switch format {
 	case "b8", "big8":
 		return func(r *Reader) error {
 			if _, err := io.ReadFull(r.r, buf[:]); err != nil {
@@ -468,6 +461,36 @@ func parseReadSize(format string, dst *uint64) (func(*Reader) error, int, error)
 			return nil
 		}, end, nil
 
+	case "ascii", "a":
+		return func(r *Reader) error {
+			peeker, ok := r.r.(bytePeeker)
+			if !ok {
+				r.r = &bytePeekWrapper{r: r.r}
+				peeker = r.r.(bytePeeker)
+			}
+			rawNum := make([]byte, 0, 20)
+			for i := 0; i < 21; i++ {
+				next, err := peeker.Peek()
+				if err != nil || next < '0' || next > '9' {
+					if err != nil && len(rawNum) == 0 {
+						return err
+					}
+					break
+				}
+				if i == 20 {
+					return fmt.Errorf("still parsing ascii number in %s past max uint64 possible length of 20", rawNum)
+				}
+				rawNum = append(rawNum, next)
+				peeker.SkipPeek()
+			}
+			parsed, err := strconv.ParseUint(string(rawNum), 10, 64)
+			if err != nil {
+				return err
+			}
+			*dst = parsed
+			return nil
+		}, end, nil
+
 	default:
 		num, err := strconv.Atoi(format)
 		if err != nil {
@@ -478,4 +501,47 @@ func parseReadSize(format string, dst *uint64) (func(*Reader) error, int, error)
 		}
 		return func(r *Reader) error { *dst = uint64(num); return nil }, end, nil
 	}
+}
+
+type bytePeeker interface {
+	Peek() (byte, error)
+	SkipPeek()
+	io.Reader
+}
+
+type bytePeekWrapper struct {
+	haspeek bool
+	peek    byte
+	r       io.Reader
+}
+
+func (b *bytePeekWrapper) Peek() (byte, error) {
+	if b.haspeek {
+		return b.peek, nil
+	}
+	var peek [1]byte
+	_, err := io.ReadFull(b.r, peek[:])
+	if err != nil {
+		return 0, err
+	}
+	b.haspeek = true
+	b.peek = peek[0]
+	return b.peek, nil
+}
+
+func (b *bytePeekWrapper) SkipPeek() {
+	b.haspeek = false
+}
+
+func (b *bytePeekWrapper) Read(p []byte) (n int, err error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if b.haspeek {
+		b.haspeek = false
+		p[n] = b.peek
+		n++
+	}
+	nn, err := b.r.Read(p[n:])
+	return n + nn, err
 }

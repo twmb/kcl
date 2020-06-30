@@ -64,8 +64,8 @@ Headers have their own internal format (the same as keys and values above):
 
 NUMBER FORMATTING
 
-All number specifiers are required to have "kind" specification in braces,
-with the kinds being:
+It is recommended to have a number specifier "kind" in braces, with the kinds
+being:
   big8     eight byte unsigned big endian
   big4     four byte unsigned big endian
   big2     two byte unsigned big endian
@@ -80,8 +80,17 @@ with the kinds being:
   l4       alias for little4
   l2       alias for little2
   b        alias for byte
+  ascii    parses ascii numbers until the number stops
+  a        alias for ascii
   ###      an exact number of bytes (in ascii digits)
 
+If braces are elided, the default is to parse ascii. Note that ascii parsing
+can potentially lead to a footgun; if the value being parsed begins with a
+number, and there is no space between the size definition and the value being
+parsed, then the parser will continue reading numbers from the beginning of the
+value. For example, for "%V%v" with a value of "2a", the raw text in would be
+22a (two bytes, then the value), but that would be parsed as a 22 byte value.
+To avoid this problem, you would need to do "%V %v" and "2 2a".
 
 EXAMPLES
 
