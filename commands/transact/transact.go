@@ -50,6 +50,7 @@ func Command(cl *client.Client) *cobra.Command {
 		groupAlg    string
 		instanceID  string
 		writeFormat string
+		rack        string
 
 		rwFormat string
 
@@ -119,6 +120,7 @@ func Command(cl *client.Client) *cobra.Command {
 			}
 
 			cl.AddOpt(kgo.FetchIsolationLevel(kgo.ReadCommitted())) // we will be reading committed
+			cl.AddOpt(kgo.Rack(rack))
 
 			///////////////
 			// producing //
@@ -178,6 +180,7 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd.Flags().StringVarP(&group, "group", "g", "", "group to assign")
 	cmd.Flags().StringVarP(&groupAlg, "balancer", "b", "cooperative-sticky", "group balancer to use if group consuming (range, roundrobin, sticky, cooperative-sticky)")
 	cmd.Flags().StringVarP(&instanceID, "instance-id", "i", "", "group instance ID to use for consuming; empty means none (implies static membership; Kafka 2.5.0+)")
+	cmd.Flags().StringVar(&rack, "rack", "", "the rack to use for fetch requests; setting this opts in to nearest replica fetching (Kafka 2.2.0+)")
 
 	cmd.Flags().StringVarP(&writeFormat, "write-format", "w", "%t\t%k\t%v\n", "format to write to the transform program")
 	cmd.Flags().StringVarP(&readFormat, "read-format", "r", "%t\t%k\t%v\n", "format to read from the transform program")

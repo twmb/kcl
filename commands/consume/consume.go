@@ -34,6 +34,7 @@ type consumption struct {
 	num        int
 	format     string
 	escapeChar string
+	rack       string
 
 	fetchMaxBytes int32
 
@@ -118,6 +119,7 @@ func (c *consumption) run(topics []string) {
 	}
 
 	c.cl.AddOpt(kgo.FetchMaxBytes(c.fetchMaxBytes))
+	c.cl.AddOpt(kgo.Rack(c.rack))
 
 	cl := c.cl.Client()
 	if len(c.group) > 0 && !(isConsumerOffsets || isTransactionState) {

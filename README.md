@@ -11,6 +11,30 @@ options, and a complete Kafka administration interface.
 
 [1]: https://github.com/edenhill/kafkacat
 
+## Stability status
+
+I consider the current API **relatively** stable. Once this hits a 1.x release,
+the API will be even more stable. I would like to get some feedback / definitive
+usage of the client other than just myself before deeming things unchanging.
+As it stands, I know the ins and outs of the client, so it is too easy for me
+to avoid what may be knife edges for other people.
+
+I am fairly confident in the correctness of the administrative APIs, since they
+are very easy to implement. I am mostly confident in the correctness of
+producing, consuming, and transacting. I've spent a good amount of time
+integration testing my [kafka-go][2] client that this program uses. The main
+thing I have currently been unable to test is closest replica fetching, which
+is only theoretically supported. It is worth it to read the stability status in
+the kafka-go repo as well if using this client.
+
+[2]: https://github.com/twmb/kafka-go/
+
+In effect, consider this a **beta++**. Again, this is a bit more than a beta
+because the administrative APIs are relatively sound. I would love confirmation
+that this program has been used successfully, and would love to start a "Users"
+section below. With more confirmation of success, and confirmation that there
+are no knife edges, I will inch closer to a 1.x release.
+
 ## Configuration
 
 kcl supports configuration through a config file, environment variables, and
@@ -26,7 +50,7 @@ and a timeout for requests that take timeouts.
 
 Thanks to [cobra][2], autocompletion exists for bash, zsh, and powershell.
 
-[2]: https://github.com/spf13/cobra
+[3]: https://github.com/spf13/cobra
 
 As an example of what to put in your .bashrc,
 
