@@ -74,7 +74,7 @@ the input and output will use the same format.
 As an example, the following command:
 
 ```
-kcl transact -rw '%V{b4}%v' -dtxn -g group -t foo -x mytxn -v ./command
+kcl transact --rw '%V{b4}%v' -dtxn -g group -t foo -x mytxn -v ./command
 ```
 
 reads topic `foo` in group `group`, executes `./command`, writes all record
