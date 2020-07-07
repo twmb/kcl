@@ -102,7 +102,18 @@ func New(root *cobra.Command) *Client {
 
 	cfgDir, err := os.UserConfigDir()
 	if err == nil {
-		c.defaultCfgPath = filepath.Join(cfgDir, "kcl", "config.toml")
+		cfgDir = filepath.Join(cfgDir, "kcl")
+	}
+	if envDir, ok := os.LookupEnv("KCL_CONFIG_DIR"); ok {
+		cfgDir = envDir
+	}
+	cfgFile := "config.toml"
+	if envPath, ok := os.LookupEnv("KCL_CONFIG_FILE"); ok {
+		cfgFile = envPath
+	}
+	c.defaultCfgPath = filepath.Join(cfgDir, cfgFile)
+	if envFile, ok := os.LookupEnv("KCL_CONFIG_PATH"); ok {
+		c.defaultCfgPath = envFile
 	}
 
 	root.PersistentFlags().StringVar(&c.logLevel, "log-level", "none", "log level to use for basic logging (none, error, warn, info, debug)")

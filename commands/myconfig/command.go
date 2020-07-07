@@ -50,6 +50,11 @@ The config path can be set with --config-path, while --no-config disables
 loading a config file entirely. To show the configuration that kcl is running
 with, use the dump command.
 
+Three environment variables can be used to override default file path
+semantics: KCL_CONFIG_DIR, KCL_CONFIG_FILE, and KCL_CONFIG_PATH.  The first
+changes the directory searched, the middle changes the file name used, and the
+last overrides the former two (as a shortcut for setting both).
+
 The repeatable -X flag allows for specifying config options directly. Any flag
 set option has higher precedence over config file options.
 
@@ -116,7 +121,7 @@ The [sasl] section
 `
 	return &cobra.Command{
 		Use:   "help",
-		Short: "describe kcl config semantics",
+		Short: "describe kcl config file options",
 		Args:  cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
 			fmt.Println(configHelp)
