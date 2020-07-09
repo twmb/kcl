@@ -140,7 +140,7 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 func probeVersionCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "probe-version",
-		Short: "Probe and print the version of Kafka running",
+		Short: "Probe and print the version of Kafka running (incompatable with --as-version)",
 		Args:  cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
 			probeVersion(cl)
@@ -156,19 +156,21 @@ func probeVersion(cl *client.Client) {
 	cl.AddOpt(kgo.RequestRetries(0))
 	kresp, err := cl.Client().Request(context.Background(), apiVersionsRequest())
 	if err != nil { // pre 0.10.0 had no api versions
-		seedBrokers := cl.Client().SeedBrokers()
+		cl.RemakeWithOpts(kgo.MaxVersions(kversion.V0_9_0()))
 		// 0.9.0 has list groups
-		if _, err = seedBrokers[0].Request(context.Background(), new(kmsg.ListGroupsRequest)); err == nil {
+		if _, err = cl.Client().SeedBrokers()[0].Request(context.Background(), new(kmsg.ListGroupsRequest)); err == nil {
 			fmt.Println("Kafka 0.9.0")
 			return
 		}
+		cl.RemakeWithOpts(kgo.MaxVersions(kversion.V0_8_2()))
 		// 0.8.2 has find coordinator
-		if _, err = seedBrokers[0].Request(context.Background(), new(kmsg.FindCoordinatorRequest)); err == nil {
+		if _, err = cl.Client().SeedBrokers()[0].Request(context.Background(), new(kmsg.FindCoordinatorRequest)); err == nil {
 			fmt.Println("Kafka 0.8.2")
 			return
 		}
+		cl.RemakeWithOpts(kgo.MaxVersions(kversion.V0_8_1()))
 		// 0.8.1 has offset fetch
-		if _, err = seedBrokers[0].Request(context.Background(), new(kmsg.OffsetFetchRequest)); err == nil {
+		if _, err = cl.Client().SeedBrokers()[0].Request(context.Background(), new(kmsg.OffsetFetchRequest)); err == nil {
 			fmt.Println("Kafka 0.8.1")
 			return
 		}

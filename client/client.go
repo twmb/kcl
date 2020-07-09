@@ -152,6 +152,16 @@ func (c *Client) DefaultCfgPath() string {
 	return c.defaultCfgPath
 }
 
+// RemakeWithOpts remakes the client with additional opts added. The opts are
+// not persisted to the overall Client opts, but the created client does
+// persist. This is not concurrent safe.
+func (c *Client) RemakeWithOpts(opts ...kgo.Opt) {
+	var err error
+	c.client.Close()
+	c.client, err = kgo.NewClient(append(c.opts, opts...)...)
+	out.MaybeDie(err, "unable to load client: %v", err)
+}
+
 func (c *Client) loadClientOnce() {
 	c.once.Do(func() {
 		c.fillOpts()
