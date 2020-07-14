@@ -40,6 +40,10 @@ type CfgTLS struct {
 	ClientCertPath string `toml:"client_cert_path,omitempty"`
 	ClientKeyPath  string `toml:"client_key_path,omitempty"`
 	ServerName     string `toml:"server_name,omitempty"`
+
+	MinVersion       string   `toml:"min_version,omitempty"`
+	CipherSuites     []string `toml:"cipher_suites"`
+	CurvePreferences []string `toml:"curve_preferences"`
 }
 
 type CfgSASL struct {
@@ -247,18 +251,21 @@ func (c *Client) processOverrides() {
 	}
 
 	fns := map[string]func(*Cfg, string) error{
-		"seed_brokers":         func(c *Cfg, v string) error { return intoStrSlice(v, &c.SeedBrokers) },
-		"timeout_ms":           func(c *Cfg, v string) error { return intoInt32(v, &c.TimeoutMillis) },
-		"use_tls":              func(c *Cfg, _ string) error { mktls(c); return nil },
-		"tls_ca_cert_path":     func(c *Cfg, v string) error { mktls(c); c.TLS.CACert = v; return nil },
-		"tls_client_cert_path": func(c *Cfg, v string) error { mktls(c); c.TLS.ClientCertPath = v; return nil },
-		"tls_client_key_path":  func(c *Cfg, v string) error { mktls(c); c.TLS.ClientKeyPath = v; return nil },
-		"tls_server_name":      func(c *Cfg, v string) error { mktls(c); c.TLS.ServerName = v; return nil },
-		"sasl_method":          func(c *Cfg, v string) error { c.SASL.Method = v; return nil },
-		"sasl_zid":             func(c *Cfg, v string) error { c.SASL.Zid = v; return nil },
-		"sasl_user":            func(c *Cfg, v string) error { c.SASL.User = v; return nil },
-		"sasl_pass":            func(c *Cfg, v string) error { c.SASL.Pass = v; return nil },
-		"sasl_is_token":        func(c *Cfg, _ string) error { c.SASL.IsToken = true; return nil }, // accepts any val
+		"seed_brokers":          func(c *Cfg, v string) error { return intoStrSlice(v, &c.SeedBrokers) },
+		"timeout_ms":            func(c *Cfg, v string) error { return intoInt32(v, &c.TimeoutMillis) },
+		"use_tls":               func(c *Cfg, _ string) error { mktls(c); return nil },
+		"tls_ca_cert_path":      func(c *Cfg, v string) error { mktls(c); c.TLS.CACert = v; return nil },
+		"tls_client_cert_path":  func(c *Cfg, v string) error { mktls(c); c.TLS.ClientCertPath = v; return nil },
+		"tls_client_key_path":   func(c *Cfg, v string) error { mktls(c); c.TLS.ClientKeyPath = v; return nil },
+		"tls_server_name":       func(c *Cfg, v string) error { mktls(c); c.TLS.ServerName = v; return nil },
+		"tls_min_version":       func(c *Cfg, v string) error { mktls(c); c.TLS.MinVersion = v; return nil },
+		"tls_cipher_suites":     func(c *Cfg, v string) error { mktls(c); return intoStrSlice(v, &c.TLS.CipherSuites) },
+		"tls_curve_preferences": func(c *Cfg, v string) error { mktls(c); return intoStrSlice(v, &c.TLS.CurvePreferences) },
+		"sasl_method":           func(c *Cfg, v string) error { c.SASL.Method = v; return nil },
+		"sasl_zid":              func(c *Cfg, v string) error { c.SASL.Zid = v; return nil },
+		"sasl_user":             func(c *Cfg, v string) error { c.SASL.User = v; return nil },
+		"sasl_pass":             func(c *Cfg, v string) error { c.SASL.Pass = v; return nil },
+		"sasl_is_token":         func(c *Cfg, _ string) error { c.SASL.IsToken = true; return nil }, // accepts any val
 	}
 
 	parse := func(kvs []string) {
@@ -334,9 +341,7 @@ func (c *Client) maybeAddMaxVersions() {
 }
 
 func (c *Client) maybeAddSASL() error {
-	method := strings.ToLower(strings.TrimSpace(c.cfg.SASL.Method))
-	method = strings.Replace(method, "-", "", -1)
-	method = strings.Replace(method, "_", "", -1)
+	method := normstr(c.cfg.SASL.Method)
 
 	switch method {
 	case "":
@@ -377,25 +382,51 @@ func (c *Client) loadTLS() (*tls.Config, error) {
 		return nil, nil
 	}
 
-	tlscfg := &tls.Config{
-		MinVersion: tls.VersionTLS12,
+	tc := new(tls.Config)
 
-		CipherSuites: []uint16{
-			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
-			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
-			tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
-			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
-			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-			// ECDHE-{ECDSA,RSA}-AES256-SHA384 unavailable
-			tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256,
-			tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256,
-			tls.TLS_RSA_WITH_AES_128_GCM_SHA256, // for Kafka
-		},
+	switch strings.ToLower(c.cfg.TLS.MinVersion) {
+	case "", "v1.2", "1.2":
+		tc.MinVersion = tls.VersionTLS12 // the default
+	case "v1.3", "1.3":
+		tc.MinVersion = tls.VersionTLS13
+	case "v1.1", "1.1":
+		tc.MinVersion = tls.VersionTLS11
+	case "v1.0", "1.0":
+		tc.MinVersion = tls.VersionTLS10
+	default:
+		return nil, fmt.Errorf("unrecognized tls min version %s", c.cfg.TLS.MinVersion)
+	}
 
-		CurvePreferences: []tls.CurveID{
-			tls.X25519,
-		},
+	if suites := c.cfg.TLS.CipherSuites; len(suites) > 0 {
+		potentials := make(map[string]uint16)
+		for _, suite := range append(tls.CipherSuites(), tls.InsecureCipherSuites()...) {
+			potentials[normstr(suite.Name)] = suite.ID
+			potentials[normstr(strings.TrimPrefix("TLS_", suite.Name))] = suite.ID
+		}
+
+		for _, suite := range c.cfg.TLS.CipherSuites {
+			id, exists := potentials[normstr(suite)]
+			if !exists {
+				return nil, fmt.Errorf("unknown cipher suite %s", suite)
+			}
+			tc.CipherSuites = append(tc.CipherSuites, id)
+		}
+	}
+
+	if curves := c.cfg.TLS.CurvePreferences; len(curves) > 0 {
+		potentials := map[string]tls.CurveID{
+			"curvep256": tls.CurveP256,
+			"curvep384": tls.CurveP384,
+			"curvep521": tls.CurveP521,
+			"x25519":    tls.X25519,
+		}
+		for _, curve := range c.cfg.TLS.CurvePreferences {
+			id, exists := potentials[normstr(curve)]
+			if !exists {
+				return nil, fmt.Errorf("unknown curve preference %s", curve)
+			}
+			tc.CurvePreferences = append(tc.CurvePreferences, id)
+		}
 	}
 
 	if c.cfg.TLS.CACert != "" {
@@ -405,8 +436,8 @@ func (c *Client) loadTLS() (*tls.Config, error) {
 				c.cfg.TLS.CACert, err)
 		}
 
-		tlscfg.RootCAs = x509.NewCertPool()
-		tlscfg.RootCAs.AppendCertsFromPEM(ca)
+		tc.RootCAs = x509.NewCertPool()
+		tc.RootCAs.AppendCertsFromPEM(ca)
 	}
 
 	if c.cfg.TLS.ClientCertPath != "" ||
@@ -433,11 +464,11 @@ func (c *Client) loadTLS() (*tls.Config, error) {
 			return nil, fmt.Errorf("unable to create key pair: %v", err)
 		}
 
-		tlscfg.Certificates = append(tlscfg.Certificates, pair)
+		tc.Certificates = append(tc.Certificates, pair)
 
 	}
 
-	return tlscfg, nil
+	return tc, nil
 }
 
 func (c *Client) parseLogLevel() {
@@ -463,4 +494,11 @@ func (c *Client) parseLogLevel() {
 		of = f
 	}
 	c.opts = append(c.opts, kgo.WithLogger(kgo.BasicLogger(of, level, nil)))
+}
+
+func normstr(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.Replace(s, "-", "", -1)
+	s = strings.Replace(s, "_", "", -1)
+	return s
 }

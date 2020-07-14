@@ -103,6 +103,24 @@ The [tls] section
   server_name="127.0.0.1"
      Server name to use for connecting to brokers over TLS.
 
+  min_version="v1.2"
+     Minimum TLS version to use for negotiating. The default is v1.2.
+     This accepts v1.0 through v1.3, with or without the v prefix.
+
+  cipher_suites="tls_ecdhe_ecdsa_with_aes_256_gcm_sha384, RSA_WITH_AES_128_GCM_SHA256"
+     Comma delimited cipher suites to use for negotiating, overriding the
+     golang default. Underscores and dots can be anywhere, and the names
+     can be upper or lowercase and can optionally have a TLS_ prefix.
+     The names are taken from Go's crypto/tls constants, which can be
+     seen here: https://golang.org/pkg/crypto/tls/#pkg-constants.
+
+  curve_preferences="x25519"
+     Comma delimited curve preferences to use for negotiating, overriding
+     the golang default. Underscores and dots can be anywhere, and the
+     names can be upper or lowercase.
+     The names are taken from Go's crypto/tls CurveID constants, which
+     can be seen here: https://golang.org/pkg/crypto/tls/#CurveID
+
 The [sasl] section
 
   method="scram_sha_256"
