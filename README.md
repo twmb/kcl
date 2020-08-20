@@ -49,6 +49,9 @@ If you have a go installation, you can simply
 go install github.com/twmb/kcl
 ```
 
+This will install kcl from the latest release. You can optionally suffix the
+`go get` with `@v#.#.#` to install a specific version.
+
 Otherwise, you can download a release from the
 [releases](https://github.com/twmb/kcl/releases) page.
 
