@@ -53,6 +53,7 @@ Format options:
   \n    newline
   \r    carriage return
   \t    tab
+  \\    slash
   \xXX  any ASCII character (input must be hex)
 
 Headers have their own internal format (the same as keys and values above):
@@ -119,7 +120,7 @@ will output the timestamp as YY-MM-DD HH:MM:SS.ms.
 EXAMPLES
 
 A basic example:
-  -f 'Topic %t [%p] at offset %o @%d{strftime[%F %T]}: key %k: %s\n'
+  -f 'Topic %t [%p] at offset %o @%d{strftime[%F %T]}: key %k: %v\n'
 
 To mirror a topic, you can use the following format for consuming from one
 topic and pipe the results to producing with this same format:
