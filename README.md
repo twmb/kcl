@@ -1,6 +1,19 @@
 kcl
 ===
 
+## Contents
+
+- [Introduction](#introduction)
+- [Getting Started / Installation](#getting-started)
+- [Stability Status](#stability-status)
+- [Configuration](#configuration)
+- [Autocompletion](#autocompletion)
+- [Transactions](#transactions)
+- [Group Consuming](#group-consuming)
+- [API at a Glance](#api-at-a-glance)
+
+## Introduction
+
 kcl is a complete, pure Go command line Kafka client. Think of it as your
 one stop shop to do anything you want to do with Kafka. Producing, consuming,
 transacting, administrating, and so on.
@@ -11,29 +24,33 @@ options, and a complete Kafka administration interface.
 
 [1]: https://github.com/edenhill/kafkacat
 
-## Stability status
+## Stability Status
 
 I consider the current API **relatively** stable. Once this hits a 1.x release,
-the API will be even more stable. I would like to get some feedback / definitive
-usage of the client other than just myself before deeming things unchanging.
-As it stands, I know the ins and outs of the client, so it is too easy for me
-to avoid what may be knife edges for other people.
+the API will be even more stable. I would like to get some definitive
+broader usage of the client before deeming things unchanging.
 
-I am fairly confident in the correctness of the administrative APIs, since they
-are very easy to implement. I am mostly confident in the correctness of
-producing, consuming, and transacting. I've spent a good amount of time
-integration testing my [kafka-go][2] client that this program uses. The main
-thing I have currently been unable to test is closest replica fetching, which
-is only theoretically supported. It is worth it to read the stability status in
-the kafka-go repo as well if using this client.
+I've spent a good amount of time integration testing my [kafka-go][2] client
+that this program uses. The main thing I have currently been unable to test is
+closest replica fetching, which is only theoretically supported. It is worth it
+to read the stability status in the kafka-go repo as well if using this client.
 
 [2]: https://github.com/twmb/kafka-go/
 
-In effect, consider this a **beta++**. Again, this is a bit more than a beta
-because the administrative APIs are relatively sound. I would love confirmation
-that this program has been used successfully, and would love to start a "Users"
-section below. With more confirmation of success, and confirmation that there
-are no knife edges, I will inch closer to a 1.x release.
+I would love confirmation that this program has been used more broadly, and
+would love to start a "Users" section below. With this confirmation, I will
+push a 1.x release.
+
+## Getting Started
+
+If you have a go installation, you can simply
+
+```
+go install github.com/twmb/kcl
+```
+
+Otherwise, you can download a release from the
+[releases](https://github.com/twmb/kcl/releases) page.
 
 ## Configuration
 
@@ -45,6 +62,8 @@ As well, multiple configs can easily swapped between with `kcl myconfig`.
 
 The configuration supports TLS, SASL (currently PLAIN and SCRAM), seed brokers,
 and a timeout for requests that take timeouts.
+
+To learn more about configuration, use `kcl myconfig help`.
 
 ## Autocompletion
 
@@ -93,7 +112,7 @@ balancing strategies, be sure to specify a different balancer.
 
 ## API at a glance
 
-Be sure to `--help` any command before using it to understand the full syntax.
+Be sure to `help` any command before using it to understand the full syntax.
 
 ```
 kcl
