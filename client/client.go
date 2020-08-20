@@ -60,8 +60,8 @@ type Cfg struct {
 
 	TimeoutMillis int32 `toml:"timeout_ms,omitempty"`
 
-	TLS  *CfgTLS `toml:"tls,omitempty"`
-	SASL CfgSASL `toml:"sasl,omitempty"`
+	TLS  *CfgTLS  `toml:"tls,omitempty"`
+	SASL *CfgSASL `toml:"sasl,omitempty"`
 }
 
 // Client contains kgo client options and a kgo client.
@@ -250,6 +250,12 @@ func (c *Client) processOverrides() {
 		}
 	}
 
+	mksasl := func(c *Cfg) {
+		if c.SASL == nil {
+			c.SASL = new(CfgSASL)
+		}
+	}
+
 	fns := map[string]func(*Cfg, string) error{
 		"seed_brokers":          func(c *Cfg, v string) error { return intoStrSlice(v, &c.SeedBrokers) },
 		"timeout_ms":            func(c *Cfg, v string) error { return intoInt32(v, &c.TimeoutMillis) },
@@ -261,11 +267,11 @@ func (c *Client) processOverrides() {
 		"tls_min_version":       func(c *Cfg, v string) error { mktls(c); c.TLS.MinVersion = v; return nil },
 		"tls_cipher_suites":     func(c *Cfg, v string) error { mktls(c); return intoStrSlice(v, &c.TLS.CipherSuites) },
 		"tls_curve_preferences": func(c *Cfg, v string) error { mktls(c); return intoStrSlice(v, &c.TLS.CurvePreferences) },
-		"sasl_method":           func(c *Cfg, v string) error { c.SASL.Method = v; return nil },
-		"sasl_zid":              func(c *Cfg, v string) error { c.SASL.Zid = v; return nil },
-		"sasl_user":             func(c *Cfg, v string) error { c.SASL.User = v; return nil },
-		"sasl_pass":             func(c *Cfg, v string) error { c.SASL.Pass = v; return nil },
-		"sasl_is_token":         func(c *Cfg, _ string) error { c.SASL.IsToken = true; return nil }, // accepts any val
+		"sasl_method":           func(c *Cfg, v string) error { mksasl(c); c.SASL.Method = v; return nil },
+		"sasl_zid":              func(c *Cfg, v string) error { mksasl(c); c.SASL.Zid = v; return nil },
+		"sasl_user":             func(c *Cfg, v string) error { mksasl(c); c.SASL.User = v; return nil },
+		"sasl_pass":             func(c *Cfg, v string) error { mksasl(c); c.SASL.Pass = v; return nil },
+		"sasl_is_token":         func(c *Cfg, _ string) error { mksasl(c); c.SASL.IsToken = true; return nil }, // accepts any val
 	}
 
 	parse := func(kvs []string) {
@@ -341,6 +347,10 @@ func (c *Client) maybeAddMaxVersions() {
 }
 
 func (c *Client) maybeAddSASL() error {
+	if c.cfg.SASL == nil {
+		return nil
+	}
+
 	method := normstr(c.cfg.SASL.Method)
 
 	switch method {
