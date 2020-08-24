@@ -11,6 +11,7 @@ kcl
 - [Transactions](#transactions)
 - [Group Consuming](#group-consuming)
 - [API at a Glance](#api-at-a-glance)
+- [Examples](#examples)
 
 ## Introduction
 
@@ -175,4 +176,58 @@ kcl
    dump                             -- dump the kcl configuration
    help                             -- print kcl configuration help
    ls                               -- list files in the kcl config directory
+```
+
+## Examples
+
+### Consuming
+
+#### ...from topic foo, printing the values of records
+
+```
+kcl consume foo
+```
+
+#### ...from topic foo with advanced printing
+
+```
+kcl consume foo -f "KEY=%k, VALUE=%v, HEADERS=%{%h{ '%k'='%v' }}\n"
+```
+
+#### ...from topics foo and bar with group grup
+
+```
+kcl consume -g grup foo bar
+```
+
+### Producing
+
+#### ...a newline delimited value to topic foo
+
+```
+echo fubar | kcl produce foo
+```
+
+#### ...a bunch of newline delimited values in file baz to topic foo
+
+```
+kcl produce foo < baz
+```
+
+#### ...key bar, value foo to topic foo in an obscurely formatted way
+
+```
+echo barfoo | kcl produce foo -f'%K{3}%V{3}%v%k\n'
+```
+
+#### ...key bizzy, value bazzy to topic foo, pulling the key and value from a line
+
+```
+echo "key: bizzy, value: bazzy" | kcl produce foo  -f 'key: %k, value: %v\n'
+```
+
+#### ...key k, value v, headers k1 v1 and k2 v2 to topic foo, with ascii length prefixed strings
+
+```
+echo "1 k 1 v 2 2 h1 2 v1 2 h2 2 v2 " | kcl produce foo -f '%K %k %V %v %H %h{%K %k %V %v }\n'
 ```
