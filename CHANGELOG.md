@@ -1,6 +1,10 @@
 TBD
 ===
 
+v0.1.1
+======
+
+- [f05d384b6](https://github.com/twmb/kcl/commit/f05d384b60f26b773175d725ad854fa5e5cdfc5b): add `admin {describe,alter}-client-quotas`
 - [48dc25f04](https://github.com/twmb/kcl/commit/48dc25f0409874f47ffa60a5a442ffec464a80df): adds short flag for `--format` in `kcl group list`
 - [5392b0f05](https://github.com/twmb/kcl/commit/5392b0f0510f1a27be1e3bd6398f68cdb168c94b): adds `--with-types` and `--with-docs` flags to `kcl configs describe`
 - [5b516e8b5](https://github.com/twmb/kcl/commit/5b516e8b516d113908a796f3c0a1063024962b55): adds 2.6.0 to `kcl misc probe-version`
