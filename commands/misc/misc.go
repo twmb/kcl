@@ -221,6 +221,8 @@ func probeVersion(cl *client.Client) {
 		fmt.Println("Kafka 2.4.0")
 	case eq(kversion.V2_5_0()):
 		fmt.Println("Kafka 2.5.0")
+	case eq(kversion.V2_6_0()):
+		fmt.Println("Kafka 2.6.0")
 	default:
 		fmt.Println("Unknown version: either tip or between releases")
 	}
