@@ -7,6 +7,6 @@ require (
 	github.com/spf13/cobra v1.0.0
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/twmb/go-strftime v0.0.0-20190915101236-e74f7c4fe4fa
-	github.com/twmb/kafka-go v0.4.5
+	github.com/twmb/kafka-go v0.4.6
 	golang.org/x/crypto v0.0.0-20200622213623-75b288015ac9 // indirect
 )
