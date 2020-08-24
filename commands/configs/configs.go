@@ -272,7 +272,7 @@ func (c *cfger) alterOld() {
 // for all config options that will be lost.
 func (c *cfger) confirmAlterLoss() {
 	existing := make(map[string]string, 10)
-	_, describeResource := c.querier.issueDescribeConfig()
+	_, describeResource := c.querier.issueDescribeConfig(false)
 	for _, entry := range describeResource.Configs {
 		switch entry.Source {
 		case 4, 5: // static, default
@@ -328,7 +328,7 @@ func (c *cfger) confirmAlterLoss() {
 
 // issues a describe config for a single resource and returns
 // the response and that resource.
-func (q querier) issueDescribeConfig() (
+func (q querier) issueDescribeConfig(withDocs bool) (
 	*kmsg.DescribeConfigsResponse,
 	*kmsg.DescribeConfigsResponseResource,
 ) {
@@ -337,6 +337,7 @@ func (q querier) issueDescribeConfig() (
 			ResourceType: int8(q.entity),
 			ResourceName: q.resourceName,
 		}},
+		IncludeDocumentation: withDocs,
 	}
 
 	kresp, err := q.requestor.Request(context.Background(), &req)
@@ -356,6 +357,8 @@ func (q querier) issueDescribeConfig() (
 
 func describeCommand(cl *client.Client) *cobra.Command {
 	q := querier{cl: cl}
+
+	var withDocs, withTypes bool
 
 	cmd := &cobra.Command{
 		Use:   "describe [ENTITY]",
@@ -383,7 +386,7 @@ describe bar --type topic`,
 		Run: func(_ *cobra.Command, args []string) {
 			q.parseEntity(args)
 
-			resp, resource := q.issueDescribeConfig()
+			resp, resource := q.issueDescribeConfig(withDocs)
 			if cl.AsJSON() {
 				out.ExitJSON(resp)
 			}
@@ -394,7 +397,6 @@ describe bar --type topic`,
 			})
 
 			tw := out.BeginTabWrite()
-			defer tw.Flush()
 
 			for _, kv := range kvs {
 				key := kv.Name
@@ -408,16 +410,48 @@ describe bar --type topic`,
 				if kv.IsSensitive {
 					val = "(sensitive)"
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t\n",
+
+				fmtStr := "%s\t%s\t%s"
+				args := []interface{}{
 					key,
 					val,
 					configSourceForInt8(kv.Source),
-				)
+				}
+				if resp.Version >= 3 && withTypes {
+					fmtStr += "\t%s"
+					args = []interface{}{
+						key,
+						typeForInt8(kv.ConfigType),
+						val,
+						configSourceForInt8(kv.Source),
+					}
+				}
+				fmt.Fprintf(tw, fmtStr+"\n", args...)
+			}
+
+			tw.Flush()
+
+			if !withDocs || resp.Version < 3 {
+				return
+			}
+
+			fmt.Println()
+			for _, kv := range kvs {
+				docs := kv.Documentation
+				if docs == nil {
+					continue
+				}
+
+				fmt.Println(kv.Name + ":")
+				fmt.Println(*docs)
+				fmt.Println()
 			}
 		},
 	}
 
 	cmd.Flags().StringVarP(&q.rawEntity, "type", "t", "topic", "entity type (t|topic, b|broker, bl|broker logger)")
+	cmd.Flags().BoolVar(&withDocs, "with-docs", false, "inlcude documentation for config values (Kafka 2.6.0+)")
+	cmd.Flags().BoolVar(&withTypes, "with-types", false, "inlcude types of config values (Kafka 2.6.0+)")
 
 	return cmd
 }
@@ -438,6 +472,34 @@ func configSourceForInt8(i int8) string {
 		return "DEFAULT_CONFIG"
 	case 6:
 		return "DYNAMIC_BROKER_LOGGER_CONFIG"
+	default:
+		return "UNKNOWN_TO_KCL"
 	}
-	return ""
+}
+
+func typeForInt8(i int8) string {
+	switch i {
+	case 0:
+		return "UNKNOWN"
+	case 1:
+		return "BOOLEAN"
+	case 2:
+		return "STRING"
+	case 3:
+		return "INT"
+	case 4:
+		return "SHORT"
+	case 5:
+		return "LONG"
+	case 6:
+		return "DOUBLE"
+	case 7:
+		return "LIST"
+	case 8:
+		return "CLASS"
+	case 9:
+		return "PASSWORD"
+	default:
+		return "UNKNOWN_TO_KCL"
+	}
 }
