@@ -141,6 +141,8 @@ kcl
    list-partition-reassignments     -- list active partition reassignments
    alter-replica-log-dirs           -- alter the directories partitions are in
    describe-log-dirs                -- describe the directories partitions are in
+   alter-client-quotas              -- alter client quotas (see KIP-546; 2.6.0+)
+   describe-client-quotas           -- describe client quotas (see KIP-546; 2.6.0+)
 
  dtoken
    create                           -- create delegation tokens
