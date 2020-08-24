@@ -119,49 +119,60 @@ Be sure to `help` any command before using it to understand the full syntax.
 
 ```
 kcl
- consume
- produce
- transact
+ consume                            -- consume records
+
+ produce                            -- produce records
+
+ transact                           -- transactional consuming & producing
+
  misc
-   api-versions
-   probe-version
-   gen-autocomplete
-   errcode
-   raw-req
-   list-offsets
+   api-versions                     -- print api versions for requests
+   probe-version                    -- probe for the currently running Kafka version
+   gen-autocomplete                 -- generate cli autocompletion
+   errcode                          -- print the error name and message for an error number
+   raw-req                          -- issue a raw request from input JSON
+   list-offsets                     -- list offsets for topics and partitions
+
  admin
-   elect-leaders
-   delete-records
-   alter-partition-assignments
-   list-partition-reassignments
-   alter-replica-log-dirs
-   describe-log-dirs
+   elect-leaders                    -- trigger leader elections
+   delete-records                   -- delete record deletion for partitions based off input offsets
+   alter-partition-assignments      -- alter which brokers own which partitions
+   list-partition-reassignments     -- list active partition reassignments
+   alter-replica-log-dirs           -- alter the directories partitions are in
+   describe-log-dirs                -- describe the directories partitions are in
+
  dtoken
-   create
-   renew
-   describe
-   expire
+   create                           -- create delegation tokens
+   renew                            -- renew delegation tokens
+   describe                         -- describe delegation tokens
+   expire                           -- expire delegation tokens
+
  acl
-   create
-   describe
-   delete
+   create                           -- create ACLs
+   describe                         -- describe ACLs
+   delete                           -- delete ACLs
+
  group
-   list
-   describe
-   delete
-   offset-delete
+   list                             -- list consumer groups
+   describe                         -- describe consumer groups
+   delete                           -- delete consumer groups
+   offset-delete                    -- forcefully delete committed offsets a group (see KIP-496)
+
  topic
-   create
-   delete
-   add-partitions
- metadata
+   create                           -- create topics
+   delete                           -- delete topics
+   add-partitions                   -- add partitions to topics
+
+ metadata                           -- print broker, cluster, and topic information
+
  configs
-   alter
-   describe
+   alter                            -- alter broker, topic, broker-logger, etc. configs
+   describe                         -- describe broker, topic, broker-logger, etc. configs
+
  myconfig
-   unlink
-   link
-   dump
-   help
-   ls
+   unlink                           -- unlink the kcl config symlink
+   link                             -- link a kcl config symlink
+   dump                             -- dump the kcl configuration
+   help                             -- print kcl configuration help
+   ls                               -- list files in the kcl config directory
 ```
