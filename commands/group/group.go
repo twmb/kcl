@@ -92,7 +92,7 @@ the groups listed. This prints all of the information from a ListGroups request.
 			}
 		},
 	}
-	cmd.Flags().StringArrayVar(&statesFilter, "filter", nil, "filter groups listed by state (Preparing, PreparingRebalance, CompletingRebalance, Stable, Dead, Empty; Kafka 2.6.0+)")
+	cmd.Flags().StringArrayVarP(&statesFilter, "filter", "f", nil, "filter groups listed by state (Preparing, PreparingRebalance, CompletingRebalance, Stable, Dead, Empty; Kafka 2.6.0+; repeatable)")
 	return cmd
 }
 
