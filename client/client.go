@@ -351,7 +351,7 @@ func (c *Client) maybeAddSASL() error {
 		return nil
 	}
 
-	method := normstr(c.cfg.SASL.Method)
+	method := Strnorm(c.cfg.SASL.Method)
 
 	switch method {
 	case "":
@@ -410,12 +410,12 @@ func (c *Client) loadTLS() (*tls.Config, error) {
 	if suites := c.cfg.TLS.CipherSuites; len(suites) > 0 {
 		potentials := make(map[string]uint16)
 		for _, suite := range append(tls.CipherSuites(), tls.InsecureCipherSuites()...) {
-			potentials[normstr(suite.Name)] = suite.ID
-			potentials[normstr(strings.TrimPrefix("TLS_", suite.Name))] = suite.ID
+			potentials[Strnorm(suite.Name)] = suite.ID
+			potentials[Strnorm(strings.TrimPrefix("TLS_", suite.Name))] = suite.ID
 		}
 
 		for _, suite := range c.cfg.TLS.CipherSuites {
-			id, exists := potentials[normstr(suite)]
+			id, exists := potentials[Strnorm(suite)]
 			if !exists {
 				return nil, fmt.Errorf("unknown cipher suite %s", suite)
 			}
@@ -431,7 +431,7 @@ func (c *Client) loadTLS() (*tls.Config, error) {
 			"x25519":    tls.X25519,
 		}
 		for _, curve := range c.cfg.TLS.CurvePreferences {
-			id, exists := potentials[normstr(curve)]
+			id, exists := potentials[Strnorm(curve)]
 			if !exists {
 				return nil, fmt.Errorf("unknown curve preference %s", curve)
 			}
@@ -506,9 +506,9 @@ func (c *Client) parseLogLevel() {
 	c.opts = append(c.opts, kgo.WithLogger(kgo.BasicLogger(of, level, nil)))
 }
 
-func normstr(s string) string {
+func Strnorm(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
-	s = strings.Replace(s, "-", "", -1)
-	s = strings.Replace(s, "_", "", -1)
+	s = strings.ReplaceAll(s, "-", "")
+	s = strings.ReplaceAll(s, "_", "")
 	return s
 }

@@ -130,7 +130,8 @@ kcl
    api-versions                     -- print api versions for requests
    probe-version                    -- probe for the currently running Kafka version
    gen-autocomplete                 -- generate cli autocompletion
-   errcode                          -- print the error name and message for an error number
+   errcode                          -- print the error name and desc for an error number
+   errtext                          -- print the error name and desc for an error code / all errors
    raw-req                          -- issue a raw request from input JSON
    list-offsets                     -- list offsets for topics and partitions
 

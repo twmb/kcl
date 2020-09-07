@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -470,16 +469,8 @@ For more detailed information about ACLs, read kcl acl --help.
 // STR <-> INT //
 /////////////////
 
-func norm(s string) string {
-	s = strings.ReplaceAll(s, "_", "")
-	s = strings.ReplaceAll(s, ".", "")
-	s = strings.ToLower(s)
-	s = strings.TrimSpace(s)
-	return s
-}
-
 func atoiResourceType(s string) int8 {
-	switch norm(s) {
+	switch client.Strnorm(s) {
 	case "any":
 		return 1
 	case "topic":
@@ -517,7 +508,7 @@ func itoaResourceType(t int8) string {
 }
 
 func atoiResourcePattern(p string) int8 {
-	switch norm(p) {
+	switch client.Strnorm(p) {
 	case "match":
 		return 1
 	case "literal":
@@ -543,7 +534,7 @@ func itoaResourcePattern(p int8) string {
 }
 
 func atoiOperation(o string) int8 {
-	switch norm(o) {
+	switch client.Strnorm(o) {
 	case "any":
 		return 1
 	case "all":
@@ -605,7 +596,7 @@ func itoaOperation(o int8) string {
 }
 
 func atoiPermission(t string) int8 {
-	switch norm(t) {
+	switch client.Strnorm(t) {
 	case "any":
 		return 1
 	case "deny":

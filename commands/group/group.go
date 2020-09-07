@@ -4,7 +4,6 @@ package group
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -47,7 +46,7 @@ the groups listed. This prints all of the information from a ListGroups request.
 		Args: cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
 			for i, f := range statesFilter {
-				switch strings.ToLower(strings.Replace(f, "_", "", -1)) {
+				switch client.Strnorm(f) {
 				case "preparing":
 					statesFilter[i] = "Preparing"
 				case "preparingrebalance":

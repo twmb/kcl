@@ -37,6 +37,7 @@ func Command(cl *client.Client) *cobra.Command {
 	}
 
 	cmd.AddCommand(errcodeCommand())
+	cmd.AddCommand(errtextCommand())
 	cmd.AddCommand(genAutocompleteCommand())
 	cmd.AddCommand(apiVersionsCommand(cl))
 	cmd.AddCommand(probeVersionCommand(cl))
@@ -49,7 +50,7 @@ func Command(cl *client.Client) *cobra.Command {
 func errcodeCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "errcode CODE",
-		Short: "Print the name and message for an error code",
+		Short: "Print the name and description for an error code",
 		Args:  cobra.ExactArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
 			code, err := strconv.Atoi(args[0])
@@ -64,6 +65,53 @@ func errcodeCommand() *cobra.Command {
 			fmt.Printf("%s\n%s\n", kerr.Message, kerr.Description)
 		},
 	}
+}
+
+func errtextCommand() *cobra.Command {
+	var list, verbose bool
+	cmd := &cobra.Command{
+		Use:   "errtext [ERROR_NAME]",
+		Short: "Print the name, code and description for an error name or all errors",
+		Args:  cobra.MaximumNArgs(1),
+		Run: func(_ *cobra.Command, args []string) {
+			var text string
+			if list {
+				if len(args) != 0 {
+					out.Die("invalid extra args while list is set")
+				}
+			} else {
+				if len(args) != 1 {
+					out.Die("missing error text to search for")
+				} else {
+					text = client.Strnorm(args[0])
+				}
+			}
+
+			var err error
+			for code := int16(1); err != kerr.UnknownServerError; code++ {
+				err = kerr.ErrorForCode(code)
+				kerr := err.(*kerr.Error)
+				if list {
+					fmt.Printf("%s (%d)\n%s\n\n", kerr.Message, kerr.Code, kerr.Description)
+					continue
+				}
+
+				if verbose {
+					fmt.Printf("trying %s...\n", kerr.Message)
+				}
+				if client.Strnorm(kerr.Message) == text {
+					fmt.Printf("%s (%d)\n%s\n", kerr.Message, kerr.Code, kerr.Description)
+					return
+				}
+			}
+			if !list {
+				out.Die("Unknown error text.")
+			}
+		},
+	}
+	cmd.Flags().BoolVar(&list, "list", false, "rather than comparing, list all errors and their descriptions")
+	cmd.Flags().BoolVar(&verbose, "verbose", false, "verbosely print errors compared against")
+	return cmd
 }
 
 func genAutocompleteCommand() *cobra.Command {
