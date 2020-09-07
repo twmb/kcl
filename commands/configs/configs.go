@@ -170,7 +170,7 @@ func (c *cfger) parseKVs() {
 			case "-":
 				op = 3
 			default:
-				out.Die("unrecognized incremental op %q; not in set [s, set, d, del, +, -]", op)
+				out.Die("unrecognized incremental op %q; not in set [s, set, d, del, +, -]", rawOp)
 			}
 
 			var v *string
