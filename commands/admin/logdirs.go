@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -15,7 +16,8 @@ import (
 )
 
 func logdirsDescribeCommand(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
+	var broker int32
+	cmd := &cobra.Command{
 		Use:   "describe-log-dirs",
 		Short: "Describe log directories for topic partitions.",
 		Long: `Describe log directories for topic partitions (Kafka 1.0.0+).
@@ -38,9 +40,23 @@ A directory is a "future" directory if it was created with an alter command and
 will replace the replica's current log directory in the future.
 
 Input format is topic:1,2,3.
+
+Alternatively, if you just specify a topic, this will describe all partitions
+for that topic.
+
+By default, this command will return log dirs for the partition leaders.
+
+If describing everything, this will merge all in sync replicas into the same
+response.
+
+You can direct this request to specific brokers with the --broker argument,
+which allows you to control whether you are asking for information about
+replicas vs. the leader.
 `,
 
-		Example: `describe-log-dirs foo:1,2,3
+		Example: `describe-log-dirs foo:1,2,3 bar:3,4,5
+
+describe-log-dirs foo
 
 describe-log-dirs // describes all`,
 
@@ -49,6 +65,31 @@ describe-log-dirs // describes all`,
 			if topics != nil {
 				tps, err := flagutil.ParseTopicPartitions(topics)
 				out.MaybeDie(err, "improper topic partitions format on: %v", err)
+
+				// For any topic that had no partitions specified, we
+				// describe all partitions. We have to first learn of
+				// these partitions with a metadata request.
+				var alls []string
+				for topic, partitions := range tps {
+					if len(partitions) == 0 {
+						alls = append(alls, topic)
+					}
+				}
+				if len(alls) > 0 {
+					meta := new(kmsg.MetadataRequest)
+					for _, topic := range alls {
+						meta.Topics = append(meta.Topics, kmsg.MetadataRequestTopic{Topic: topic})
+					}
+					kresp, err := cl.Client().Request(context.Background(), meta)
+					out.MaybeDie(err, "unable to request metadata to determine partitions on topics: %v", err)
+					resp := kresp.(*kmsg.MetadataResponse)
+					for _, topic := range resp.Topics {
+						for _, partition := range topic.Partitions {
+							tps[topic.Topic] = append(tps[topic.Topic], partition.Partition)
+						}
+					}
+				}
+
 				for topic, partitions := range tps {
 					req.Topics = append(req.Topics, kmsg.DescribeLogDirsRequestTopic{
 						Topic:      topic,
@@ -57,12 +98,26 @@ describe-log-dirs // describes all`,
 				}
 			}
 
-			kresp, err := cl.Client().Request(context.Background(), &req)
+			var kresp kmsg.Response
+			var err error
+			if broker >= 0 {
+				kresp, err = cl.Client().Broker(int(broker)).Request(context.Background(), &req)
+			} else {
+				kresp, err = cl.Client().Request(context.Background(), &req)
+			}
 			out.MaybeDie(err, "unable to describe log dirs: %v", err)
 			if cl.AsJSON() {
 				out.ExitJSON(kresp)
 			}
 			resp := kresp.(*kmsg.DescribeLogDirsResponse)
+
+			sort.Slice(resp.Dirs, func(i, j int) bool { return resp.Dirs[i].Dir < resp.Dirs[j].Dir })
+			for _, dir := range resp.Dirs {
+				sort.Slice(dir.Topics, func(i, j int) bool { return dir.Topics[i].Topic < dir.Topics[j].Topic })
+				for _, topic := range dir.Topics {
+					sort.Slice(topic.Partitions, func(i, j int) bool { return topic.Partitions[i].Partition < topic.Partitions[j].Partition })
+				}
+			}
 
 			tw := out.BeginTabWrite()
 			defer tw.Flush()
@@ -89,10 +144,14 @@ describe-log-dirs // describes all`,
 
 		},
 	}
+
+	cmd.Flags().Int32VarP(&broker, "broker", "b", -1, "a specific broker to direct the request to")
+	return cmd
 }
 
 func logdirsAlterReplicasCommand(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
+	var broker int32
+	cmd := &cobra.Command{
 		Use:   "alter-replica-log-dirs",
 		Short: "Move topic replicas to a destination directory",
 		Long: `Move topic partitions to specified directories (Kafka 1.0.0+).
@@ -101,6 +160,10 @@ Introduced in Kafka 1.0.0, this command allows for moving replica log
 directories. See KIP-113 for the motivation.
 
 The input syntax is topic:1,2,3=/destination/directory.
+
+By default, this command will alter log dirs for the partition leaders.
+You can direct this request to specific brokers with the --broker argument,
+which allows you to alter replicas.
 `,
 
 		Example: `alter-replica-log-dirs foo:1,2,3=/dir bar:6=/dir2 baz:9=/dir`,
@@ -138,7 +201,13 @@ The input syntax is topic:1,2,3=/destination/directory.
 				req.Dirs = append(req.Dirs, reqDest)
 			}
 
-			kresp, err := cl.Client().Request(context.Background(), &req)
+			var kresp kmsg.Response
+			var err error
+			if broker >= 0 {
+				kresp, err = cl.Client().Broker(int(broker)).Request(context.Background(), &req)
+			} else {
+				kresp, err = cl.Client().Request(context.Background(), &req)
+			}
 			out.MaybeDie(err, "unable to alter replica log dirs: %v", err)
 			if cl.AsJSON() {
 				out.ExitJSON(kresp)
@@ -164,4 +233,6 @@ The input syntax is topic:1,2,3=/destination/directory.
 			}
 		},
 	}
+	cmd.Flags().Int32VarP(&broker, "broker", "b", -1, "a specific broker to direct the request to")
+	return cmd
 }
