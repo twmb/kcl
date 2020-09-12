@@ -14,24 +14,61 @@ import (
 	"github.com/twmb/kafka-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/commands/admin/acl"
+	"github.com/twmb/kcl/commands/admin/configs"
+	"github.com/twmb/kcl/commands/admin/dtoken"
+	"github.com/twmb/kcl/commands/admin/group"
+	"github.com/twmb/kcl/commands/admin/topic"
 	"github.com/twmb/kcl/flagutil"
 	"github.com/twmb/kcl/out"
 )
 
 func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "admin",
-		Short: "Admin utility commands.",
+		Use:     "admin",
+		Aliases: []string{"adm", "a"},
+		Short:   "Admin utility commands.",
 	}
+
+	cmd.AddCommand(alterCommand(cl))
+	cmd.AddCommand(describeCommand(cl))
+
+	cmd.AddCommand(topic.Command(cl))
+	cmd.AddCommand(acl.Command(cl))
+	cmd.AddCommand(dtoken.Command(cl))
+	cmd.AddCommand(group.Command(cl))
 
 	cmd.AddCommand(electLeaderCommand(cl))
 	cmd.AddCommand(deleteRecordsCommand(cl))
-	cmd.AddCommand(logdirsDescribeCommand(cl))
+
+	return cmd
+}
+
+func alterCommand(cl *client.Client) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "alter",
+		Short: "Altering admin commands (logdirs, partition assignments, quotas, scram).",
+	}
+
+	cmd.AddCommand(configs.AlterCommand(cl))
 	cmd.AddCommand(logdirsAlterReplicasCommand(cl))
 	cmd.AddCommand(alterPartitionAssignments(cl))
+	cmd.AddCommand(alterClientQuotas(cl))
+
+	return cmd
+}
+
+func describeCommand(cl *client.Client) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "describe",
+		Aliases: []string{"d"},
+		Short:   "Describing admin commands (logdirs, partition assignments, quotas, scram).",
+	}
+
+	cmd.AddCommand(configs.DescribeCommand(cl))
+	cmd.AddCommand(logdirsDescribeCommand(cl))
 	cmd.AddCommand(listPartitionReassignments(cl))
 	cmd.AddCommand(describeClientQuotas(cl))
-	cmd.AddCommand(alterClientQuotas(cl))
 
 	return cmd
 }
@@ -130,7 +167,7 @@ func alterPartitionAssignments(cl *client.Client) *cobra.Command {
 	var topicPartReplicas []string
 
 	cmd := &cobra.Command{
-		Use:   "alter-partition-assignments",
+		Use:   "partition-assignments",
 		Short: "Alter partition assignments.",
 		Long: `Alter which brokers partitions are assigned to (Kafka 2.4.0+).
 
@@ -145,7 +182,7 @@ need to quote your input to the flag.
 If a replica list is empty for a specific partition, this cancels any active
 reassignment for that partition.
 `,
-		Example: "alter-partition-assignments -t 'foo:1->1,2,3' -t 'bar:2->3,4,5;5->3,4,5'",
+		Example: "partition-assignments -t 'foo:1->1,2,3' -t 'bar:2->3,4,5;5->3,4,5'",
 		Run: func(_ *cobra.Command, args []string) {
 			tprs, err := flagutil.ParseTopicPartitionReplicas(topicPartReplicas)
 			out.MaybeDie(err, "unable to parse topic partitions replicas: %v", err)
@@ -204,7 +241,7 @@ func listPartitionReassignments(cl *client.Client) *cobra.Command {
 	var topicParts []string
 
 	cmd := &cobra.Command{
-		Use:   "list-partition-reassignments",
+		Use:   "partition-reassignments",
 		Short: "List partition reassignments.",
 		Long: `List which partitions are currently being reassigned (Kafka 2.4.0+).
 
@@ -270,7 +307,7 @@ func describeClientQuotas(cl *client.Client) *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "describe-client-quotas",
+		Use:   "client-quotas",
 		Short: "Describe client quotas.",
 		Long: `Describe client quotas (Kafka 2.6.0+)
 
@@ -395,12 +432,12 @@ func alterClientQuotas(cl *client.Client) *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "alter-client-quotas",
+		Use:   "client-quotas",
 		Short: "Alter client quotas.",
 		Long: `Alter client quotas (Kafka 2.6.0+)
 
 This command alters client quotas; to see a bit more of a description on
-quotas, see the help text for describe-client-quotas or read KIP-546.
+quotas, see the help text for client-quotas or read KIP-546.
 
 Similar to describing, this command matches. Where describing filters for only
 matches, this runs an alter on anything that matches.

@@ -33,7 +33,7 @@ func apiVersionsRequest() *kmsg.ApiVersionsRequest {
 func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "misc",
-		Short: "Miscellaneous utilities",
+		Short: "Miscellaneous utilities (version probing, error code/text, offset listing)",
 	}
 
 	cmd.AddCommand(errcodeCommand())

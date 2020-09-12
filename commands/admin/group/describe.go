@@ -21,9 +21,10 @@ func describeCommand(cl *client.Client) *cobra.Command {
 
 	// TODO include authorized options (Kafka 2.3.0+)?
 	cmd := &cobra.Command{
-		Use:   "describe GROUPS...",
-		Short: "Describe Kafka groups (Kafka 0.9.0+)",
-		Args:  cobra.MinimumNArgs(1),
+		Use:     "describe GROUPS...",
+		Aliases: []string{"d"},
+		Short:   "Describe Kafka groups (Kafka 0.9.0+)",
+		Args:    cobra.MinimumNArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
 			req.Groups = args
 

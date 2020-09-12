@@ -126,6 +126,8 @@ kcl
 
  transact                           -- transactional consuming & producing
 
+ metadata                           -- print broker, cluster, and topic information
+
  misc
    api-versions                     -- print api versions for requests
    probe-version                    -- probe for the currently running Kafka version
@@ -136,42 +138,42 @@ kcl
    list-offsets                     -- list offsets for topics and partitions
 
  admin
-   elect-leaders                    -- trigger leader elections
    delete-records                   -- delete record deletion for partitions based off input offsets
-   alter-partition-assignments      -- alter which brokers own which partitions
-   list-partition-reassignments     -- list active partition reassignments
-   alter-replica-log-dirs           -- alter the directories partitions are in
-   describe-log-dirs                -- describe the directories partitions are in
-   alter-client-quotas              -- alter client quotas (see KIP-546; 2.6.0+)
-   describe-client-quotas           -- describe client quotas (see KIP-546; 2.6.0+)
+   elect-leaders                    -- trigger leader elections
 
- dtoken
-   create                           -- create delegation tokens
-   renew                            -- renew delegation tokens
-   describe                         -- describe delegation tokens
-   expire                           -- expire delegation tokens
+   alter
+     client-quotas                  -- alter client quotas (see KIP-546; 2.6.0+)
+     configs                        -- alter broker, topic, broker-logger, etc. configs
+     partition-assignments          -- alter which brokers own which partitions
+     replica-log-dirs               -- alter the directories partitions are in
 
- acl
-   create                           -- create ACLs
-   describe                         -- describe ACLs
-   delete                           -- delete ACLs
+   describe
+     client-quotas                  -- describe client quotas (see KIP-546; 2.6.0+)
+     configs                        -- describe broker, topic, broker-logger, etc. configs
+     partition-reassignments        -- list active partition reassignments
+     log-dirs                       -- describe the directories partitions are in
 
- group
-   list                             -- list consumer groups
-   describe                         -- describe consumer groups
-   delete                           -- delete consumer groups
-   offset-delete                    -- forcefully delete committed offsets a group (see KIP-496)
+   group
+     list                             -- list consumer groups
+     describe                         -- describe consumer groups
+     delete                           -- delete consumer groups
+     offset-delete                    -- forcefully delete committed offsets a group (see KIP-496)
 
- topic
-   create                           -- create topics
-   delete                           -- delete topics
-   add-partitions                   -- add partitions to topics
+   topic
+     create                           -- create topics
+     delete                           -- delete topics
+     add-partitions                   -- add partitions to topics
 
- metadata                           -- print broker, cluster, and topic information
+   dtoken
+     create                           -- create delegation tokens
+     renew                            -- renew delegation tokens
+     describe                         -- describe delegation tokens
+     expire                           -- expire delegation tokens
 
- configs
-   alter                            -- alter broker, topic, broker-logger, etc. configs
-   describe                         -- describe broker, topic, broker-logger, etc. configs
+   acl
+     create                           -- create ACLs
+     describe                         -- describe ACLs
+     delete                           -- delete ACLs
 
  myconfig
    unlink                           -- unlink the kcl config symlink

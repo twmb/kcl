@@ -154,8 +154,9 @@ func describeCommand(cl *client.Client) *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "describe",
-		Short: "Describe ACLs.",
+		Use:     "describe",
+		Aliases: []string{"d"},
+		Short:   "Describe ACLs.",
 		Long: `Describe ACLs on a filter basis (Kafka 0.11.0+).
 
 Describing ACLs works on a filter basis: anything matching the requested filter
@@ -242,8 +243,9 @@ func createCommand(cl *client.Client) *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "create",
-		Short: "Create ACLs.",
+		Use:     "create",
+		Aliases: []string{"c"},
+		Short:   "Create ACLs.",
 		Long: `Create ACLs on a combinatorial basis (Kafka 0.11.0+).
 
 In a request to Kafka, creating ACLs works on an individual basis: one ACL

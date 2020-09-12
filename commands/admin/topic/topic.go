@@ -21,8 +21,9 @@ import (
 
 func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "topic",
-		Short: "Perform topic relation actions",
+		Use:     "topic",
+		Aliases: []string{"t"},
+		Short:   "Perform topic relation actions (create, delete, add-partitions).",
 	}
 
 	cmd.AddCommand(topicCreateCommand(cl))
@@ -39,8 +40,9 @@ func topicCreateCommand(cl *client.Client) *cobra.Command {
 	var configKVs []string
 
 	cmd := &cobra.Command{
-		Use:   "create TOPICS",
-		Short: "Create topics",
+		Use:     "create TOPICS",
+		Aliases: []string{"c"},
+		Short:   "Create topics",
 		Long: `Create topics (Kafka 0.10.1+).
 
 All topics created with this command will have the same number of partitions,

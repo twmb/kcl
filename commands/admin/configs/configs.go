@@ -16,17 +16,6 @@ import (
 	"github.com/twmb/kcl/out"
 )
 
-func Command(cl *client.Client) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "configs",
-		Short: "Alter or describe topic, broker, or broker logger configs.",
-	}
-
-	cmd.AddCommand(alterCommand(cl))
-	cmd.AddCommand(describeCommand(cl))
-	return cmd
-}
-
 type entity int8
 
 const (
@@ -76,7 +65,7 @@ func (q *querier) parseEntity(args []string) {
 	}
 }
 
-func alterCommand(cl *client.Client) *cobra.Command {
+func AlterCommand(cl *client.Client) *cobra.Command {
 	cfger := &cfger{
 		querier: querier{
 			cl: cl,
@@ -84,7 +73,7 @@ func alterCommand(cl *client.Client) *cobra.Command {
 	}
 
 	cmd := &cobra.Command{
-		Use:   "alter [ENTITY]",
+		Use:   "configs [ENTITY]",
 		Short: "Alter a topic, broker, or broker logger's configs.",
 		Long: `Alter configurations (0.11.0+).
 
@@ -110,11 +99,11 @@ configuration on all brokers. Updating an individual broker causes the broker
 to reload its password files and allows for setting password fields.
 `,
 
-		Example: `alter foo -itt -ks:cleanup.policy=compact -kd:preallocate
+		Example: `configs foo -itt -ks:cleanup.policy=compact -kd:preallocate
 
-alter foo --dry --inc --type topic --kv set:preallocate=true --kv del:cleanup.policy
+configs foo --dry --inc --type topic --kv set:preallocate=true --kv del:cleanup.policy
 
-alter foo --no-confirm --type topic --kv preallocate=true // loses other dynamic configs`,
+configs foo --no-confirm --type topic --kv preallocate=true // loses other dynamic configs`,
 
 		Run: func(_ *cobra.Command, args []string) {
 			cfger.alter(args)
@@ -355,13 +344,13 @@ func (q querier) issueDescribeConfig(withDocs bool) (
 	return resp, &resource
 }
 
-func describeCommand(cl *client.Client) *cobra.Command {
+func DescribeCommand(cl *client.Client) *cobra.Command {
 	q := querier{cl: cl}
 
 	var withDocs, withTypes bool
 
 	cmd := &cobra.Command{
-		Use:   "describe [ENTITY]",
+		Use:   "configs [ENTITY]",
 		Short: "Describe a topic, broker, or broker logger's configs.",
 		Long: `Describe configurations (Kafka 0.11.0+).
 
@@ -377,11 +366,11 @@ specific broker, be sure to pass a broker ID.
 `,
 		Example: `describe 1 -tb
 
-describe --type broker // prints all dynamic broker key/value pairs
+configs --type broker // prints all dynamic broker key/value pairs
 
-describe foo -tt
+configs foo -tt
 
-describe bar --type topic`,
+configs bar --type topic`,
 
 		Run: func(_ *cobra.Command, args []string) {
 			q.parseEntity(args)
@@ -449,7 +438,7 @@ describe bar --type topic`,
 		},
 	}
 
-	cmd.Flags().StringVarP(&q.rawEntity, "type", "t", "topic", "entity type (t|topic, b|broker, bl|broker logger)")
+	cmd.Flags().StringVarP(&q.rawEntity, "type", "t", "topic", "entity type (topic, broker, broker logger; shortcuts t, b, bl)")
 	cmd.Flags().BoolVar(&withDocs, "with-docs", false, "inlcude documentation for config values (Kafka 2.6.0+)")
 	cmd.Flags().BoolVar(&withTypes, "with-types", false, "inlcude types of config values (Kafka 2.6.0+)")
 

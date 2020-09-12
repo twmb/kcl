@@ -8,17 +8,12 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/twmb/kcl/client"
-	"github.com/twmb/kcl/commands/acl"
 	"github.com/twmb/kcl/commands/admin"
-	"github.com/twmb/kcl/commands/configs"
 	"github.com/twmb/kcl/commands/consume"
-	"github.com/twmb/kcl/commands/dtoken"
-	"github.com/twmb/kcl/commands/group"
 	"github.com/twmb/kcl/commands/metadata"
 	"github.com/twmb/kcl/commands/misc"
 	"github.com/twmb/kcl/commands/myconfig"
 	"github.com/twmb/kcl/commands/produce"
-	"github.com/twmb/kcl/commands/topic"
 	"github.com/twmb/kcl/commands/transact"
 )
 
@@ -47,15 +42,10 @@ Command completion is available at:
 	root.AddCommand(
 		consume.Command(cl),
 		produce.Command(cl),
-		configs.Command(cl),
+		metadata.Command(cl),
 		transact.Command(cl),
 		misc.Command(cl),
 		admin.Command(cl),
-		dtoken.Command(cl),
-		acl.Command(cl),
-		group.Command(cl),
-		topic.Command(cl),
-		metadata.Command(cl),
 		myconfig.Command(cl),
 	)
 

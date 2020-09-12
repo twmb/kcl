@@ -18,7 +18,7 @@ import (
 func logdirsDescribeCommand(cl *client.Client) *cobra.Command {
 	var broker int32
 	cmd := &cobra.Command{
-		Use:   "describe-log-dirs",
+		Use:   "log-dirs",
 		Short: "Describe log directories for topic partitions.",
 		Long: `Describe log directories for topic partitions (Kafka 1.0.0+).
 
@@ -54,11 +54,11 @@ which allows you to control whether you are asking for information about
 replicas vs. the leader.
 `,
 
-		Example: `describe-log-dirs foo:1,2,3 bar:3,4,5
+		Example: `log-dirs foo:1,2,3 bar:3,4,5
 
-describe-log-dirs foo
+log-dirs foo
 
-describe-log-dirs // describes all`,
+log-dirs // describes all`,
 
 		Run: func(_ *cobra.Command, topics []string) {
 			var req kmsg.DescribeLogDirsRequest
@@ -152,7 +152,7 @@ describe-log-dirs // describes all`,
 func logdirsAlterReplicasCommand(cl *client.Client) *cobra.Command {
 	var broker int32
 	cmd := &cobra.Command{
-		Use:   "alter-replica-log-dirs",
+		Use:   "replica-log-dirs",
 		Short: "Move topic replicas to a destination directory",
 		Long: `Move topic partitions to specified directories (Kafka 1.0.0+).
 
@@ -166,7 +166,7 @@ You can direct this request to specific brokers with the --broker argument,
 which allows you to alter replicas.
 `,
 
-		Example: `alter-replica-log-dirs foo:1,2,3=/dir bar:6=/dir2 baz:9=/dir`,
+		Example: `replica-log-dirs foo:1,2,3=/dir bar:6=/dir2 baz:9=/dir`,
 
 		Run: func(_ *cobra.Command, topics []string) {
 			dests := make(map[string]map[string][]int32)

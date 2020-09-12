@@ -17,9 +17,10 @@ import (
 
 func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "group",
-		Short: "Perform group related actions",
-		Args:  cobra.ExactArgs(0),
+		Use:     "group",
+		Aliases: []string{"g"},
+		Short:   "Perform group related actions (list, describe, delete, offset-delete).",
+		Args:    cobra.ExactArgs(0),
 	}
 
 	cmd.AddCommand(

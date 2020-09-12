@@ -59,8 +59,9 @@ func createTokenCommand(cl *client.Client) *cobra.Command {
 	var maxLifetimeMillis int64
 
 	cmd := &cobra.Command{
-		Use:   "create",
-		Short: "Create a delegation token",
+		Use:     "create",
+		Aliases: []string{"c"},
+		Short:   "Create a delegation token",
 		Long: `Create a delegation token (Kafka 1.1.0+).
 
 A delegation token inherits all ACLs from the creator. Without any manual
@@ -197,8 +198,9 @@ func describeTokensCommand(cl *client.Client) *cobra.Command {
 	var owners []string
 
 	cmd := &cobra.Command{
-		Use:   "describe",
-		Short: "Describe delegation tokens (Kafka 1.1.0+)",
+		Use:     "describe",
+		Aliases: []string{"d"},
+		Short:   "Describe delegation tokens (Kafka 1.1.0+)",
 		Example: ` describe // to display all tokens
 
 describe -o User:admin // to display tokens owned by the admin user`,
