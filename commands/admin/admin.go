@@ -3,8 +3,10 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"sort"
+	"io/ioutil"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -163,400 +165,141 @@ To avoid accidental triggers, this command requires a --run flag to run.
 	return cmd
 }
 
-func alterPartitionAssignments(cl *client.Client) *cobra.Command {
-	var topicPartReplicas []string
+func deleteRecordsCommand(cl *client.Client) *cobra.Command {
+	var jsonFile string
 
 	cmd := &cobra.Command{
-		Use:   "partition-assignments",
-		Short: "Alter partition assignments.",
-		Long: `Alter which brokers partitions are assigned to (Kafka 2.4.0+).
+		Use:   "delete-records",
+		Short: "Delete records for topics.",
+		Long: `Delete records for topics (Kafka 0.11.0+).
 
-The syntax for each topic is
+Normally, Kafka records are deleted based off time or log file size. Sometimes,
+that does not play well with processing. To address this limitation, Kafka
+added record deleting in 0.11.0.
 
-  topic: 1->2,3,4 ; 2->1,2,3
+Deleting records works by deleting all segments whose end offsets are earlier
+than the requested delete offset, and then disallowing reads earlier than the
+requested start offset in a delete request.
 
-where the first number is the partition, and -> points to the replicas you
-want to move the partition to. Note that since this contains a >, you likely
-need to quote your input to the flag.
+This function works either by reading file of record offsets to delete or by
+parsing the passed args. The arg format is topic:p#,o# (hopefully obvious).
+The file format is as follows:
 
-If a replica list is empty for a specific partition, this cancels any active
-reassignment for that partition.
+  [
+    {
+      "topic": "string",
+      "partition": int32,
+      "offset": int64
+    },
+    ...
+  ]
+
+It is possible to use both args and the file.
+
+Record deletion works on a fan out basis: each broker containing partitions for
+record deletion needs to be issued a request. This does that appropriately.
 `,
-		Example: "partition-assignments -t 'foo:1->1,2,3' -t 'bar:2->3,4,5;5->3,4,5'",
-		Run: func(_ *cobra.Command, args []string) {
-			tprs, err := flagutil.ParseTopicPartitionReplicas(topicPartReplicas)
-			out.MaybeDie(err, "unable to parse topic partitions replicas: %v", err)
 
-			req := &kmsg.AlterPartitionAssignmentsRequest{
+		Example: `delete-records foo:p0,o120 foo:p1,o3888
+		
+delete-records --json-file records.json`,
+
+		Run: func(_ *cobra.Command, args []string) {
+			tpos, err := parseTopicPartitionOffsets(args)
+			out.MaybeDie(err, "unable to parse topic partition offsets: %v", err)
+
+			if jsonFile != "" {
+				type fileReq struct {
+					Topic     string `json:"topic"`
+					Partition int32  `json:"partition"`
+					Offset    int64  `json:"offset"`
+				}
+				var fileReqs []fileReq
+				raw, err := ioutil.ReadFile(jsonFile)
+				out.MaybeDie(err, "unable to read json file: %v", err)
+				err = json.Unmarshal(raw, &fileReqs)
+				out.MaybeDie(err, "unable to unmarshal json file: %v", err)
+				for _, fileReq := range fileReqs {
+					tpos[fileReq.Topic] = append(tpos[fileReq.Topic], partitionOffset{fileReq.Partition, fileReq.Offset})
+				}
+			}
+
+			if len(tpos) == 0 {
+				out.Die("no records requested for deletion")
+			}
+
+			// Create and fire off a bunch of concurrent requests...
+			type respErr struct {
+				broker int32
+				resp   kmsg.Response
+				err    error
+			}
+			req := &kmsg.DeleteRecordsRequest{
 				TimeoutMillis: cl.TimeoutMillis(),
 			}
-			for topic, partitions := range tprs {
-				t := kmsg.AlterPartitionAssignmentsRequestTopic{
+			for topic, partitionOffsets := range tpos {
+				reqTopic := kmsg.DeleteRecordsRequestTopic{
 					Topic: topic,
 				}
-				for partition, replicas := range partitions {
-					t.Partitions = append(t.Partitions, kmsg.AlterPartitionAssignmentsRequestTopicPartition{
-						Partition: partition,
-						Replicas:  replicas,
+				for _, partitionOffset := range partitionOffsets {
+					reqTopic.Partitions = append(reqTopic.Partitions, kmsg.DeleteRecordsRequestTopicPartition{
+						Partition: partitionOffset.partition,
+						Offset:    partitionOffset.offset,
 					})
 				}
-				req.Topics = append(req.Topics, t)
+				req.Topics = append(req.Topics, reqTopic)
 			}
-
 			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to alter partition assignments: %v", err)
-			resp := kresp.(*kmsg.AlterPartitionAssignmentsResponse)
-			if cl.AsJSON() {
-				out.ExitJSON(resp)
-			}
-
-			if resp.ErrorCode != 0 {
-				out.ErrAndMsg(resp.ErrorCode, resp.ErrorMessage)
-				out.Exit()
-			}
+			out.MaybeDie(err, "unable to issue delete records request: %v", err)
+			resp := kresp.(*kmsg.DeleteRecordsResponse)
 
 			tw := out.BeginTabWrite()
 			defer tw.Flush()
+			fmt.Fprintf(tw, "TOPIC\tPARTITION\tNEW LOW WATERMARK\tERROR\n")
 			for _, topic := range resp.Topics {
 				for _, partition := range topic.Partitions {
 					msg := "OK"
 					if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
 						msg = err.Error()
 					}
-					detail := ""
-					if partition.ErrorMessage != nil {
-						detail = *partition.ErrorMessage
-					}
-					fmt.Fprintf(tw, "%s\t%d\t%s\t%s\n", topic.Topic, partition.Partition, msg, detail)
+					fmt.Fprintf(tw, "%s\t%d\t%d\t%s\n",
+						topic.Topic, partition.Partition, partition.LowWatermark, msg)
 				}
 			}
 		},
 	}
 
-	cmd.Flags().StringArrayVarP(&topicPartReplicas, "topic", "t", nil, "topic, partitions, and replica destinations; repeatable")
-	return cmd
-}
-
-func listPartitionReassignments(cl *client.Client) *cobra.Command {
-	var topicParts []string
-
-	cmd := &cobra.Command{
-		Use:   "partition-reassignments",
-		Short: "List partition reassignments.",
-		Long: `List which partitions are currently being reassigned (Kafka 2.4.0+).
-
-The syntax for each topic is
-
-  topic:1,2,3
-
-where the numbers correspond to partitions for a topic.
-
-If no topics are specified, this lists all active reassignments.
-`,
-		Run: func(_ *cobra.Command, args []string) {
-			tps, err := flagutil.ParseTopicPartitions(topicParts)
-			out.MaybeDie(err, "unable to parse topic partitions: %v", err)
-
-			req := &kmsg.ListPartitionReassignmentsRequest{
-				TimeoutMillis: cl.TimeoutMillis(),
-			}
-			for topic, partitions := range tps {
-				req.Topics = append(req.Topics, kmsg.ListPartitionReassignmentsRequestTopic{
-					Topic:      topic,
-					Partitions: partitions,
-				})
-			}
-
-			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to list partition reassignments: %v", err)
-			resp := kresp.(*kmsg.ListPartitionReassignmentsResponse)
-			if cl.AsJSON() {
-				out.ExitJSON(resp)
-			}
-
-			if resp.ErrorCode != 0 {
-				out.ErrAndMsg(resp.ErrorCode, resp.ErrorMessage)
-				out.Exit()
-			}
-
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-			fmt.Fprint(tw, "TOPIC\tPARTITION\tCURRENT REPLICAS\tADDING\tREMOVING\n")
-			for _, topic := range resp.Topics {
-				for _, p := range topic.Partitions {
-					sort.Slice(p.Replicas, func(i, j int) bool { return p.Replicas[i] < p.Replicas[j] })
-					sort.Slice(p.AddingReplicas, func(i, j int) bool { return p.AddingReplicas[i] < p.AddingReplicas[j] })
-					sort.Slice(p.RemovingReplicas, func(i, j int) bool { return p.RemovingReplicas[i] < p.RemovingReplicas[j] })
-					fmt.Fprintf(tw, "%s\t%d\t%v\t%v\t%v\n", topic.Topic, p.Partition, p.Replicas, p.AddingReplicas, p.RemovingReplicas)
-				}
-			}
-		},
-	}
-
-	cmd.Flags().StringArrayVarP(&topicParts, "topic", "t", nil, "topic and partitions to list partition reassignments for; repeatable")
+	cmd.Flags().StringVar(&jsonFile, "json-file", "", "if non-empty, a json file to read deletions from")
 
 	return cmd
 }
 
-func describeClientQuotas(cl *client.Client) *cobra.Command {
-	var (
-		names    []string
-		defaults []string
-		any      []string
-		strict   bool
-	)
-
-	cmd := &cobra.Command{
-		Use:   "client-quotas",
-		Short: "Describe client quotas.",
-		Long: `Describe client quotas (Kafka 2.6.0+)
-
-As mentioned in KIP-546, "by default, quotas are defined in terms of a user and
-client ID, where the user acts as an opaque principal name, and the client ID
-as a generic group identifier". The values for the user and the client-id can
-be named, defaulted, or omitted entirely.
-
-Describe client quotas takes an input list of named entities, default entities,
-or omitted (any) entities and returns a all matched quotas and their
-keys and values.
-
-Named entities are in the format key=value, where key is either user or
-client-id and value is the name to be matched.
-
-Default entities and omitted (any) entities are in the format key, where key is
-the user or client-id.
-
-This command is a filtering type of command, where anything that passes the
-filter specified by flags is returned.
-`,
-		Args: cobra.ExactArgs(0),
-
-		Run: func(_ *cobra.Command, _ []string) {
-			req := &kmsg.DescribeClientQuotasRequest{
-				Strict: strict,
-			}
-
-			validType := map[string]bool{
-				"user":      true,
-				"client-id": true,
-			}
-
-			for _, name := range names {
-				split := strings.SplitN(name, "=", 2)
-				if len(split) != 2 {
-					out.Die("name %q missing value", split[0])
-				}
-				k, v := split[0], split[1]
-				k = strings.ToLower(k)
-				if !validType[k] {
-					out.Die("name type %q is invalid (allowed: user, client-id)", split[0])
-				}
-				req.Components = append(req.Components, kmsg.DescribeClientQuotasRequestComponent{
-					EntityType: k,
-					MatchType:  0,
-					Match:      &v,
-				})
-			}
-
-			for _, def := range defaults {
-				if !validType[def] {
-					out.Die("default type %q is invalid (allowed: user, client-id)", def)
-				}
-				req.Components = append(req.Components, kmsg.DescribeClientQuotasRequestComponent{
-					EntityType: def,
-					MatchType:  1,
-				})
-			}
-
-			for _, a := range any {
-				if !validType[a] {
-					out.Die("any type %q is invalid (allowed: user, client-id)", a)
-				}
-				req.Components = append(req.Components, kmsg.DescribeClientQuotasRequestComponent{
-					EntityType: a,
-					MatchType:  2,
-				})
-			}
-
-			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to describe client quotas: %v", err)
-			resp := kresp.(*kmsg.DescribeClientQuotasResponse)
-			if cl.AsJSON() {
-				out.ExitJSON(resp)
-			}
-
-			if resp.ErrorCode != 0 {
-				out.ErrAndMsg(resp.ErrorCode, resp.ErrorMessage)
-				out.Exit()
-			}
-
-			for _, entry := range resp.Entries {
-				fmt.Print("{")
-				for i, entity := range entry.Entity {
-					if i > 0 {
-						fmt.Print(", ")
-					}
-					fmt.Print(entity.Type)
-					fmt.Print("=")
-					name := "<default>"
-					if entity.Name != nil {
-						name = *entity.Name
-					}
-					fmt.Print(name)
-				}
-				fmt.Println("}")
-
-				for _, value := range entry.Values {
-					fmt.Printf("%s=%v", value.Key, value.Value)
-				}
-				fmt.Println()
-			}
-		},
-	}
-
-	cmd.Flags().StringArrayVar(&names, "name", nil, "type=name pair for exact name matching, where type is user or client-id; repeatable")
-	cmd.Flags().StringArrayVar(&defaults, "default", nil, "type for default matching, where type is user or client-id; repeatable")
-	cmd.Flags().StringArrayVar(&any, "any", nil, "type for any matching (names or default), where type is user or client-id; repeatable")
-	cmd.Flags().BoolVar(&strict, "strict", false, "whether matches are strict, if true, entities with unspecified entity types are excluded")
-
-	return cmd
+type partitionOffset struct {
+	partition int32
+	offset    int64
 }
 
-func alterClientQuotas(cl *client.Client) *cobra.Command {
-	var (
-		names    []string
-		defaults []string
-		run      bool
-		adds     []string
-		deletes  []string
-	)
+func parseTopicPartitionOffsets(list []string) (map[string][]partitionOffset, error) {
+	rePo := regexp.MustCompile(`^p(\d+),o(\d+)$`)
 
-	cmd := &cobra.Command{
-		Use:   "client-quotas",
-		Short: "Alter client quotas.",
-		Long: `Alter client quotas (Kafka 2.6.0+)
+	tpos := make(map[string][]partitionOffset)
+	for _, item := range list {
+		split := strings.SplitN(item, ":", 2)
+		if len(split[0]) == 0 {
+			return nil, fmt.Errorf("item %q invalid empty topic", item)
+		}
+		if len(split) == 1 {
+			return nil, fmt.Errorf("item %q invalid empty partition offsets", item)
+		}
 
-This command alters client quotas; to see a bit more of a description on
-quotas, see the help text for client-quotas or read KIP-546.
+		matches := rePo.FindStringSubmatch(split[1])
+		if len(matches) == 0 {
+			return nil, fmt.Errorf("item %q partition offset %q does not match p(\\d+)o(\\d+)", item, split[1])
+		}
+		partition, _ := strconv.Atoi(matches[1])
+		offset, _ := strconv.Atoi(matches[2])
 
-Similar to describing, this command matches. Where describing filters for only
-matches, this runs an alter on anything that matches.
-
-`,
-		Args: cobra.ExactArgs(0),
-
-		Run: func(_ *cobra.Command, _ []string) {
-			req := &kmsg.AlterClientQuotasRequest{
-				Entries:      []kmsg.AlterClientQuotasRequestEntry{{}},
-				ValidateOnly: !run,
-			}
-
-			if len(names) == 0 && len(defaults) == 0 {
-				out.Die("at least one name or default must be specified")
-			}
-			if len(adds) == 0 && len(deletes) == 0 {
-				out.Die("at least one add or delete must be specified")
-			}
-
-			ent := &req.Entries[0]
-
-			validType := map[string]bool{
-				"user":      true,
-				"client-id": true,
-			}
-
-			for _, name := range names {
-				split := strings.SplitN(name, "=", 2)
-				if len(split) != 2 {
-					out.Die("name %q missing value", split[0])
-				}
-				k, v := split[0], split[1]
-				k = strings.ToLower(k)
-				if !validType[k] {
-					out.Die("name type %q is invalid (allowed: user, client-id)", split[0])
-				}
-				ent.Entity = append(ent.Entity, kmsg.AlterClientQuotasRequestEntryEntity{
-					Type: k,
-					Name: &v,
-				})
-			}
-
-			for _, def := range defaults {
-				if !validType[def] {
-					out.Die("default type %q is invalid (allowed: user, client-id)", def)
-				}
-				ent.Entity = append(ent.Entity, kmsg.AlterClientQuotasRequestEntryEntity{
-					Type: def,
-				})
-			}
-
-			for _, add := range adds {
-				split := strings.SplitN(add, "=", 2)
-				if len(split) != 2 {
-					out.Die("add %q missing value", split[0])
-				}
-				k, v := split[0], split[1]
-				f, err := strconv.ParseFloat(v, 64)
-				out.MaybeDie(err, "unable to parse add %q: %v", k, err)
-				ent.Ops = append(ent.Ops, kmsg.AlterClientQuotasRequestEntryOp{
-					Key:   k,
-					Value: f,
-				})
-			}
-
-			for _, del := range deletes {
-				ent.Ops = append(ent.Ops, kmsg.AlterClientQuotasRequestEntryOp{
-					Key:    del,
-					Remove: true,
-				})
-			}
-
-			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to alter client quotas: %v", err)
-			resp := kresp.(*kmsg.AlterClientQuotasResponse)
-			if cl.AsJSON() {
-				out.ExitJSON(resp)
-			}
-
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
-			for _, entry := range resp.Entries {
-				fmt.Fprint(tw, "{")
-				for i, entity := range entry.Entity {
-					if i > 0 {
-						fmt.Fprint(tw, ", ")
-					}
-					fmt.Fprint(tw, entity.Type)
-					fmt.Fprint(tw, "=")
-					name := "<default>"
-					if entity.Name != nil {
-						name = *entity.Name
-					}
-					fmt.Fprint(tw, name)
-				}
-				fmt.Fprint(tw, "}\t")
-
-				code := "OK"
-				if err := kerr.ErrorForCode(entry.ErrorCode); err != nil {
-					code = err.Error()
-				}
-				fmt.Fprintf(tw, "%s\t", code)
-
-				msg := ""
-				if entry.ErrorMessage != nil {
-					msg = *entry.ErrorMessage
-				}
-				fmt.Fprintf(tw, "%s\n", msg)
-			}
-		},
+		tpos[split[0]] = append(tpos[split[0]], partitionOffset{int32(partition), int64(offset)})
 	}
-
-	cmd.Flags().StringArrayVar(&names, "name", nil, "type=name pair for exact name matching, where type is user or client-id; repeatable")
-	cmd.Flags().StringArrayVar(&defaults, "default", nil, "type for default matching, where type is user or client-id; repeatable")
-	cmd.Flags().StringArrayVar(&adds, "add", nil, "key=value quota to add, where the value is a float64; repeatable")
-	cmd.Flags().StringArrayVar(&deletes, "delete", nil, "key quota to delete; repeatable")
-	cmd.Flags().BoolVar(&run, "run", false, "whether to actually run the alter vs. the default to validate only")
-
-	return cmd
+	return tpos, nil
 }
