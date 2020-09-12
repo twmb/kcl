@@ -1,4 +1,4 @@
-package admin
+package partas
 
 import (
 	"context"
@@ -13,11 +13,21 @@ import (
 	"github.com/twmb/kcl/out"
 )
 
+func Command(cl *client.Client) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "partas",
+		Short: "Alter or list partition (re)assignments.",
+	}
+	cmd.AddCommand(listPartitionReassignments(cl))
+	cmd.AddCommand(alterPartitionAssignments(cl))
+	return cmd
+}
+
 func alterPartitionAssignments(cl *client.Client) *cobra.Command {
 	var topicPartReplicas []string
 
 	cmd := &cobra.Command{
-		Use:   "partition-assignments",
+		Use:   "alter",
 		Short: "Alter partition assignments.",
 		Long: `Alter which brokers partitions are assigned to (Kafka 2.4.0+).
 
@@ -32,7 +42,7 @@ need to quote your input to the flag.
 If a replica list is empty for a specific partition, this cancels any active
 reassignment for that partition.
 `,
-		Example: "partition-assignments -t 'foo:1->1,2,3' -t 'bar:2->3,4,5;5->3,4,5'",
+		Example: "alter -t 'foo:1->1,2,3' -t 'bar:2->3,4,5;5->3,4,5'",
 		Run: func(_ *cobra.Command, args []string) {
 			tprs, err := flagutil.ParseTopicPartitionReplicas(topicPartReplicas)
 			out.MaybeDie(err, "unable to parse topic partitions replicas: %v", err)
@@ -91,8 +101,9 @@ func listPartitionReassignments(cl *client.Client) *cobra.Command {
 	var topicParts []string
 
 	cmd := &cobra.Command{
-		Use:   "partition-reassignments",
-		Short: "List partition reassignments.",
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List partition reassignments.",
 		Long: `List which partitions are currently being reassigned (Kafka 2.4.0+).
 
 The syntax for each topic is

@@ -1,4 +1,4 @@
-package admin
+package userscram
 
 import (
 	"context"
@@ -18,6 +18,16 @@ import (
 	"github.com/twmb/kcl/out"
 	"golang.org/x/crypto/pbkdf2"
 )
+
+func Command(cl *client.Client) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "user-scram",
+		Short: "Alter or describe user scram configs (2.7.0+).",
+	}
+	cmd.AddCommand(alterUserSCRAM(cl))
+	cmd.AddCommand(describeUserSCRAM(cl))
+	return cmd
+}
 
 func mech2str(mech int8) string {
 	switch mech {
@@ -46,10 +56,11 @@ func describeUserSCRAM(cl *client.Client) *cobra.Command {
 	var users []string
 
 	cmd := &cobra.Command{
-		Use:   "user-scram",
-		Short: "Describe user scram credentials.",
-		Long:  `Describe user scram credentials (Kafka 2.7.0+)`,
-		Args:  cobra.ExactArgs(0),
+		Use:     "describe",
+		Aliases: []string{"d"},
+		Short:   "Describe user scram credentials.",
+		Long:    `Describe user scram credentials (Kafka 2.7.0+)`,
+		Args:    cobra.ExactArgs(0),
 
 		Run: func(_ *cobra.Command, _ []string) {
 			var req kmsg.DescribeUserSCRAMCredentialsRequest
@@ -108,7 +119,7 @@ func alterUserSCRAM(cl *client.Client) *cobra.Command {
 	var dels []string
 
 	cmd := &cobra.Command{
-		Use:   "user-scram",
+		Use:   "alter",
 		Short: "Alter user scram credentials.",
 		Long: `Alter user scram credentials (Kafka 2.7.0+)
 		

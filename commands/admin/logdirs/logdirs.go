@@ -1,4 +1,4 @@
-package admin
+package logdirs
 
 import (
 	"context"
@@ -15,11 +15,22 @@ import (
 	"github.com/twmb/kcl/out"
 )
 
-func logdirsDescribeCommand(cl *client.Client) *cobra.Command {
+func Command(cl *client.Client) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "logdirs",
+		Short: "Alter or describe partition log directores.",
+	}
+	cmd.AddCommand(describeCommand(cl))
+	cmd.AddCommand(alterReplicasCommand(cl))
+	return cmd
+}
+
+func describeCommand(cl *client.Client) *cobra.Command {
 	var broker int32
 	cmd := &cobra.Command{
-		Use:   "log-dirs",
-		Short: "Describe log directories for topic partitions.",
+		Use:     "describe",
+		Aliases: []string{"d"},
+		Short:   "Describe log directories for topic partitions.",
 		Long: `Describe log directories for topic partitions (Kafka 1.0.0+).
 
 Log directories are partition specific. The size of a directory is the absolute
@@ -54,11 +65,11 @@ which allows you to control whether you are asking for information about
 replicas vs. the leader.
 `,
 
-		Example: `log-dirs foo:1,2,3 bar:3,4,5
+		Example: `describe foo:1,2,3 bar:3,4,5
 
-log-dirs foo
+describe foo
 
-log-dirs // describes all`,
+describe // describes all`,
 
 		Run: func(_ *cobra.Command, topics []string) {
 			var req kmsg.DescribeLogDirsRequest
@@ -149,10 +160,10 @@ log-dirs // describes all`,
 	return cmd
 }
 
-func logdirsAlterReplicasCommand(cl *client.Client) *cobra.Command {
+func alterReplicasCommand(cl *client.Client) *cobra.Command {
 	var broker int32
 	cmd := &cobra.Command{
-		Use:   "replica-log-dirs",
+		Use:   "alter",
 		Short: "Move topic replicas to a destination directory",
 		Long: `Move topic partitions to specified directories (Kafka 1.0.0+).
 
@@ -166,7 +177,7 @@ You can direct this request to specific brokers with the --broker argument,
 which allows you to alter replicas.
 `,
 
-		Example: `replica-log-dirs foo:1,2,3=/dir bar:6=/dir2 baz:9=/dir`,
+		Example: `alter foo:1,2,3=/dir bar:6=/dir2 baz:9=/dir`,
 
 		Run: func(_ *cobra.Command, topics []string) {
 			dests := make(map[string]map[string][]int32)

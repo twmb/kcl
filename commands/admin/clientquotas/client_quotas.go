@@ -1,4 +1,4 @@
-package admin
+package clientquotas
 
 import (
 	"context"
@@ -13,6 +13,16 @@ import (
 	"github.com/twmb/kcl/out"
 )
 
+func Command(cl *client.Client) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "client-quotas",
+		Short: "Alter, describe, or resolve client quotas.",
+	}
+	cmd.AddCommand(describeClientQuotas(cl))
+	cmd.AddCommand(alterClientQuotas(cl))
+	return cmd
+}
+
 func describeClientQuotas(cl *client.Client) *cobra.Command {
 	var (
 		names    []string
@@ -22,8 +32,9 @@ func describeClientQuotas(cl *client.Client) *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "client-quotas",
-		Short: "Describe client quotas.",
+		Use:     "describe",
+		Aliases: []string{"d"},
+		Short:   "Describe client quotas.",
 		Long: `Describe client quotas (Kafka 2.6.0+)
 
 As mentioned in KIP-546, "by default, quotas are defined in terms of a user and
@@ -147,7 +158,7 @@ func alterClientQuotas(cl *client.Client) *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "client-quotas",
+		Use:   "alter",
 		Short: "Alter client quotas.",
 		Long: `Alter client quotas (Kafka 2.6.0+)
 

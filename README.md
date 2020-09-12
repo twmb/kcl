@@ -141,39 +141,47 @@ kcl
    delete-records                   -- delete record deletion for partitions based off input offsets
    elect-leaders                    -- trigger leader elections
 
-   alter
-     client-quotas                  -- alter client quotas (see KIP-546; 2.6.0+)
-     configs                        -- alter broker, topic, broker-logger, etc. configs
-     partition-assignments          -- alter which brokers own which partitions
-     replica-log-dirs               -- alter the directories partitions are in
+   acl
+     create                         -- create ACLs
+     describe                       -- describe ACLs
+     delete                         -- delete ACLs
 
-   describe
-     client-quotas                  -- describe client quotas (see KIP-546; 2.6.0+)
-     configs                        -- describe broker, topic, broker-logger, etc. configs
-     partition-reassignments        -- list active partition reassignments
-     log-dirs                       -- describe the directories partitions are in
+   client-quotas
+     alter                          -- alter client quotas
+     describe                       -- describe client quotas
 
-   group
-     list                             -- list consumer groups
-     describe                         -- describe consumer groups
-     delete                           -- delete consumer groups
-     offset-delete                    -- forcefully delete committed offsets a group (see KIP-496)
-
-   topic
-     create                           -- create topics
-     delete                           -- delete topics
-     add-partitions                   -- add partitions to topics
+   configs
+     alter                          -- alter broker, topic, broker-logger, etc. configs
+     describe                       -- describe broker, topic, broker-logger, etc. configs
 
    dtoken
-     create                           -- create delegation tokens
-     renew                            -- renew delegation tokens
-     describe                         -- describe delegation tokens
-     expire                           -- expire delegation tokens
+     create                         -- create delegation tokens
+     renew                          -- renew delegation tokens
+     describe                       -- describe delegation tokens
+     expire                         -- expire delegation tokens
 
-   acl
-     create                           -- create ACLs
-     describe                         -- describe ACLs
-     delete                           -- delete ACLs
+   group
+     list                           -- list consumer groups
+     describe                       -- describe consumer groups
+     delete                         -- delete consumer groups
+     offset-delete                  -- forcefully delete committed offsets a group (see KIP-496)
+
+   logdirs
+     alter                          -- alter log directories that partitions are in
+     describe                       -- describe log directories that partitions are in
+
+   partas
+     alter                          -- alter partition assignments
+     list                           -- list partition reassignments
+
+   topic
+     create                         -- create topics
+     delete                         -- delete topics
+     add-partitions                 -- add partitions to topics
+
+   user-scram
+     alter                          -- alter user scram
+     describe                       -- describe user scram
 
  myconfig
    unlink                           -- unlink the kcl config symlink

@@ -17,10 +17,14 @@ import (
 
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/commands/admin/acl"
+	"github.com/twmb/kcl/commands/admin/clientquotas"
 	"github.com/twmb/kcl/commands/admin/configs"
 	"github.com/twmb/kcl/commands/admin/dtoken"
 	"github.com/twmb/kcl/commands/admin/group"
+	"github.com/twmb/kcl/commands/admin/logdirs"
+	"github.com/twmb/kcl/commands/admin/partas"
 	"github.com/twmb/kcl/commands/admin/topic"
+	"github.com/twmb/kcl/commands/admin/userscram"
 	"github.com/twmb/kcl/flagutil"
 	"github.com/twmb/kcl/out"
 )
@@ -32,47 +36,20 @@ func Command(cl *client.Client) *cobra.Command {
 		Short:   "Admin utility commands.",
 	}
 
-	cmd.AddCommand(alterCommand(cl))
-	cmd.AddCommand(describeCommand(cl))
+	cmd.AddCommand(
+		deleteRecordsCommand(cl),
+		electLeaderCommand(cl),
 
-	cmd.AddCommand(topic.Command(cl))
-	cmd.AddCommand(acl.Command(cl))
-	cmd.AddCommand(dtoken.Command(cl))
-	cmd.AddCommand(group.Command(cl))
-
-	cmd.AddCommand(electLeaderCommand(cl))
-	cmd.AddCommand(deleteRecordsCommand(cl))
-
-	return cmd
-}
-
-func alterCommand(cl *client.Client) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "alter",
-		Short: "Altering admin commands (logdirs, partition assignments, quotas, scram).",
-	}
-
-	cmd.AddCommand(configs.AlterCommand(cl))
-	cmd.AddCommand(logdirsAlterReplicasCommand(cl))
-	cmd.AddCommand(alterPartitionAssignments(cl))
-	cmd.AddCommand(alterClientQuotas(cl))
-	cmd.AddCommand(alterUserSCRAM(cl))
-
-	return cmd
-}
-
-func describeCommand(cl *client.Client) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:     "describe",
-		Aliases: []string{"d"},
-		Short:   "Describing admin commands (logdirs, partition assignments, quotas, scram).",
-	}
-
-	cmd.AddCommand(configs.DescribeCommand(cl))
-	cmd.AddCommand(logdirsDescribeCommand(cl))
-	cmd.AddCommand(listPartitionReassignments(cl))
-	cmd.AddCommand(describeClientQuotas(cl))
-	cmd.AddCommand(describeUserSCRAM(cl))
+		acl.Command(cl),
+		clientquotas.Command(cl),
+		configs.Command(cl),
+		dtoken.Command(cl),
+		group.Command(cl),
+		topic.Command(cl),
+		logdirs.Command(cl),
+		partas.Command(cl),
+		userscram.Command(cl),
+	)
 
 	return cmd
 }
