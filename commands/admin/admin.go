@@ -56,6 +56,7 @@ func alterCommand(cl *client.Client) *cobra.Command {
 	cmd.AddCommand(logdirsAlterReplicasCommand(cl))
 	cmd.AddCommand(alterPartitionAssignments(cl))
 	cmd.AddCommand(alterClientQuotas(cl))
+	cmd.AddCommand(alterUserSCRAM(cl))
 
 	return cmd
 }
@@ -71,6 +72,7 @@ func describeCommand(cl *client.Client) *cobra.Command {
 	cmd.AddCommand(logdirsDescribeCommand(cl))
 	cmd.AddCommand(listPartitionReassignments(cl))
 	cmd.AddCommand(describeClientQuotas(cl))
+	cmd.AddCommand(describeUserSCRAM(cl))
 
 	return cmd
 }
