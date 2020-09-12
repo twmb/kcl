@@ -1,6 +1,14 @@
 TBD
 ===
 
+v0.2.1
+======
+
+- [`d95f48cd0`](https://github.com/twmb/kcl/commit/d95f48cd06fa0f595f20f4a99b2549022cefcb40): reorganizes admin commands again
+
+This is a quick release right after v0.2.1 for a more long-term stable organization of commands.
+
+
 v0.2.0
 ======
 
