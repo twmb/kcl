@@ -123,7 +123,7 @@ func New(root *cobra.Command) *Client {
 	root.PersistentFlags().StringVar(&c.logLevel, "log-level", "none", "log level to use for basic logging (none, error, warn, info, debug)")
 	root.PersistentFlags().StringVar(&c.logFile, "log-file", "", "log to this file rather than STDERR (if log-level is not none; file must not exist)")
 	root.PersistentFlags().StringVar(&c.cfgPath, "config-path", c.defaultCfgPath, "path to confile file (lowest priority)")
-	root.PersistentFlags().BoolVar(&c.noCfgFile, "no-config", false, "do not load any config file")
+	root.PersistentFlags().BoolVar(&c.noCfgFile, "no-config-path", false, "do not load any config file")
 	root.PersistentFlags().StringVar(&c.envPfx, "config-env-prefix", "KCL_", "environment variable prefix for config overrides (middle priority)")
 	root.PersistentFlags().StringArrayVarP(&c.flagOverrides, "config-opt", "X", nil, "flag provided config option (highest priority)")
 	root.PersistentFlags().StringVar(&c.asVersion, "as-version", "", "if nonempty, which version of Kafka versions to use (e.g. '0.8.0', '2.3.0')")
