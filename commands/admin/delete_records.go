@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -82,61 +81,43 @@ delete-records --json-file records.json`,
 				out.Die("no records requested for deletion")
 			}
 
-			brokers2tpos := partitions2Brokers(cl, tpos)
-
 			// Create and fire off a bunch of concurrent requests...
 			type respErr struct {
 				broker int32
 				resp   kmsg.Response
 				err    error
 			}
-			respErrs := make(chan respErr, len(brokers2tpos))
-			for broker, tpos := range brokers2tpos {
-				req := &kmsg.DeleteRecordsRequest{
-					TimeoutMillis: cl.TimeoutMillis(),
-				}
-				for topic, partitionOffsets := range tpos {
-					reqTopic := kmsg.DeleteRecordsRequestTopic{
-						Topic: topic,
-					}
-					for _, partitionOffset := range partitionOffsets {
-						reqTopic.Partitions = append(reqTopic.Partitions, kmsg.DeleteRecordsRequestTopicPartition{
-							Partition: partitionOffset.partition,
-							Offset:    partitionOffset.offset,
-						})
-					}
-					req.Topics = append(req.Topics, reqTopic)
-				}
-
-				go func(broker int32) {
-					kresp, err := cl.Client().Broker(int(broker)).Request(context.Background(), req)
-					respErrs <- respErr{broker, kresp, err}
-				}(broker)
+			req := &kmsg.DeleteRecordsRequest{
+				TimeoutMillis: cl.TimeoutMillis(),
 			}
+			for topic, partitionOffsets := range tpos {
+				reqTopic := kmsg.DeleteRecordsRequestTopic{
+					Topic: topic,
+				}
+				for _, partitionOffset := range partitionOffsets {
+					reqTopic.Partitions = append(reqTopic.Partitions, kmsg.DeleteRecordsRequestTopicPartition{
+						Partition: partitionOffset.partition,
+						Offset:    partitionOffset.offset,
+					})
+				}
+				req.Topics = append(req.Topics, reqTopic)
+			}
+			kresp, err := cl.Client().Request(context.Background(), req)
+			out.MaybeDie(err, "unable to issue delete records request: %v", err)
+			resp := kresp.(*kmsg.DeleteRecordsResponse)
 
-			// Wait for them to all reply or fail.
 			tw := out.BeginTabWrite()
 			defer tw.Flush()
 			fmt.Fprintf(tw, "TOPIC\tPARTITION\tNEW LOW WATERMARK\tERROR\n")
-			for i := 0; i < len(brokers2tpos); i++ {
-				respErr := <-respErrs
-				if respErr.err != nil {
-					fmt.Fprintf(os.Stderr, "BROKER %d REQUEST FAILURE: %v", respErr.broker, respErr.err)
-					continue
-				}
-
-				resp := respErr.resp.(*kmsg.DeleteRecordsResponse)
-				for _, topic := range resp.Topics {
-					for _, partition := range topic.Partitions {
-						msg := "OK"
-						if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
-							msg = err.Error()
-						}
-						fmt.Fprintf(tw, "%s\t%d\t%d\t%s\n",
-							topic.Topic, partition.Partition, partition.LowWatermark, msg)
+			for _, topic := range resp.Topics {
+				for _, partition := range topic.Partitions {
+					msg := "OK"
+					if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
+						msg = err.Error()
 					}
+					fmt.Fprintf(tw, "%s\t%d\t%d\t%s\n",
+						topic.Topic, partition.Partition, partition.LowWatermark, msg)
 				}
-
 			}
 		},
 	}
@@ -174,45 +155,4 @@ func parseTopicPartitionOffsets(list []string) (map[string][]partitionOffset, er
 		tpos[split[0]] = append(tpos[split[0]], partitionOffset{int32(partition), int64(offset)})
 	}
 	return tpos, nil
-}
-
-func partitions2Brokers(cl *client.Client, partitions map[string][]partitionOffset) map[int32]map[string][]partitionOffset {
-	var req kmsg.MetadataRequest
-	for topic := range partitions {
-		req.Topics = append(req.Topics, kmsg.MetadataRequestTopic{
-			Topic: topic,
-		})
-	}
-
-	kresp, err := cl.Client().Request(context.Background(), &req)
-	out.MaybeDie(err, "unable to get metadata: %v", err)
-	resp := kresp.(*kmsg.MetadataResponse)
-
-	brokers2 := make(map[int32]map[string][]partitionOffset)
-	for _, topic := range resp.Topics {
-		reqPartitions, exists := partitions[topic.Topic]
-		if !exists { // it should
-			continue
-		}
-
-		// over all partitions in this top we requested,
-		for _, reqPartition := range reqPartitions {
-			// find who owns it in the metadata
-			for _, partition := range topic.Partitions {
-				if partition.Partition == reqPartition.partition {
-					// and when we find, copy this requested partition to the
-					// broker leader, creating the topic map if necessary
-					brokerTopics := brokers2[partition.Leader]
-					if brokerTopics == nil {
-						brokerTopics = make(map[string][]partitionOffset)
-						brokers2[partition.Leader] = brokerTopics
-					}
-					brokerTopics[topic.Topic] = append(brokerTopics[topic.Topic], reqPartition)
-					break
-				}
-			}
-		}
-	}
-
-	return brokers2
 }
