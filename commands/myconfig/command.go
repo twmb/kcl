@@ -125,7 +125,7 @@ The [sasl] section
 
   method="scram_sha_256"
      SASL method to use. Must be paired with sasl_user and sasl_pass.
-     Possible values are "plaintext", "scram-sha-256", or "scram-sha-512".
+     Possible values are "plain", "scram-sha-256", or "scram-sha-512".
      Dashes and underscores are stripped.
 
   zid="zid"

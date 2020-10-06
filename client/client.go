@@ -355,7 +355,7 @@ func (c *Client) maybeAddSASL() error {
 
 	switch method {
 	case "":
-	case "plaintext":
+	case "plain":
 		c.AddOpt(kgo.SASL(plain.Plain(func(context.Context) (plain.Auth, error) {
 			return plain.Auth{
 				Zid:  c.cfg.SASL.Zid,
