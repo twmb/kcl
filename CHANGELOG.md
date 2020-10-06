@@ -1,6 +1,8 @@
 TBD
 ===
 
+- [`2a2d65e35`](https://github.com/twmb/kcl/commit/2a2d65e352ea58c8472564e1666a9460d88715d2): (breaking) sasl: switch from plaintext to plain
+
 v0.2.1
 ======
 
