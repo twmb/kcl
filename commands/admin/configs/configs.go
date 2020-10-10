@@ -210,7 +210,7 @@ func (c *cfger) alterIncremental() {
 	req := kmsg.IncrementalAlterConfigsRequest{
 		ValidateOnly: c.dryRun,
 		Resources: []kmsg.IncrementalAlterConfigsRequestResource{{
-			ResourceType: int8(c.entity),
+			ResourceType: kmsg.ConfigResourceType(c.entity),
 			ResourceName: c.resourceName,
 		}},
 	}
@@ -239,7 +239,7 @@ func (c *cfger) alterOld() {
 	req := kmsg.AlterConfigsRequest{
 		ValidateOnly: c.dryRun,
 		Resources: []kmsg.AlterConfigsRequestResource{{
-			ResourceType: int8(c.entity),
+			ResourceType: kmsg.ConfigResourceType(c.entity),
 			ResourceName: c.resourceName,
 		}},
 	}
@@ -333,7 +333,7 @@ func (q querier) issueDescribeConfig(withDocs bool) (
 ) {
 	req := kmsg.DescribeConfigsRequest{
 		Resources: []kmsg.DescribeConfigsRequestResource{{
-			ResourceType: int8(q.entity),
+			ResourceType: kmsg.ConfigResourceType(q.entity),
 			ResourceName: q.resourceName,
 		}},
 		IncludeDocumentation: withDocs,
@@ -415,15 +415,15 @@ describe bar --type topic`,
 				args := []interface{}{
 					key,
 					val,
-					configSourceForInt8(kv.Source),
+					kv.Source,
 				}
 				if resp.Version >= 3 && withTypes {
 					fmtStr += "\t%s"
 					args = []interface{}{
 						key,
-						typeForInt8(kv.ConfigType),
+						kv.ConfigType,
 						val,
-						configSourceForInt8(kv.Source),
+						kv.Source,
 					}
 				}
 				fmt.Fprintf(tw, fmtStr+"\n", args...)
@@ -454,52 +454,4 @@ describe bar --type topic`,
 	cmd.Flags().BoolVar(&withTypes, "with-types", false, "inlcude types of config values (Kafka 2.6.0+)")
 
 	return cmd
-}
-
-func configSourceForInt8(i int8) string {
-	switch i {
-	case 0:
-		return "UNKNOWN"
-	case 1:
-		return "DYNAMIC_TOPIC_CONFIG"
-	case 2:
-		return "DYNAMIC_BROKER_CONFIG"
-	case 3:
-		return "DYNAMIC_DEFAULT_BROKER_CONFIG"
-	case 4:
-		return "STATIC_BROKER_CONFIG"
-	case 5:
-		return "DEFAULT_CONFIG"
-	case 6:
-		return "DYNAMIC_BROKER_LOGGER_CONFIG"
-	default:
-		return "UNKNOWN_TO_KCL"
-	}
-}
-
-func typeForInt8(i int8) string {
-	switch i {
-	case 0:
-		return "UNKNOWN"
-	case 1:
-		return "BOOLEAN"
-	case 2:
-		return "STRING"
-	case 3:
-		return "INT"
-	case 4:
-		return "SHORT"
-	case 5:
-		return "LONG"
-	case 6:
-		return "DOUBLE"
-	case 7:
-		return "LIST"
-	case 8:
-		return "CLASS"
-	case 9:
-		return "PASSWORD"
-	default:
-		return "UNKNOWN_TO_KCL"
-	}
 }

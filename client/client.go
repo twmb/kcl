@@ -190,7 +190,7 @@ func (c *Client) fillOpts() {
 		out.Die("%s", err)
 	} else if tlscfg != nil {
 		dialer := &net.Dialer{Timeout: 10 * time.Second}
-		c.AddOpt(kgo.Dialer(func(_ context.Context, host string) (net.Conn, error) {
+		c.AddOpt(kgo.Dialer(func(_ context.Context, _, host string) (net.Conn, error) {
 			cloned := tlscfg.Clone()
 			if c.cfg.TLS.ServerName != "" {
 				cloned.ServerName = c.cfg.TLS.ServerName

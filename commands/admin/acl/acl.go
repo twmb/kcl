@@ -207,13 +207,13 @@ For more detailed information about ACLs, read kcl acl --help.
 			for _, resource := range resp.Resources {
 				for _, acl := range resource.ACLs {
 					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-						itoaResourceType(resource.ResourceType),
+						resource.ResourceType,
 						resource.ResourceName,
-						itoaResourcePattern(resource.ResourcePatternType),
+						resource.ResourcePatternType,
 						acl.Principal,
 						acl.Host,
-						itoaOperation(acl.Operation),
-						itoaPermission(acl.PermissionType),
+						acl.Operation,
+						acl.PermissionType,
 					)
 				}
 			}
@@ -322,13 +322,13 @@ For more detailed information about ACLs, read kcl acl --help.
 				}
 				creation := req.Creations[i]
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-					itoaResourceType(creation.ResourceType),
+					creation.ResourceType,
 					creation.ResourceName,
-					itoaResourcePattern(creation.ResourcePatternType),
+					creation.ResourcePatternType,
 					creation.Principal,
 					creation.Host,
-					itoaOperation(creation.Operation),
-					itoaPermission(creation.PermissionType),
+					creation.Operation,
+					creation.PermissionType,
 					errStr,
 					errMsg,
 				)
@@ -442,13 +442,13 @@ For more detailed information about ACLs, read kcl acl --help.
 					}
 				}
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-					itoaResourceType(acl.ResourceType),
+					acl.ResourceType,
 					acl.ResourceName,
-					itoaResourcePattern(acl.ResourcePatternType),
+					acl.ResourcePatternType,
 					acl.Principal,
 					acl.Host,
-					itoaOperation(acl.Operation),
-					itoaPermission(acl.PermissionType),
+					acl.Operation,
+					acl.PermissionType,
 					errStr,
 					errMsg,
 				)
@@ -471,7 +471,7 @@ For more detailed information about ACLs, read kcl acl --help.
 // STR <-> INT //
 /////////////////
 
-func atoiResourceType(s string) int8 {
+func atoiResourceType(s string) kmsg.ACLResourceType {
 	switch client.Strnorm(s) {
 	case "any":
 		return 1
@@ -490,26 +490,7 @@ func atoiResourceType(s string) int8 {
 	}
 }
 
-func itoaResourceType(t int8) string {
-	switch t {
-	case 1:
-		return "ANY"
-	case 2:
-		return "TOPIC"
-	case 3:
-		return "GROUP"
-	case 4:
-		return "CLUSTER"
-	case 5:
-		return "TRANSACTIONAL_ID"
-	case 6:
-		return "DELEGATION_TOKEN"
-	default:
-		return "UNKNOWN"
-	}
-}
-
-func atoiResourcePattern(p string) int8 {
+func atoiResourcePattern(p string) kmsg.ACLResourcePatternType {
 	switch client.Strnorm(p) {
 	case "match":
 		return 1
@@ -522,20 +503,7 @@ func atoiResourcePattern(p string) int8 {
 	}
 }
 
-func itoaResourcePattern(p int8) string {
-	switch p {
-	case 1:
-		return "MATCH"
-	case 2:
-		return "LITERAL"
-	case 3:
-		return "PREFIXED"
-	default:
-		return "UNKNOWN"
-	}
-}
-
-func atoiOperation(o string) int8 {
+func atoiOperation(o string) kmsg.ACLOperation {
 	switch client.Strnorm(o) {
 	case "any":
 		return 1
@@ -566,38 +534,7 @@ func atoiOperation(o string) int8 {
 	}
 }
 
-func itoaOperation(o int8) string {
-	switch o {
-	case 1:
-		return "ANY"
-	case 2:
-		return "ALL"
-	case 3:
-		return "READ"
-	case 4:
-		return "WRITE"
-	case 5:
-		return "CREATE"
-	case 6:
-		return "DELETE"
-	case 7:
-		return "ALTER"
-	case 8:
-		return "DESCRIBE"
-	case 9:
-		return "CLUSTER_ACTION"
-	case 10:
-		return "DESCRIBE_CONFIGS"
-	case 11:
-		return "ALTER_CONFIGS"
-	case 12:
-		return "IDEMPOTENT_WRITE"
-	default:
-		return "UNKNOWN"
-	}
-}
-
-func atoiPermission(t string) int8 {
+func atoiPermission(t string) kmsg.ACLPermissionType {
 	switch client.Strnorm(t) {
 	case "any":
 		return 1
@@ -607,18 +544,5 @@ func atoiPermission(t string) int8 {
 		return 3
 	default:
 		return 0
-	}
-}
-
-func itoaPermission(t int8) string {
-	switch t {
-	case 1:
-		return "ANY"
-	case 2:
-		return "DENY"
-	case 3:
-		return "ALLOW"
-	default:
-		return "UNKNOWN"
 	}
 }
