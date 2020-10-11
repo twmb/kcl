@@ -227,9 +227,9 @@ func probeVersion(cl *client.Client) {
 	}
 
 	resp := kresp.(*kmsg.ApiVersionsResponse)
-	got := make(kversion.Versions, len(resp.ApiKeys))
-	for i, key := range resp.ApiKeys {
-		got[i] = key.MaxVersion
+	got := make(kversion.Versions, 0, len(resp.ApiKeys))
+	for _, key := range resp.ApiKeys {
+		got = append(got, key.MaxVersion)
 	}
 
 	eq := func(test kversion.Versions) bool {
@@ -271,6 +271,8 @@ func probeVersion(cl *client.Client) {
 		fmt.Println("Kafka 2.5.0")
 	case eq(kversion.V2_6_0()):
 		fmt.Println("Kafka 2.6.0")
+	case eq(kversion.Tip()):
+		fmt.Println("Kafka tip")
 	default:
 		fmt.Println("Unknown version: either tip or between releases")
 	}
