@@ -14,8 +14,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/twmb/kafka-go/pkg/kgo"
-	"github.com/twmb/kafka-go/pkg/kmsg"
+	"github.com/twmb/frang/pkg/kgo"
+	"github.com/twmb/frang/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/format"

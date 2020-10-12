@@ -8,7 +8,7 @@ import (
 	"os"
 	"text/tabwriter"
 
-	"github.com/twmb/kafka-go/pkg/kerr"
+	"github.com/twmb/frang/pkg/kerr"
 )
 
 // BeginTabWrite returns a new tabwriter that prints to stdout.

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/twmb/kafka-go/pkg/kgo"
+	"github.com/twmb/frang/pkg/kgo"
 )
 
 type Reader struct {

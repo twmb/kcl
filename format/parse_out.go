@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"unicode/utf8"
 
+	"github.com/twmb/frang/pkg/kgo"
 	"github.com/twmb/go-strftime"
-	"github.com/twmb/kafka-go/pkg/kgo"
 )
 
 func ParseWriteFormat(format string, escape rune) (func([]byte, *kgo.Record) []byte, error) {

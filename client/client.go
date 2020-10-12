@@ -21,11 +21,11 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
 
-	"github.com/twmb/kafka-go/pkg/kgo"
-	"github.com/twmb/kafka-go/pkg/kmsg"
-	"github.com/twmb/kafka-go/pkg/kversion"
-	"github.com/twmb/kafka-go/pkg/sasl/plain"
-	"github.com/twmb/kafka-go/pkg/sasl/scram"
+	"github.com/twmb/frang/pkg/kgo"
+	"github.com/twmb/frang/pkg/kmsg"
+	"github.com/twmb/frang/pkg/kversion"
+	"github.com/twmb/frang/pkg/sasl/plain"
+	"github.com/twmb/frang/pkg/sasl/scram"
 
 	"github.com/twmb/kcl/out"
 )
