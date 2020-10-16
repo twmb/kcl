@@ -13,10 +13,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/twmb/frang/pkg/kerr"
-	"github.com/twmb/frang/pkg/kgo"
-	"github.com/twmb/frang/pkg/kmsg"
-	"github.com/twmb/frang/pkg/kversion"
+	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kversion"
 
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/flagutil"

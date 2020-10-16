@@ -3,6 +3,8 @@ TBD
 
 - [`2a2d65e35`](https://github.com/twmb/kcl/commit/2a2d65e352ea58c8472564e1666a9460d88715d2): (breaking) sasl: switch from plaintext to plain
 
+Also bumps the kafka-go dep (which was renamed to frang, then again and finally to franz-go), which pulls in bug fixes and improvements.
+
 v0.2.1
 ======
 
@@ -21,7 +23,7 @@ v0.2.0
 - [`05451336d`](https://github.com/twmb/kcl/commit/05451336d982b4e537cf8d70c340d1fdebd2f799): add misc errtext command
 - [`f72facd71`](https://github.com/twmb/kcl/commit/f72facd715de0e9919a3234b7ca9f074a9791e59): fix output on unrecognized prefix
 
-Minor other changes (formatting, documentation, frang bumps).
+Minor other changes (formatting, documentation, kafka-go bumps).
 
 This is a "major" bump while on the 0 version due to all admin related commands moving under admin.
 
@@ -37,4 +39,4 @@ v0.1.1
 - [`5b877591d`](https://github.com/twmb/kcl/commit/5b877591df12a16f7506739c94476061616f68ab): add `KCL_CONFIG_{DIR,FILE,PATH}`
 - [`4c5af690b`](https://github.com/twmb/kcl/commit/4c5af690ba8ebf164eec10e3319000eeea4d4e71): add ascii number parsing for reading messages
 
-Minor other changes (formatting, documentation, frang bumps).
+Minor other changes (formatting, documentation, kafka-go bumps).

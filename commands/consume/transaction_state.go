@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/twmb/frang/pkg/kgo"
-	"github.com/twmb/frang/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/twmb/kcl/out"
 )
 

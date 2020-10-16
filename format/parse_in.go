@@ -11,7 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/twmb/frang/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 type Reader struct {

@@ -8,7 +8,7 @@ import (
 	"os"
 	"text/tabwriter"
 
-	"github.com/twmb/frang/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kerr"
 )
 
 // BeginTabWrite returns a new tabwriter that prints to stdout.

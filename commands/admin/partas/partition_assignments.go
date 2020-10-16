@@ -6,8 +6,8 @@ import (
 	"sort"
 
 	"github.com/spf13/cobra"
-	"github.com/twmb/frang/pkg/kerr"
-	"github.com/twmb/frang/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/flagutil"
 	"github.com/twmb/kcl/out"

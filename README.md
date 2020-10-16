@@ -31,12 +31,12 @@ I consider the current API **relatively** stable. Once this hits a 1.x release,
 the API will be even more stable. I would like to get some definitive
 broader usage of the client before deeming things unchanging.
 
-I've spent a good amount of time integration testing my [frang][2] client
+I've spent a good amount of time integration testing my [franz-go][2] client
 that this program uses. The main thing I have currently been unable to test is
 closest replica fetching, which is only theoretically supported. It is worth it
-to read the stability status in the frang repo as well if using this client.
+to read the stability status in the franz-go repo as well if using this client.
 
-[2]: https://github.com/twmb/frang/
+[2]: https://github.com/twmb/franz-go/
 
 I would love confirmation that this program has been used more broadly, and
 would love to start a "Users" section below. With this confirmation, I will
