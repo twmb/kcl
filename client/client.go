@@ -276,7 +276,7 @@ func (c *Client) processOverrides() {
 
 	parse := func(kvs []string) {
 		for _, opt := range kvs {
-			kv := strings.Split(opt, "=")
+			kv := strings.SplitN(opt, "=", 2)
 			if len(kv) != 2 {
 				out.Die("opt %q not a key=value", opt)
 			}
