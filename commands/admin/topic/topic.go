@@ -103,7 +103,7 @@ func topicDeleteCommand(cl *client.Client) *cobra.Command {
 		Run: func(_ *cobra.Command, args []string) {
 			resp, err := cl.Client().Request(context.Background(), &kmsg.DeleteTopicsRequest{
 				TimeoutMillis: cl.TimeoutMillis(),
-				Topics:        args,
+				TopicNames:    args,
 			})
 			out.MaybeDie(err, "unable to delete topics: %v", err)
 			if cl.AsJSON() {
@@ -171,7 +171,8 @@ add-partitions -t bar -t baz 1, 2, 3`,
 			// Get the metadata so we can determine the final partition count.
 			metaReq := new(kmsg.MetadataRequest)
 			for _, topic := range topics {
-				metaReq.Topics = append(metaReq.Topics, kmsg.MetadataRequestTopic{Topic: topic})
+				t := topic
+				metaReq.Topics = append(metaReq.Topics, kmsg.MetadataRequestTopic{Topic: &t})
 			}
 			kmetaResp, err := cl.Client().Request(context.Background(), metaReq)
 			out.MaybeDie(err, "unable to get topic metadata: %v", err)

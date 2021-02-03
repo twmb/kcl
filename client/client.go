@@ -305,7 +305,7 @@ func (c *Client) processOverrides() {
 
 func (c *Client) maybeAddMaxVersions() {
 	if c.asVersion != "" {
-		var versions kversion.Versions
+		var versions *kversion.Versions
 		switch c.asVersion {
 		case "0.8.0":
 			versions = kversion.V0_8_0()

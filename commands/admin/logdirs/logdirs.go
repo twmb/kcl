@@ -77,24 +77,21 @@ describe // describes all`,
 				tps, err := flagutil.ParseTopicPartitions(topics)
 				out.MaybeDie(err, "improper topic partitions format on: %v", err)
 
-				// For any topic that had no partitions specified, we
-				// describe all partitions. We have to first learn of
-				// these partitions with a metadata request.
-				var alls []string
+				// For any topic that has no partitions
+				// specified, we describe *all* partitions.
+				metaReq := kmsg.NewMetadataRequest()
 				for topic, partitions := range tps {
 					if len(partitions) == 0 {
-						alls = append(alls, topic)
+						metaReqTopic := kmsg.NewMetadataRequestTopic()
+						t := topic
+						metaReqTopic.Topic = &t
+						metaReq.Topics = append(metaReq.Topics, metaReqTopic)
 					}
 				}
-				if len(alls) > 0 {
-					meta := new(kmsg.MetadataRequest)
-					for _, topic := range alls {
-						meta.Topics = append(meta.Topics, kmsg.MetadataRequestTopic{Topic: topic})
-					}
-					kresp, err := cl.Client().Request(context.Background(), meta)
-					out.MaybeDie(err, "unable to request metadata to determine partitions on topics: %v", err)
-					resp := kresp.(*kmsg.MetadataResponse)
-					for _, topic := range resp.Topics {
+				if len(metaReq.Topics) > 0 {
+					metaResp, err := metaReq.RequestWith(context.Background(), cl.Client())
+					out.MaybeDie(err, "unable to request metadata: %v", err)
+					for _, topic := range metaResp.Topics {
 						for _, partition := range topic.Partitions {
 							tps[topic.Topic] = append(tps[topic.Topic], partition.Partition)
 						}
@@ -109,50 +106,46 @@ describe // describes all`,
 				}
 			}
 
-			var kresp kmsg.Response
-			var err error
-			if broker >= 0 {
-				kresp, err = cl.Client().Broker(int(broker)).Request(context.Background(), &req)
-			} else {
-				kresp, err = cl.Client().Request(context.Background(), &req)
-			}
-			out.MaybeDie(err, "unable to describe log dirs: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
-			}
-			resp := kresp.(*kmsg.DescribeLogDirsResponse)
-
-			sort.Slice(resp.Dirs, func(i, j int) bool { return resp.Dirs[i].Dir < resp.Dirs[j].Dir })
-			for _, dir := range resp.Dirs {
-				sort.Slice(dir.Topics, func(i, j int) bool { return dir.Topics[i].Topic < dir.Topics[j].Topic })
-				for _, topic := range dir.Topics {
-					sort.Slice(topic.Partitions, func(i, j int) bool { return topic.Partitions[i].Partition < topic.Partitions[j].Partition })
-				}
-			}
+			kresps := cl.Client().RequestSharded(context.Background(), &req)
 
 			tw := out.BeginTabWrite()
 			defer tw.Flush()
 
-			fmt.Fprintf(tw, "DIR\tDIR ERR\tTOPIC\tPARTITION\tSIZE\tOFFSET LAG\tIS FUTURE\n")
-			for _, dir := range resp.Dirs {
-				if err := kerr.ErrorForCode(dir.ErrorCode); err != nil {
-					fmt.Fprintf(tw, "%s\t%s\t\t\t\t\t\n", dir.Dir, err.Error())
+			fmt.Fprintf(tw, "BROKER\tERR\tDIR\tTOPIC\tPARTITION\tSIZE\tOFFSET LAG\tIS FUTURE\n")
+
+			for _, kresp := range kresps {
+				if kresp.Err != nil {
+					fmt.Fprintf(tw, "%d\t%v\t\t\t\t\t\t\n", kresp.Meta.NodeID, kresp.Err)
 					continue
 				}
-				for _, topic := range dir.Topics {
-					for _, partition := range topic.Partitions {
-						fmt.Fprintf(tw, "%s\t\t%s\t%d\t%d\t%d\t%v\n",
-							dir.Dir,
-							topic.Topic,
-							partition.Partition,
-							partition.Size,
-							partition.OffsetLag,
-							partition.IsFuture,
-						)
+
+				resp := kresp.Resp.(*kmsg.DescribeLogDirsResponse)
+
+				sort.Slice(resp.Dirs, func(i, j int) bool { return resp.Dirs[i].Dir < resp.Dirs[j].Dir })
+				for _, dir := range resp.Dirs {
+
+					if err := kerr.ErrorForCode(dir.ErrorCode); err != nil {
+						fmt.Fprintf(tw, "%d\t%v\t%s\t\t\t\t\t\n", kresp.Meta.NodeID, err, dir.Dir)
+						continue
+					}
+
+					sort.Slice(dir.Topics, func(i, j int) bool { return dir.Topics[i].Topic < dir.Topics[j].Topic })
+					for _, topic := range dir.Topics {
+						sort.Slice(topic.Partitions, func(i, j int) bool { return topic.Partitions[i].Partition < topic.Partitions[j].Partition })
+						for _, partition := range topic.Partitions {
+							fmt.Fprintf(tw, "%d\t\t%s\t%s\t%d\t%d\t%d\t%v\n",
+								kresp.Meta.NodeID,
+								dir.Dir,
+								topic.Topic,
+								partition.Partition,
+								partition.Size,
+								partition.OffsetLag,
+								partition.IsFuture,
+							)
+						}
 					}
 				}
 			}
-
 		},
 	}
 

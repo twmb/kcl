@@ -60,8 +60,9 @@ If the brokers section is printed, the controller broker is marked with *.
 				req.Topics = []kmsg.MetadataRequestTopic{} // nil is all, empty is none
 			} else {
 				for _, topic := range topics {
+					t := topic
 					req.Topics = append(req.Topics, kmsg.MetadataRequestTopic{
-						Topic: topic,
+						Topic: &t,
 					})
 				}
 			}

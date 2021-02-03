@@ -4,6 +4,7 @@ package group
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/spf13/cobra"
 
@@ -62,32 +63,28 @@ the groups listed. This prints all of the information from a ListGroups request.
 					statesFilter[i] = "Empty"
 				}
 			}
-			kresp, err := cl.Client().Request(context.Background(), &kmsg.ListGroupsRequest{
+			kresps := cl.Client().RequestSharded(context.Background(), &kmsg.ListGroupsRequest{
 				StatesFilter: statesFilter,
 			})
-			out.MaybeDie(err, "unable to list groups: %v", err)
-			resp := kresp.(*kmsg.ListGroupsResponse)
 
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
-			}
-
-			if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
-				out.Die("%s", err)
-				return
-			}
-
+			sort.Slice(kresps, func(i, j int) bool { return kresps[i].Meta.NodeID < kresps[j].Meta.NodeID })
 			tw := out.BeginTabWrite()
 			defer tw.Flush()
-			if resp.Version >= 4 {
-				fmt.Fprintf(tw, "GROUP ID\tPROTO TYPE\tSTATE\n")
-				for _, group := range resp.Groups {
-					fmt.Fprintf(tw, "%s\t%s\t%s\n", group.Group, group.ProtocolType, group.GroupState)
+
+			fmt.Fprintf(tw, "BROKER\tGROUP ID\tPROTO TYPE\tSTATE\tERROR\n")
+			for _, kresp := range kresps {
+				err := kresp.Err
+				if err == nil {
+					err = kerr.ErrorForCode(kresp.Resp.(*kmsg.ListGroupsResponse).ErrorCode)
 				}
-			} else {
-				fmt.Fprintf(tw, "GROUP ID\tPROTO TYPE\n")
+				if err != nil {
+					fmt.Fprintf(tw, "%d\t\t\t\t%v\n", kresp.Meta.NodeID, err)
+					continue
+				}
+
+				resp := kresp.Resp.(*kmsg.ListGroupsResponse)
 				for _, group := range resp.Groups {
-					fmt.Fprintf(tw, "%s\t%s\n", group.Group, group.ProtocolType)
+					fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t\n", kresp.Meta.NodeID, group.Group, group.ProtocolType, group.GroupState)
 				}
 			}
 		},

@@ -3,6 +3,7 @@ package consume
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"regexp"

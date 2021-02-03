@@ -3,7 +3,9 @@ TBD
 
 - [`2a2d65e35`](https://github.com/twmb/kcl/commit/2a2d65e352ea58c8472564e1666a9460d88715d2): (breaking) sasl: switch from plaintext to plain
 
-Also bumps the kafka-go dep (which was renamed to frang, then again and finally to franz-go), which pulls in bug fixes and improvements.
+Also bumps the kafka-go dep (which was renamed to frang, then again and finally
+to franz-go), which pulls in bug fixes and improvements, and includes bug fixes
+of its own.
 
 v0.2.1
 ======

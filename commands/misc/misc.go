@@ -227,55 +227,9 @@ func probeVersion(cl *client.Client) {
 	}
 
 	resp := kresp.(*kmsg.ApiVersionsResponse)
-	got := make(kversion.Versions, 0, len(resp.ApiKeys))
-	for _, key := range resp.ApiKeys {
-		got = append(got, key.MaxVersion)
-	}
 
-	eq := func(test kversion.Versions) bool {
-		if len(test) != len(got) {
-			return false
-		}
-		for i, v := range test {
-			if got[i] != v {
-				return false
-			}
-		}
-		return true
-	}
-
-	switch {
-	case eq(kversion.V0_10_0()):
-		fmt.Println("Kafka 0.10.0")
-	case eq(kversion.V0_10_1()):
-		fmt.Println("Kafka 0.10.1")
-	case eq(kversion.V0_10_2()):
-		fmt.Println("Kafka 0.10.2")
-	case eq(kversion.V0_11_0()):
-		fmt.Println("Kafka 0.11.0")
-	case eq(kversion.V1_0_0()):
-		fmt.Println("Kafka 1.0.0")
-	case eq(kversion.V1_1_0()):
-		fmt.Println("Kafka 1.1.0")
-	case eq(kversion.V2_0_0()):
-		fmt.Println("Kafka 2.0.0")
-	case eq(kversion.V2_1_0()):
-		fmt.Println("Kafka 2.1.0")
-	case eq(kversion.V2_2_0()):
-		fmt.Println("Kafka 2.2.0")
-	case eq(kversion.V2_3_0()):
-		fmt.Println("Kafka 2.3.0")
-	case eq(kversion.V2_4_0()):
-		fmt.Println("Kafka 2.4.0")
-	case eq(kversion.V2_5_0()):
-		fmt.Println("Kafka 2.5.0")
-	case eq(kversion.V2_6_0()):
-		fmt.Println("Kafka 2.6.0")
-	case eq(kversion.Tip()):
-		fmt.Println("Kafka tip")
-	default:
-		fmt.Println("Unknown version: either tip or between releases")
-	}
+	v := kversion.FromApiVersionsResponse(resp)
+	fmt.Println("Kafka " + v.VersionGuess())
 }
 
 func rawCommand(cl *client.Client) *cobra.Command {
@@ -332,7 +286,8 @@ offset.
 			for topic, partitions := range tps {
 				var metaTopics []kmsg.MetadataRequestTopic
 				if len(partitions) == 0 {
-					metaTopics = append(metaTopics, kmsg.MetadataRequestTopic{Topic: topic})
+					t := topic
+					metaTopics = append(metaTopics, kmsg.MetadataRequestTopic{Topic: &t})
 				}
 				if len(metaTopics) > 0 {
 					kresp, err := cl.Client().Request(context.Background(), &kmsg.MetadataRequest{Topics: metaTopics})
