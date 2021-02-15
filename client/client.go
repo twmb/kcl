@@ -339,6 +339,10 @@ func (c *Client) maybeAddMaxVersions() {
 			versions = kversion.V2_4_0()
 		case "2.5.0":
 			versions = kversion.V2_5_0()
+		case "2.6.0":
+			versions = kversion.V2_6_0()
+		case "2.7.0":
+			versions = kversion.V2_7_0()
 		default:
 			out.Die("unknown Kafka version %s", c.asVersion)
 		}

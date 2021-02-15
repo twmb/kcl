@@ -228,21 +228,33 @@ delete-records --json-file records.json`,
 				}
 				req.Topics = append(req.Topics, reqTopic)
 			}
-			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to issue delete records request: %v", err)
-			resp := kresp.(*kmsg.DeleteRecordsResponse)
+
+			brokerResps := cl.Client().RequestSharded(context.Background(), req)
 
 			tw := out.BeginTabWrite()
 			defer tw.Flush()
-			fmt.Fprintf(tw, "TOPIC\tPARTITION\tNEW LOW WATERMARK\tERROR\n")
-			for _, topic := range resp.Topics {
-				for _, partition := range topic.Partitions {
-					msg := "OK"
-					if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
-						msg = err.Error()
+
+			for _, brokerResp := range brokerResps {
+				fmt.Fprintf(tw, "BROKER\tTOPIC\tPARTITION\tNEW LOW WATERMARK\tERROR\n")
+
+				kresp, err := brokerResp.Resp, brokerResp.Err
+				if err != nil {
+					fmt.Fprintf(tw, "%d\t\t\t\t%s\n",
+						brokerResp.Meta.NodeID, fmt.Sprintf("unable to issue request: %s", err.Error()))
+					continue
+				}
+
+				resp := kresp.(*kmsg.DeleteRecordsResponse)
+
+				for _, topic := range resp.Topics {
+					for _, partition := range topic.Partitions {
+						msg := "OK"
+						if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
+							msg = err.Error()
+						}
+						fmt.Fprintf(tw, "%d\t%s\t%d\t%d\t%s\n",
+							brokerResp.Meta.NodeID, topic.Topic, partition.Partition, partition.LowWatermark, msg)
 					}
-					fmt.Fprintf(tw, "%s\t%d\t%d\t%s\n",
-						topic.Topic, partition.Partition, partition.LowWatermark, msg)
 				}
 			}
 		},

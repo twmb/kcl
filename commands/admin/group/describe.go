@@ -28,38 +28,45 @@ func describeCommand(cl *client.Client) *cobra.Command {
 		Run: func(_ *cobra.Command, args []string) {
 			req.Groups = args
 
-			kresp, err := cl.Client().Request(context.Background(), &req)
-
-			out.MaybeDie(err, "unable to describe groups: %v", err)
-			resp := unbinaryGroupDescribeMembers(kresp.(*kmsg.DescribeGroupsResponse))
-
-			if cl.AsJSON() {
-				out.ExitJSON(resp)
-			}
-
-			if verbose {
-				for _, group := range resp.Groups {
-					describeGroupVerbose(cl, &group, readCommitted)
-					fmt.Println()
-				}
-				return
-			}
+			brokerResps := cl.Client().RequestSharded(context.Background(), &req)
 
 			tw := out.BeginTabWrite()
-			defer tw.Flush()
-			fmt.Fprintf(tw, "GROUP ID\tSTATE\tPROTO TYPE\tPROTO\tERROR\n")
-			for _, group := range resp.Groups {
-				errMsg := ""
-				if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
-					errMsg = err.Error()
+			if !verbose {
+				defer tw.Flush()
+			}
+
+			for _, brokerResp := range brokerResps {
+				kresp, err := brokerResp.Resp, brokerResp.Err
+				if err != nil {
+					fmt.Printf("unable to issue DescribeGroups to broker %d (%s:%d): %v\n", brokerResp.Meta.NodeID, brokerResp.Meta.Host, brokerResp.Meta.Port, err)
+					continue
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
-					group.Group,
-					group.State,
-					group.ProtocolType,
-					group.Protocol,
-					errMsg,
-				)
+
+				resp := unbinaryGroupDescribeMembers(kresp.(*kmsg.DescribeGroupsResponse))
+
+				if verbose {
+					for _, group := range resp.Groups {
+						describeGroupVerbose(cl, brokerResp.Meta.NodeID, &group, readCommitted)
+						fmt.Println()
+					}
+					continue
+				}
+
+				fmt.Fprintf(tw, "BROKER\tGROUP ID\tSTATE\tPROTO TYPE\tPROTO\tERROR\n")
+				for _, group := range resp.Groups {
+					errMsg := ""
+					if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
+						errMsg = err.Error()
+					}
+					fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\n",
+						brokerResp.Meta.NodeID,
+						group.Group,
+						group.State,
+						group.ProtocolType,
+						group.Protocol,
+						errMsg,
+					)
+				}
 			}
 		},
 	}
@@ -70,8 +77,9 @@ func describeCommand(cl *client.Client) *cobra.Command {
 	return cmd
 }
 
-func describeGroupVerbose(cl *client.Client, group *consumerGroup, readCommitted bool) {
+func describeGroupVerbose(cl *client.Client, broker int32, group *consumerGroup, readCommitted bool) {
 	tw := out.BeginTabWrite()
+	fmt.Fprintf(tw, "BROKER\t%d\n", broker)
 	fmt.Fprintf(tw, "ID\t%s\n", group.Group)
 	fmt.Fprintf(tw, "STATE\t%s\n", group.State)
 	fmt.Fprintf(tw, "PROTO TYPE\t%s\n", group.ProtocolType)

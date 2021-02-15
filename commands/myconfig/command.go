@@ -261,11 +261,59 @@ func listCommand(cl *client.Client) *cobra.Command {
 		Short:   "List all files in configuration directory" + cl.DefaultCfgPath(),
 		Args:    cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
+
+			defaultBase := filepath.Base(cl.DefaultCfgPath())
+
+			var (
+				defaultIsSymlink bool
+				symlinkTarget    string
+			)
+			func() {
+				existing, err := os.Lstat(cl.DefaultCfgPath())
+				if err != nil {
+					return // default config path does not exist
+				}
+				if existing.Mode()&os.ModeSymlink == 0 {
+					return // not a symlink
+				}
+				defaultIsSymlink = true
+
+				target, err := os.Readlink(cl.DefaultCfgPath())
+				if err != nil {
+					return // broken symlink
+				}
+				symlinkTarget = target
+
+				// If the symlink target is within our config dir,
+				// drop the config dir path.
+				if target == filepath.Join(filepath.Dir(cl.DefaultCfgPath()), filepath.Base(target)) {
+					symlinkTarget = filepath.Base(target)
+				}
+			}()
+
+			if defaultIsSymlink {
+				fmt.Println("*" + defaultBase + "@")
+			}
+
 			dir := filepath.Dir(cl.DefaultCfgPath())
 			dirents, err := ioutil.ReadDir(dir)
 			out.MaybeDie(err, "unable to read config dir %q: %v", dir, err)
 			for _, dirent := range dirents {
-				fmt.Println(dirent.Name())
+				name := dirent.Name()
+				if name == defaultBase {
+					// If the default is a symlink, we
+					// print expanded information above.
+					if defaultIsSymlink {
+						continue
+					}
+					fmt.Println("*" + defaultBase)
+					continue
+				}
+				if defaultIsSymlink && name == symlinkTarget {
+					fmt.Println("**" + name)
+					continue
+				}
+				fmt.Println(name)
 			}
 		},
 	}

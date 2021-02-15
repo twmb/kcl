@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -301,46 +302,59 @@ offset.
 				}
 			}
 
-			req := &kmsg.ListOffsetsRequest{
+			reqStart := &kmsg.ListOffsetsRequest{
+				ReplicaID:      -1,
+				IsolationLevel: 0,
+			}
+			reqEnd := &kmsg.ListOffsetsRequest{
 				ReplicaID:      -1,
 				IsolationLevel: 0,
 			}
 			if readCommitted {
-				req.IsolationLevel = 1
+				reqStart.IsolationLevel = 1
+				reqEnd.IsolationLevel = 1
 			}
 			for topic, partitions := range tps {
-				topicReq := kmsg.ListOffsetsRequestTopic{
+				topicReqStart := kmsg.ListOffsetsRequestTopic{
+					Topic: topic,
+				}
+				topicReqEnd := kmsg.ListOffsetsRequestTopic{
 					Topic: topic,
 				}
 				for _, partition := range partitions {
-					topicReq.Partitions = append(topicReq.Partitions, kmsg.ListOffsetsRequestTopicPartition{
+					topicReqStart.Partitions = append(topicReqStart.Partitions, kmsg.ListOffsetsRequestTopicPartition{
 						Partition:          partition,
 						CurrentLeaderEpoch: -1,
 						Timestamp:          -2, // earliest
 						MaxNumOffsets:      1,  // just in case <= 0.10.0
 					})
+					topicReqEnd.Partitions = append(topicReqEnd.Partitions, kmsg.ListOffsetsRequestTopicPartition{
+						Partition:          partition,
+						CurrentLeaderEpoch: -1,
+						Timestamp:          -1, // latest
+						MaxNumOffsets:      1,
+					})
 				}
-				req.Topics = append(req.Topics, topicReq)
+				reqStart.Topics = append(reqStart.Topics, topicReqStart)
+				reqEnd.Topics = append(reqEnd.Topics, topicReqEnd)
 			}
 
-			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to list start offsets: %v", err)
-
-			startResp := kresp.(*kmsg.ListOffsetsResponse)
-
-			for topic := range req.Topics {
-				for partition := range req.Topics[topic].Partitions {
-					req.Topics[topic].Partitions[partition].Timestamp = -1 // latest
-				}
-			}
-
-			kresp, err = cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to list end offsets: %v", err)
-
-			endResp := kresp.(*kmsg.ListOffsetsResponse)
+			var startResps, endResps []kgo.ResponseShard
+			var wg sync.WaitGroup
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				startResps = cl.Client().RequestSharded(context.Background(), reqStart)
+			}()
+			go func() {
+				defer wg.Done()
+				endResps = cl.Client().RequestSharded(context.Background(), reqEnd)
+			}()
+			wg.Wait()
 
 			type startEnd struct {
 				err              error
+				broker           int32
 				startOffset      int64
 				startLeaderEpoch int32
 				endOffset        int64
@@ -349,47 +363,66 @@ offset.
 
 			startEnds := make(map[string]map[int32]startEnd)
 
-			for _, topic := range startResp.Topics {
-				topicStartEnds := make(map[int32]startEnd)
-				startEnds[topic.Topic] = topicStartEnds
-				for _, partition := range topic.Partitions {
-					if startResp.Version == 0 && len(partition.OldStyleOffsets) > 0 {
-						partition.Offset = partition.OldStyleOffsets[0]
+			for _, brokerResp := range startResps {
+				if brokerResp.Err != nil {
+					fmt.Printf("unable to list start offsets from broker %d (%s:%d): %v\n", brokerResp.Meta.NodeID, brokerResp.Meta.Host, brokerResp.Meta.Port, brokerResp.Err)
+					continue
+				}
+				startResp := brokerResp.Resp.(*kmsg.ListOffsetsResponse)
+				for _, topic := range startResp.Topics {
+					topicStartEnds := startEnds[topic.Topic]
+					if topicStartEnds == nil {
+						topicStartEnds = make(map[int32]startEnd)
+						startEnds[topic.Topic] = topicStartEnds
 					}
-					topicStartEnds[partition.Partition] = startEnd{
-						err:              kerr.ErrorForCode(partition.ErrorCode),
-						startOffset:      partition.Offset,
-						startLeaderEpoch: partition.LeaderEpoch,
+					for _, partition := range topic.Partitions {
+						if startResp.Version == 0 && len(partition.OldStyleOffsets) > 0 {
+							partition.Offset = partition.OldStyleOffsets[0]
+						}
+						topicStartEnds[partition.Partition] = startEnd{
+							err:              kerr.ErrorForCode(partition.ErrorCode),
+							broker:           brokerResp.Meta.NodeID,
+							startOffset:      partition.Offset,
+							startLeaderEpoch: partition.LeaderEpoch,
+						}
 					}
 				}
 			}
 
-			for _, topic := range endResp.Topics {
-				topicStartEnds := startEnds[topic.Topic]
-				var startErr bool
-				if topicStartEnds == nil {
-					topicStartEnds = make(map[int32]startEnd)
-					startEnds[topic.Topic] = topicStartEnds
-					startErr = true
+			for _, brokerResp := range endResps {
+				if brokerResp.Err != nil {
+					fmt.Printf("unable to list end offsets from broker %d (%s:%d): %v\n", brokerResp.Meta.NodeID, brokerResp.Meta.Host, brokerResp.Meta.Port, brokerResp.Err)
+					continue
 				}
-				for _, partition := range topic.Partitions {
-					partStartEnd, ok := topicStartEnds[partition.Partition]
-					if !ok {
+				endResp := brokerResp.Resp.(*kmsg.ListOffsetsResponse)
+				for _, topic := range endResp.Topics {
+					topicStartEnds := startEnds[topic.Topic]
+					var startErr bool
+					if topicStartEnds == nil {
+						topicStartEnds = make(map[int32]startEnd)
+						startEnds[topic.Topic] = topicStartEnds
 						startErr = true
 					}
-					if endResp.Version == 0 && len(partition.OldStyleOffsets) > 0 {
-						partition.Offset = partition.OldStyleOffsets[0]
-					}
-					partStartEnd.endOffset = partition.Offset
-					partStartEnd.endLeaderEpoch = partition.LeaderEpoch
+					for _, partition := range topic.Partitions {
+						partStartEnd, ok := topicStartEnds[partition.Partition]
+						if !ok {
+							startErr = true
+						}
+						if endResp.Version == 0 && len(partition.OldStyleOffsets) > 0 {
+							partition.Offset = partition.OldStyleOffsets[0]
+						}
+						partStartEnd.endOffset = partition.Offset
+						partStartEnd.endLeaderEpoch = partition.LeaderEpoch
+						partStartEnd.broker = brokerResp.Meta.NodeID
 
-					if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
-						partStartEnd.err = err
-					} else if startErr {
-						partStartEnd.err = kerr.UnknownServerError
-					}
+						if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
+							partStartEnd.err = err
+						} else if startErr {
+							partStartEnd.err = kerr.UnknownServerError
+						}
 
-					topicStartEnds[partition.Partition] = partStartEnd
+						topicStartEnds[partition.Partition] = partStartEnd
+					}
 				}
 			}
 
@@ -415,16 +448,17 @@ offset.
 			tw := out.BeginTabWrite()
 			defer tw.Flush()
 
-			fmt.Fprintf(tw, "TOPIC\tPARTITION\tSTART\tEND\tERROR\n")
+			fmt.Fprintf(tw, "BROKER\tTOPIC\tPARTITION\tSTART\tEND\tERROR\n")
 
 			for _, topic := range sorted {
 				for _, part := range topic.parts {
 					if part.err != nil {
-						fmt.Fprintf(tw, "%s\t%d\t\t\t%v\n", topic.topic, part.part, part.err)
+						fmt.Fprintf(tw, "%d\t%s\t%d\t\t\t%v\n", part.broker, topic.topic, part.part, part.err)
 						continue
 					}
 					if withEpochs {
-						fmt.Fprintf(tw, "%s\t%d\t%d/%d\t%d/%d\t\n",
+						fmt.Fprintf(tw, "%d\t%s\t%d\t%d/%d\t%d/%d\t\n",
+							part.broker,
 							topic.topic,
 							part.part,
 							part.startOffset,
@@ -433,7 +467,8 @@ offset.
 							part.endLeaderEpoch,
 						)
 					} else {
-						fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t\n",
+						fmt.Fprintf(tw, "%d\t%s\t%d\t%d\t%d\t\n",
+							part.broker,
 							topic.topic,
 							part.part,
 							part.startOffset,

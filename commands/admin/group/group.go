@@ -4,7 +4,6 @@ package group
 import (
 	"context"
 	"fmt"
-	"sort"
 
 	"github.com/spf13/cobra"
 
@@ -67,7 +66,6 @@ the groups listed. This prints all of the information from a ListGroups request.
 				StatesFilter: statesFilter,
 			})
 
-			sort.Slice(kresps, func(i, j int) bool { return kresps[i].Meta.NodeID < kresps[j].Meta.NodeID })
 			tw := out.BeginTabWrite()
 			defer tw.Flush()
 
@@ -99,22 +97,25 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 		Short: "Delete all listed Kafka groups (Kafka 1.1.0+).",
 		Args:  cobra.MinimumNArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
-			kresp, err := cl.Client().Request(context.Background(), &kmsg.DeleteGroupsRequest{
+			brokerResps := cl.Client().RequestSharded(context.Background(), &kmsg.DeleteGroupsRequest{
 				Groups: args,
 			})
-			out.MaybeDie(err, "unable to delete groups: %v", err)
-			resp := kresp.(*kmsg.DeleteGroupsResponse)
-			if cl.AsJSON() {
-				out.ExitJSON(resp)
-			}
 			tw := out.BeginTabWrite()
 			defer tw.Flush()
-			for _, resp := range resp.Groups {
-				msg := "OK"
-				if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-					msg = err.Error()
+			for _, brokerResp := range brokerResps {
+				kresp, err := brokerResp.Resp, brokerResp.Err
+				if err != nil {
+					fmt.Fprintf(tw, "%d\t%s\t%s\n", brokerResp.Meta.NodeID, "", "unable to issue request to broker %d (%s:%d): %v", brokerResp.Meta.NodeID, brokerResp.Meta.Host, brokerResp.Meta.Port, err)
+					continue
 				}
-				fmt.Fprintf(tw, "%s\t%s\n", resp.Group, msg)
+				resp := kresp.(*kmsg.DeleteGroupsResponse)
+				for _, resp := range resp.Groups {
+					msg := "OK"
+					if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+						msg = err.Error()
+					}
+					fmt.Fprintf(tw, "%d\t%s\t%s\n", brokerResp.Meta.NodeID, resp.Group, msg)
+				}
 			}
 		},
 	}
