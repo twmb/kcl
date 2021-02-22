@@ -157,7 +157,9 @@ This command supports completion for bash, zsh, and powershell.
 }
 
 func apiVersionsCommand(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
+	var keys bool
+
+	cmd := &cobra.Command{
 		Use:   "api-versions",
 		Short: "Print broker API versions for each Kafka request type (Kafka 0.10.0+).",
 		Args:  cobra.ExactArgs(0),
@@ -174,16 +176,28 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 
 			resp := kresp.(*kmsg.ApiVersionsResponse)
 
-			fmt.Fprintf(tw, "NAME\tMAX\n")
+			if keys {
+				fmt.Fprintf(tw, "NAME\tKEY\tMAX\n")
+			} else {
+				fmt.Fprintf(tw, "NAME\tMAX\n")
+			}
 			for _, k := range resp.ApiKeys {
 				kind := kmsg.NameForKey(k.ApiKey)
 				if kind == "" {
 					kind = "Unknown"
 				}
-				fmt.Fprintf(tw, "%s\t%d\n", kind, k.MaxVersion)
+				if keys {
+					fmt.Fprintf(tw, "%s\t%d\t%d\n", kind, k.ApiKey, k.MaxVersion)
+				} else {
+					fmt.Fprintf(tw, "%s\t%d\n", kind, k.MaxVersion)
+				}
 			}
 		},
 	}
+
+	cmd.Flags().BoolVar(&keys, "with-key-nums", false, "include key numbers in the output; useful if the output contains Unknown")
+
+	return cmd
 }
 
 func probeVersionCommand(cl *client.Client) *cobra.Command {
