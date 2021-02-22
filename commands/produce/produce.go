@@ -22,6 +22,7 @@ func Command(cl *client.Client) *cobra.Command {
 		verboseFormat string
 		compression   string
 		escapeChar    string
+		acks          int
 	)
 
 	cmd := &cobra.Command{
@@ -177,6 +178,17 @@ Unfortunately, with exact sizing, the format string is unavoidably noisy.
 			}
 			cl.AddOpt(kgo.BatchCompression(codec))
 
+			switch acks {
+			case -1:
+				cl.AddOpt(kgo.RequiredAcks(kgo.AllISRAcks()))
+			case 0:
+				cl.AddOpt(kgo.RequiredAcks(kgo.NoAck()))
+			case 1:
+				cl.AddOpt(kgo.RequiredAcks(kgo.LeaderAck()))
+			default:
+				out.Die("invalid acks %d not in allowed -1, 0, 1", acks)
+			}
+
 			for {
 				r, err := reader.Next()
 				if err != nil {
@@ -207,6 +219,7 @@ Unfortunately, with exact sizing, the format string is unavoidably noisy.
 	cmd.Flags().IntVar(&maxBuf, "max-delim-buf", bufio.MaxScanTokenSize, "maximum input to buffer before a delimiter is required, if using delimiters")
 	cmd.Flags().StringVarP(&compression, "compression", "z", "snappy", "compression to use for producing batches (none, gzip, snappy, lz4, zstd)")
 	cmd.Flags().StringVarP(&escapeChar, "escape-char", "c", "%", "character to use for beginning a record field escape (accepts any utf8, for both format and verbose-format)")
+	cmd.Flags().IntVar(&acks, "acks", -1, "number of acks required, -1 is all in sync replicas, 1 is leader replica only, 0 is no acks required")
 
 	return cmd
 }
