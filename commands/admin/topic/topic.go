@@ -117,7 +117,13 @@ func topicDeleteCommand(cl *client.Client) *cobra.Command {
 				if err := kerr.ErrorForCode(topicResp.ErrorCode); err != nil {
 					msg = err.Error()
 				}
-				fmt.Fprintf(tw, "%s\t%s\n", topicResp.Topic, msg)
+				topic := ""
+				if topicResp.Topic != nil {
+					topic = *topicResp.Topic
+				} else {
+					topic = fmt.Sprintf("%x", topicResp.TopicID)
+				}
+				fmt.Fprintf(tw, "%s\t%s\n", topic, msg)
 			}
 		},
 	}
