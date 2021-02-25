@@ -50,30 +50,6 @@ func (co *consumeOutput) formatTransactionState(out []byte, r *kgo.Record) []byt
 	return out
 }
 
-// TransactionMetadata.scala
-func strTxnState(state int8) string {
-	switch state {
-	case 0:
-		return "Empty"
-	case 1:
-		return "Ongoing"
-	case 2:
-		return "PrepareCommit"
-	case 3:
-		return "PrepareAbort"
-	case 4:
-		return "CompleteCommit"
-	case 5:
-		return "CompleteAbort"
-	case 6:
-		return "Dead"
-	case 7:
-		return "PrepareEpochFence"
-	default:
-		return "Unknown"
-	}
-}
-
 func (co *consumeOutput) formatTransactionStateV01(dst []byte, r *kgo.Record, version byte) ([]byte, bool) {
 	{
 		var k kmsg.TxnMetadataKey
@@ -106,7 +82,7 @@ func (co *consumeOutput) formatTransactionStateV01(dst []byte, r *kgo.Record, ve
 			fmt.Fprintf(tw, "\tLastProducerEpoch\t%d\n", v.LastProducerEpoch)
 		}
 		fmt.Fprintf(tw, "\tTimeoutMillis\t%d\n", v.TimeoutMillis)
-		fmt.Fprintf(tw, "\tState\t%s\n", strTxnState(v.State))
+		fmt.Fprintf(tw, "\tState\t%s\n", v.State.String())
 
 		sort.Slice(v.Topics, func(i, j int) bool { return v.Topics[i].Topic < v.Topics[j].Topic })
 		var sb strings.Builder
