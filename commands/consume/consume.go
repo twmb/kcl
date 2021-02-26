@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
@@ -37,6 +38,7 @@ type consumption struct {
 	rack       string
 
 	fetchMaxBytes int32
+	fetchMaxWait  time.Duration
 
 	start int64 // if exact range
 	end   int64 // if exact range
@@ -119,6 +121,7 @@ func (c *consumption) run(topics []string) {
 	}
 
 	c.cl.AddOpt(kgo.FetchMaxBytes(c.fetchMaxBytes))
+	c.cl.AddOpt(kgo.FetchMaxWait(c.fetchMaxWait))
 	c.cl.AddOpt(kgo.Rack(c.rack))
 
 	cl := c.cl.Client()
