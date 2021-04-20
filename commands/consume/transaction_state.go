@@ -74,13 +74,7 @@ func (co *consumeOutput) formatTransactionStateV01(dst []byte, r *kgo.Record, ve
 
 		tw := out.BeginTabWriteTo(w)
 		fmt.Fprintf(tw, "\tProducerID\t%d\n", v.ProducerID)
-		if version == 1 {
-			fmt.Fprintf(tw, "\tLastProducerID\t%d\n", v.LastProducerID)
-		}
 		fmt.Fprintf(tw, "\tProducerEpoch\t%d\n", v.ProducerEpoch)
-		if version == 1 {
-			fmt.Fprintf(tw, "\tLastProducerEpoch\t%d\n", v.LastProducerEpoch)
-		}
 		fmt.Fprintf(tw, "\tTimeoutMillis\t%d\n", v.TimeoutMillis)
 		fmt.Fprintf(tw, "\tState\t%s\n", v.State.String())
 

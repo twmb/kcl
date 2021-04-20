@@ -61,7 +61,7 @@ func (q *querier) parseEntity(args []string) {
 	}
 
 	if q.entity == entityTopic && len(args) == 0 {
-		out.Die("missing topic name to alter")
+		out.Die("missing entity name")
 	}
 	if len(args) > 0 {
 		q.resourceName = args[0]
@@ -366,7 +366,7 @@ func describeCommand(cl *client.Client) *cobra.Command {
 		Long: `Describe configurations (Kafka 0.11.0+).
 
 This command prints all key/value config values for a topic, broker, or broker
-logger. Read onlykeys are suffixed with *.
+logger. Read only keys are suffixed with *.
 
 Describing requires specifying the "entity type" being altered. This is either
 "topic" ("t"), "broker" ("b"), or "broker logger" ("bl").
