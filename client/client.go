@@ -121,7 +121,7 @@ func New(root *cobra.Command) *Client {
 	}
 
 	root.PersistentFlags().StringVar(&c.logLevel, "log-level", "none", "log level to use for basic logging (none, error, warn, info, debug)")
-	root.PersistentFlags().StringVar(&c.logFile, "log-file", "", "log to this file rather than STDERR (if log-level is not none; file must not exist)")
+	root.PersistentFlags().StringVar(&c.logFile, "log-file", "STDERR", "log to this file (if log-level is not none; file must not exist; STDERR sets to stderr & STDOUT sets to stdout)")
 	root.PersistentFlags().StringVar(&c.cfgPath, "config-path", c.defaultCfgPath, "path to confile file (lowest priority)")
 	root.PersistentFlags().BoolVar(&c.noCfgFile, "no-config-path", false, "do not load any config file")
 	root.PersistentFlags().StringVar(&c.envPfx, "config-env-prefix", "KCL_", "environment variable prefix for config overrides (middle priority)")
@@ -501,8 +501,13 @@ func (c *Client) parseLogLevel() {
 	case "debug":
 		level = kgo.LogLevelDebug
 	}
-	of := os.Stderr
-	if c.logFile != "" {
+	var of *os.File
+	switch c.logFile {
+	case "STDOUT":
+		of = os.Stdout
+	case "STDERR":
+		of = os.Stderr
+	default:
 		f, err := os.OpenFile(c.logFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0666)
 		out.MaybeDie(err, "unable to open log-file %q: %v", c.logFile, err)
 		of = f
