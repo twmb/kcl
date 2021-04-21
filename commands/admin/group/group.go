@@ -102,10 +102,11 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 			})
 			tw := out.BeginTabWrite()
 			defer tw.Flush()
+			fmt.Fprintf(tw, "BROKER\tGROUP\tERROR\n")
 			for _, brokerResp := range brokerResps {
 				kresp, err := brokerResp.Resp, brokerResp.Err
 				if err != nil {
-					fmt.Fprintf(tw, "%d\t%s\t%s\n", brokerResp.Meta.NodeID, "", "unable to issue request to broker %d (%s:%d): %v", brokerResp.Meta.NodeID, brokerResp.Meta.Host, brokerResp.Meta.Port, err)
+					fmt.Fprintf(tw, "%d\t\tunable to issue request (addr %s:%d): %v\n", brokerResp.Meta.NodeID, brokerResp.Meta.Host, brokerResp.Meta.Port, err)
 					continue
 				}
 				resp := kresp.(*kmsg.DeleteGroupsResponse)
