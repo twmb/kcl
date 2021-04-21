@@ -26,7 +26,23 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd.AddCommand(dumpCommand(cl))
 	cmd.AddCommand(helpCommand(cl))
 	cmd.AddCommand(listCommand(cl))
+	cmd.AddCommand(createCommand(cl))
 
+	return cmd
+}
+
+func createCommand(cl *client.Client) *cobra.Command {
+	var noHelp bool
+	cmd := &cobra.Command{
+		Use:     "create",
+		Aliases: []string{"setup", "wizard"},
+		Short:   "Interactive kcl configuration setup",
+		Args:    cobra.MaximumNArgs(0),
+		Run: func(_ *cobra.Command, _ []string) {
+			client.Wizard(noHelp)
+		},
+	}
+	cmd.Flags().BoolVar(&noHelp, "no-help", false, "disable help text (only prompts will print)")
 	return cmd
 }
 
@@ -47,11 +63,11 @@ func helpCommand(cl *client.Client) *cobra.Command {
   ` + cl.DefaultCfgPath() + `
 
 The config path can be set with --config-path, while --no-config disables
-loading a config file entirely. To show the configuration that kcl is running
-with, use the dump command.
+loading a config file entirely (as well as KCL_NO_CONFIG_FILE being non-empty).
+To show the configuration that kcl is running with, use the dump command.
 
 Three environment variables can be used to override default file path
-semantics: KCL_CONFIG_DIR, KCL_CONFIG_FILE, and KCL_CONFIG_PATH.  The first
+semantics: KCL_CONFIG_DIR, KCL_CONFIG_FILE, and KCL_CONFIG_PATH. The first
 changes the directory searched, the middle changes the file name used, and the
 last overrides the former two (as a shortcut for setting both).
 

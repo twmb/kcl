@@ -32,6 +32,9 @@ to provide it.
 For help about configuration, run:
   kcl myconfig -h
 
+If this is your first time running kcl, you can create a configuration with:
+  kcl myconfig create
+
 Command completion is available at:
   kcl misc gen-autocomplete
 `,

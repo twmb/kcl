@@ -80,6 +80,7 @@ type Client struct {
 	defaultCfgPath string
 	cfgPath        string
 	noCfgFile      bool
+	envNoCfgFile   bool
 	envPfx         string
 	flagOverrides  []string
 	cfg            Cfg
@@ -119,6 +120,8 @@ func New(root *cobra.Command) *Client {
 	if envFile, ok := os.LookupEnv("KCL_CONFIG_PATH"); ok {
 		c.defaultCfgPath = envFile
 	}
+
+	c.envNoCfgFile = os.Getenv("KCL_NO_CONFIG_FILE") != ""
 
 	root.PersistentFlags().StringVar(&c.logLevel, "log-level", "none", "log level to use for basic logging (none, error, warn, info, debug)")
 	root.PersistentFlags().StringVar(&c.logFile, "log-file", "STDERR", "log to this file (if log-level is not none; file must not exist; STDERR sets to stderr & STDOUT sets to stdout)")
@@ -205,7 +208,7 @@ func (c *Client) fillOpts() {
 }
 
 func (c *Client) parseCfgFile() {
-	if !c.noCfgFile {
+	if !(c.noCfgFile || c.envNoCfgFile) {
 		md, err := toml.DecodeFile(c.cfgPath, &c.cfg)
 		if !os.IsNotExist(err) {
 			if err != nil {
@@ -214,6 +217,9 @@ func (c *Client) parseCfgFile() {
 			if len(md.Undecoded()) > 0 {
 				out.Die("unknown keys in toml cfg: %v", md.Undecoded())
 			}
+		} else {
+			Wizard(false)
+			os.Exit(0)
 		}
 	}
 }
