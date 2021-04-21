@@ -3,6 +3,7 @@ package topic
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -78,12 +79,21 @@ replication factor, and key/value configs.
 			resp := kresp.(*kmsg.CreateTopicsResponse)
 			tw := out.BeginTabWrite()
 			defer tw.Flush()
+			if resp.Version >= 7 {
+				fmt.Fprintf(tw, "NAME\tID\tMESSAGE\n")
+			} else {
+				fmt.Fprintf(tw, "NAME\tMESSAGE\n")
+			}
 			for _, topic := range resp.Topics {
 				msg := "OK"
 				if err := kerr.ErrorForCode(topic.ErrorCode); err != nil {
 					msg = err.Error()
 				}
-				fmt.Fprintf(tw, "%s\t%s\n", topic.Topic, msg)
+				if resp.Version >= 7 {
+					fmt.Fprintf(tw, "%s\t%x\t%s\n", topic.Topic, topic.TopicID, msg)
+				} else {
+					fmt.Fprintf(tw, "%s\t%s\n", topic.Topic, msg)
+				}
 			}
 		},
 	}
@@ -97,14 +107,31 @@ replication factor, and key/value configs.
 }
 
 func topicDeleteCommand(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
+	var ids bool
+	cmd := &cobra.Command{
 		Use:   "delete TOPICS...",
 		Short: "Delete all listed topics (Kafka 0.10.1+).",
-		Run: func(_ *cobra.Command, args []string) {
-			resp, err := cl.Client().Request(context.Background(), &kmsg.DeleteTopicsRequest{
+		Run: func(_ *cobra.Command, topics []string) {
+			req := &kmsg.DeleteTopicsRequest{
 				TimeoutMillis: cl.TimeoutMillis(),
-				TopicNames:    args,
-			})
+				TopicNames:    topics,
+			}
+			for _, topic := range topics {
+				t := kmsg.NewDeleteTopicsRequestTopic()
+				if ids {
+					if len(topic) != 32 {
+						out.Die("topic id %s is not a 32 byte hex string")
+					}
+					raw, err := hex.DecodeString(topic)
+					out.MaybeDie(err, "topic id %s is not a hex string")
+					copy(t.TopicID[:], raw)
+				} else {
+					t.Topic = kmsg.StringPtr(topic)
+				}
+				req.Topics = append(req.Topics, t)
+			}
+
+			resp, err := cl.Client().Request(context.Background(), req)
 			out.MaybeDie(err, "unable to delete topics: %v", err)
 			if cl.AsJSON() {
 				out.ExitJSON(resp)
@@ -127,6 +154,8 @@ func topicDeleteCommand(cl *client.Client) *cobra.Command {
 			}
 		},
 	}
+	cmd.Flags().BoolVar(&ids, "ids", false, "whether the input topics should be parsed as topic IDs")
+	return cmd
 }
 
 func topicAddPartitionsCommand(cl *client.Client) *cobra.Command {
