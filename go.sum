@@ -180,8 +180,8 @@ github.com/stretchr/testify v1.4.0/go.mod h1:j7eGeouHqKxXV5pUuKE4zz7dFj8WfuZ+81P
 github.com/stretchr/testify v1.6.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
 github.com/subosito/gotenv v1.2.0/go.mod h1:N0PQaV/YGNqwC0u51sEeR/aUtSLEXKX9iv69rRypqCw=
 github.com/tmc/grpc-websocket-proxy v0.0.0-20190109142713-0ad062ec5ee5/go.mod h1:ncp9v5uamzpCO7NfCPTXjqaC+bZgJeR0sMTm6dMHP7U=
-github.com/twmb/franz-go v0.6.11 h1:3AejL13k5tmmhrG5kBJT7uKsUi3FGQRrPT+1DJhW/eM=
-github.com/twmb/franz-go v0.6.11/go.mod h1:nKialCjcL7TgrQvHmXv39QpbBwQT7eQwj49VLkv4fh4=
+github.com/twmb/franz-go v0.6.12 h1:7UrPvNKq7foMlQdeRe/etkCd0pnRXziyV4Vj+0IRNu8=
+github.com/twmb/franz-go v0.6.12/go.mod h1:nKialCjcL7TgrQvHmXv39QpbBwQT7eQwj49VLkv4fh4=
 github.com/twmb/go-rbtree v1.0.0 h1:KxN7dXJ8XaZ4cvmHV1qqXTshxX3EBvX/toG5+UR49Mg=
 github.com/twmb/go-rbtree v1.0.0/go.mod h1:UlIAI8gu3KRPkXSobZnmJfVwCJgEhD/liWzT5ppzIyc=
 github.com/twmb/go-strftime v0.0.0-20190915101236-e74f7c4fe4fa h1:eq9HJTMjHC3K/GYE7RuvhweBhIxXi9y6BYM6Aox3UbA=
