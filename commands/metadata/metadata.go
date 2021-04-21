@@ -4,6 +4,7 @@ package metadata
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"sort"
@@ -16,12 +17,10 @@ import (
 )
 
 func Command(cl *client.Client) *cobra.Command {
-	req := kmsg.MetadataRequest{
-		IncludeClusterAuthorizedOperations: true,
-		IncludeTopicAuthorizedOperations:   true,
-	}
+	req := kmsg.MetadataRequest{}
 
 	var pcluster, pbrokers, ptopics, pinternal, pall, detailed bool
+	var ids bool
 
 	cmd := &cobra.Command{
 		Use:   "metadata [TOPICS]",
@@ -41,6 +40,9 @@ If the brokers section is printed, the controller broker is marked with *.
 `,
 
 		Run: func(_ *cobra.Command, topics []string) {
+			if len(topics) > 0 {
+				ptopics = true
+			}
 			sections := 0
 			for _, v := range []*bool{&pcluster, &pbrokers, &ptopics} {
 				if pall {
@@ -60,10 +62,18 @@ If the brokers section is printed, the controller broker is marked with *.
 				req.Topics = []kmsg.MetadataRequestTopic{} // nil is all, empty is none
 			} else {
 				for _, topic := range topics {
-					t := topic
-					req.Topics = append(req.Topics, kmsg.MetadataRequestTopic{
-						Topic: &t,
-					})
+					t := kmsg.NewMetadataRequestTopic()
+					if ids {
+						if len(topic) != 32 {
+							out.Die("topic id %s is not a 32 byte hex string")
+						}
+						raw, err := hex.DecodeString(topic)
+						out.MaybeDie(err, "topic id %s is not a hex string")
+						copy(t.TopicID[:], raw)
+					} else {
+						t.Topic = kmsg.StringPtr(topic)
+					}
+					req.Topics = append(req.Topics, t)
 				}
 			}
 
@@ -98,7 +108,7 @@ If the brokers section is printed, the controller broker is marked with *.
 				if includeHeader {
 					fmt.Printf("TOPICS\n======\n")
 				}
-				printTopics(resp.Topics, pinternal, detailed)
+				printTopics(resp.Version, resp.Topics, pinternal, detailed)
 			}
 
 		},
@@ -106,7 +116,8 @@ If the brokers section is printed, the controller broker is marked with *.
 
 	cmd.Flags().BoolVarP(&pcluster, "cluster", "c", false, "print cluster section")
 	cmd.Flags().BoolVarP(&pbrokers, "brokers", "b", false, "print brokers section")
-	cmd.Flags().BoolVarP(&ptopics, "topics", "t", false, "print topics section")
+	cmd.Flags().BoolVarP(&ptopics, "topics", "t", false, "print topics section (this flag is implied if any topics are input)")
+	cmd.Flags().BoolVar(&ids, "ids", false, "whether the input topics should be parsed as topic IDs")
 	cmd.Flags().BoolVarP(&pinternal, "internal", "i", false, "print internal topics if all topics are printed")
 	cmd.Flags().BoolVarP(&detailed, "detailed", "d", false, "include detailed information about all topic partitions")
 	cmd.Flags().BoolVarP(&pall, "all", "a", false, "shortcut for -cbti")
@@ -138,16 +149,22 @@ func printBrokers(controllerID int32, brokers []kmsg.MetadataResponseBroker) {
 	}
 }
 
-func printTopics(topics []kmsg.MetadataResponseTopic, pinternal, detailed bool) {
+func printTopics(version int16, topics []kmsg.MetadataResponseTopic, pinternal, detailed bool) {
 	sort.Slice(topics, func(i, j int) bool {
 		return topics[i].Topic < topics[j].Topic
 	})
+
+	hasID := version >= 10
 
 	if !detailed {
 		tw := out.BeginTabWrite()
 		defer tw.Flush()
 
-		fmt.Fprintf(tw, "NAME\tPARTITIONS\tREPLICAS\n")
+		if hasID {
+			fmt.Fprintf(tw, "NAME\tID\tPARTITIONS\tREPLICAS\n")
+		} else {
+			fmt.Fprintf(tw, "NAME\tPARTITIONS\tREPLICAS\n")
+		}
 		for _, topic := range topics {
 			if !pinternal && topic.IsInternal {
 				continue
@@ -157,8 +174,11 @@ func printTopics(topics []kmsg.MetadataResponseTopic, pinternal, detailed bool) 
 			if parts > 0 {
 				replicas = len(topic.Partitions[0].Replicas)
 			}
-			fmt.Fprintf(tw, "%s\t%d\t%d\n",
-				topic.Topic, parts, replicas)
+			if hasID {
+				fmt.Fprintf(tw, "%s\t%x\t%d\t%d\n", topic.Topic, topic.TopicID, parts, replicas)
+			} else {
+				fmt.Fprintf(tw, "%s\t%d\t%d\n", topic.Topic, parts, replicas)
+			}
 		}
 		tw.Flush()
 		return
@@ -170,6 +190,9 @@ func printTopics(topics []kmsg.MetadataResponseTopic, pinternal, detailed bool) 
 
 	for _, topic := range topics {
 		fmt.Fprintf(buf, "%s", topic.Topic)
+		if hasID {
+			fmt.Fprintf(buf, " [%x]", topic.TopicID)
+		}
 		if topic.IsInternal {
 			fmt.Fprint(buf, " (internal)")
 		}
