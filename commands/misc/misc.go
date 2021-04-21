@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -158,43 +159,90 @@ This command supports completion for bash, zsh, and powershell.
 
 func apiVersionsCommand(cl *client.Client) *cobra.Command {
 	var keys bool
+	var version string
 
 	cmd := &cobra.Command{
 		Use:   "api-versions",
 		Short: "Print broker API versions for each Kafka request type (Kafka 0.10.0+).",
 		Args:  cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
-			kresp, err := cl.Client().Request(context.Background(), apiVersionsRequest())
-			out.MaybeDie(err, "unable to request API versions: %v", err)
+			var v *kversion.Versions
+			version = strings.TrimPrefix(version, "v")
+			switch version {
+			default:
+				kresp, err := cl.Client().Request(context.Background(), apiVersionsRequest())
+				out.MaybeDie(err, "unable to request API versions: %v", err)
 
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
+				if cl.AsJSON() {
+					out.ExitJSON(kresp)
+				}
+
+				resp := kresp.(*kmsg.ApiVersionsResponse)
+				v = kversion.FromApiVersionsResponse(resp)
+
+			case "0.8.0", "0.8.0.0":
+				v = kversion.V0_8_0()
+			case "0.8.1", "0.8.1.0":
+				v = kversion.V0_8_1()
+			case "0.8.2", "0.8.2.0":
+				v = kversion.V0_8_2()
+			case "0.9.0", "0.9.0.0":
+				v = kversion.V0_9_0()
+			case "0.10.0", "0.10.0.0":
+				v = kversion.V0_10_0()
+			case "0.10.1", "0.10.1.0":
+				v = kversion.V0_10_1()
+			case "0.10.2", "0.10.2.0":
+				v = kversion.V0_10_2()
+			case "0.11.0", "0.11.0.0":
+				v = kversion.V0_11_0()
+			case "1.0", "1.0.0":
+				v = kversion.V1_0_0()
+			case "1.1", "1.1.0":
+				v = kversion.V1_1_0()
+			case "2.0", "2.0.0":
+				v = kversion.V2_0_0()
+			case "2.1", "2.1.0":
+				v = kversion.V2_1_0()
+			case "2.2", "2.2.0":
+				v = kversion.V2_2_0()
+			case "2.3", "2.3.0":
+				v = kversion.V2_3_0()
+			case "2.4", "2.4.0":
+				v = kversion.V2_4_0()
+			case "2.5", "2.5.0":
+				v = kversion.V2_5_0()
+			case "2.6", "2.6.0":
+				v = kversion.V2_6_0()
+			case "2.7", "2.7.0":
+				v = kversion.V2_7_0()
+			case "2.8", "2.8.0":
+				v = kversion.V2_8_0()
 			}
 
 			tw := out.BeginTabWrite()
 			defer tw.Flush()
-
-			resp := kresp.(*kmsg.ApiVersionsResponse)
 
 			if keys {
 				fmt.Fprintf(tw, "NAME\tKEY\tMAX\n")
 			} else {
 				fmt.Fprintf(tw, "NAME\tMAX\n")
 			}
-			for _, k := range resp.ApiKeys {
-				kind := kmsg.NameForKey(k.ApiKey)
+			v.EachMaxKeyVersion(func(k, v int16) {
+				kind := kmsg.NameForKey(k)
 				if kind == "" {
 					kind = "Unknown"
 				}
 				if keys {
-					fmt.Fprintf(tw, "%s\t%d\t%d\n", kind, k.ApiKey, k.MaxVersion)
+					fmt.Fprintf(tw, "%s\t%d\t%d\n", kind, k, v)
 				} else {
-					fmt.Fprintf(tw, "%s\t%d\n", kind, k.MaxVersion)
+					fmt.Fprintf(tw, "%s\t%d\n", kind, v)
 				}
-			}
+			})
 		},
 	}
 
+	cmd.Flags().StringVarP(&version, "version", "v", "", "if non-empty, print the api versions for a specific version rather than the broker's version")
 	cmd.Flags().BoolVar(&keys, "with-key-nums", false, "include key numbers in the output; useful if the output contains Unknown")
 
 	return cmd
@@ -298,20 +346,20 @@ offset.
 			tps, err := flagutil.ParseTopicPartitions(topicParts)
 			out.MaybeDie(err, "unable to parse topic partitions: %v", err)
 
+			var metaTopics []kmsg.MetadataRequestTopic
 			for topic, partitions := range tps {
-				var metaTopics []kmsg.MetadataRequestTopic
 				if len(partitions) == 0 {
 					t := topic
 					metaTopics = append(metaTopics, kmsg.MetadataRequestTopic{Topic: &t})
 				}
-				if len(metaTopics) > 0 {
-					kresp, err := cl.Client().Request(context.Background(), &kmsg.MetadataRequest{Topics: metaTopics})
-					out.MaybeDie(err, "unable to get metadata: %v", err)
-					resp := kresp.(*kmsg.MetadataResponse)
-					for _, topic := range resp.Topics {
-						for _, partition := range topic.Partitions {
-							tps[topic.Topic] = append(tps[topic.Topic], partition.Partition)
-						}
+			}
+			if len(metaTopics) > 0 {
+				kresp, err := cl.Client().Request(context.Background(), &kmsg.MetadataRequest{Topics: metaTopics})
+				out.MaybeDie(err, "unable to get metadata: %v", err)
+				resp := kresp.(*kmsg.MetadataResponse)
+				for _, topic := range resp.Topics {
+					for _, partition := range topic.Partitions {
+						tps[topic.Topic] = append(tps[topic.Topic], partition.Partition)
 					}
 				}
 			}
