@@ -24,6 +24,7 @@ import (
 	"github.com/twmb/kcl/commands/admin/logdirs"
 	"github.com/twmb/kcl/commands/admin/partas"
 	"github.com/twmb/kcl/commands/admin/topic"
+	"github.com/twmb/kcl/commands/admin/txn"
 	"github.com/twmb/kcl/commands/admin/userscram"
 	"github.com/twmb/kcl/flagutil"
 	"github.com/twmb/kcl/out"
@@ -49,6 +50,7 @@ func Command(cl *client.Client) *cobra.Command {
 		logdirs.Command(cl),
 		partas.Command(cl),
 		userscram.Command(cl),
+		txn.Command(cl),
 	)
 
 	return cmd
