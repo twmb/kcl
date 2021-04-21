@@ -37,6 +37,8 @@ type consumption struct {
 	escapeChar string
 	rack       string
 
+	readUncommitted bool
+
 	fetchMaxBytes int32
 	fetchMaxWait  time.Duration
 
@@ -116,7 +118,7 @@ func (c *consumption) run(topics []string) {
 
 	if isConsumerOffsets || isTransactionState {
 		c.cl.AddOpt(kgo.KeepControlRecords())
-	} else {
+	} else if !c.readUncommitted {
 		c.cl.AddOpt(kgo.FetchIsolationLevel(kgo.ReadCommitted()))
 	}
 
