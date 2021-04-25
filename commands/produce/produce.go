@@ -23,6 +23,7 @@ func Command(cl *client.Client) *cobra.Command {
 		compression   string
 		escapeChar    string
 		acks          int
+		retries       int
 	)
 
 	cmd := &cobra.Command{
@@ -189,6 +190,11 @@ Unfortunately, with exact sizing, the format string is unavoidably noisy.
 				out.Die("invalid acks %d not in allowed -1, 0, 1", acks)
 			}
 
+			if retries > -1 {
+				cl.AddOpt(kgo.RequestRetries(retries))
+				cl.AddOpt(kgo.ProduceRetries(retries))
+			}
+
 			for {
 				r, err := reader.Next()
 				if err != nil {
@@ -220,6 +226,7 @@ Unfortunately, with exact sizing, the format string is unavoidably noisy.
 	cmd.Flags().StringVarP(&compression, "compression", "z", "snappy", "compression to use for producing batches (none, gzip, snappy, lz4, zstd)")
 	cmd.Flags().StringVarP(&escapeChar, "escape-char", "c", "%", "character to use for beginning a record field escape (accepts any utf8, for both format and verbose-format)")
 	cmd.Flags().IntVar(&acks, "acks", -1, "number of acks required, -1 is all in sync replicas, 1 is leader replica only, 0 is no acks required")
+	cmd.Flags().IntVar(&retries, "retries", -1, "number of times to retry producing if non-negative")
 
 	return cmd
 }
