@@ -127,7 +127,8 @@ func (c *consumption) run(topics []string) {
 	c.cl.AddOpt(kgo.Rack(c.rack))
 
 	cl := c.cl.Client()
-	if len(c.group) > 0 && !(isConsumerOffsets || isTransactionState) {
+	isGroup := len(c.group) > 0 && !(isConsumerOffsets || isTransactionState)
+	if isGroup {
 		cl.AssignGroup(c.group, groupOpts...)
 	} else {
 		cl.AssignPartitions(directOpts...)
@@ -164,10 +165,12 @@ func (c *consumption) run(topics []string) {
 		atomic.StoreUint32(&co.quit, 1)
 		co.cancel()
 		<-co.done
-		cl.BlockingCommitOffsets(context.Background(), cl.UncommittedOffsets(),
-			func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, _ error) {
-				// TODO log to stderr on any partition failure
-			})
+		if isGroup {
+			cl.BlockingCommitOffsets(context.Background(), cl.UncommittedOffsets(),
+				func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, _ error) {
+					// TODO log to stderr on any partition failure
+				})
+		}
 		cl.Close() // leaves group
 	}()
 	select {
