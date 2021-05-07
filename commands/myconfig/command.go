@@ -62,7 +62,7 @@ func helpCommand(cl *client.Client) *cobra.Command {
 
   ` + cl.DefaultCfgPath() + `
 
-The config path can be set with --config-path, while --no-config disables
+The config path can be set with --config-path, while --no-config-file disables
 loading a config file entirely (as well as KCL_NO_CONFIG_FILE being non-empty).
 To show the configuration that kcl is running with, use the dump command.
 
