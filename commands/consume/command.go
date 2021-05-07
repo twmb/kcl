@@ -22,7 +22,7 @@ func (c *consumption) command() *cobra.Command {
 	cmd.Flags().Int32SliceVarP(&c.partitions, "partitions", "p", nil, "comma delimited list of specific partitions to consume")
 	cmd.Flags().StringVarP(&c.offset, "offset", "o", "start", "offset to start consuming from (start, end, 47, start+2, end-3)")
 	cmd.Flags().IntVarP(&c.num, "num", "n", 0, "quit after consuming this number of records; 0 is unbounded")
-	cmd.Flags().IntVarP(&c.numPerPartition, "num-per-partition", "n", 0, "stop printing individual partitions after this many records; 0 is unbounded")
+	cmd.Flags().IntVar(&c.numPerPartition, "num-per-partition", 0, "stop printing individual partitions after this many records; 0 is unbounded")
 	cmd.Flags().StringVarP(&c.format, "format", "f", `%v\n`, "output format")
 	cmd.Flags().BoolVarP(&c.regex, "regex", "r", false, "parse topics as regex; consume any topic that matches any expression")
 	cmd.Flags().StringVarP(&c.escapeChar, "escape-char", "c", "%", "character to use for beginning a record field escape (accepts any utf8)")
