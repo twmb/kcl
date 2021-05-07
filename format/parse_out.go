@@ -15,8 +15,8 @@ import (
 	"github.com/twmb/go-strftime"
 )
 
-func ParseWriteFormat(format string, escape rune) (func([]byte, *kgo.Record) []byte, error) {
-	var argFns []func([]byte, *kgo.Record) []byte
+func ParseWriteFormat(format string, escape rune) (func([]byte, *kgo.Record, *kgo.FetchPartition) []byte, error) {
+	var argFns []func([]byte, *kgo.Record, *kgo.FetchPartition) []byte
 	var pieces [][]byte
 	var piece []byte
 	var escstr = string(escape) // for error messages
@@ -61,7 +61,7 @@ func ParseWriteFormat(format string, escape rune) (func([]byte, *kgo.Record) []b
 			}
 
 			switch next {
-			case 'T', 'K', 'V', 'H', 'p', 'o', 'e', 'i':
+			case 'T', 'K', 'V', 'H', 'p', 'o', 'e', 'i', 'x', 'y', '[', '|', ']':
 				var numfn func([]byte, int64) []byte
 				if handledBrace = openBrace; handledBrace {
 					numfn2, n, err := parseWriteSize(format)
@@ -75,21 +75,39 @@ func ParseWriteFormat(format string, escape rune) (func([]byte, *kgo.Record) []b
 				}
 				switch next {
 				case 'T':
-					argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return numfn(out, int64(len(r.Topic))) })
+					argFns = append(argFns, func(out []byte, r *kgo.Record, _ *kgo.FetchPartition) []byte { return numfn(out, int64(len(r.Topic))) })
 				case 'K':
-					argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return numfn(out, int64(len(r.Key))) })
+					argFns = append(argFns, func(out []byte, r *kgo.Record, _ *kgo.FetchPartition) []byte { return numfn(out, int64(len(r.Key))) })
 				case 'V':
-					argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return numfn(out, int64(len(r.Value))) })
+					argFns = append(argFns, func(out []byte, r *kgo.Record, _ *kgo.FetchPartition) []byte { return numfn(out, int64(len(r.Value))) })
 				case 'H':
-					argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return numfn(out, int64(len(r.Headers))) })
+					argFns = append(argFns, func(out []byte, r *kgo.Record, _ *kgo.FetchPartition) []byte {
+						return numfn(out, int64(len(r.Headers)))
+					})
 				case 'p':
-					argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return numfn(out, int64(r.Partition)) })
+					argFns = append(argFns, func(out []byte, r *kgo.Record, _ *kgo.FetchPartition) []byte { return numfn(out, int64(r.Partition)) })
 				case 'o':
-					argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return numfn(out, r.Offset) })
+					argFns = append(argFns, func(out []byte, r *kgo.Record, _ *kgo.FetchPartition) []byte { return numfn(out, r.Offset) })
 				case 'e':
-					argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return numfn(out, int64(r.LeaderEpoch)) })
+					argFns = append(argFns, func(out []byte, r *kgo.Record, _ *kgo.FetchPartition) []byte { return numfn(out, int64(r.LeaderEpoch)) })
 				case 'i':
-					argFns = append(argFns, func(out []byte, _ *kgo.Record) []byte { return numfn(out, atomic.AddInt64(&calls, 1)) })
+					argFns = append(argFns, func(out []byte, _ *kgo.Record, _ *kgo.FetchPartition) []byte {
+						return numfn(out, atomic.AddInt64(&calls, 1))
+					})
+
+				case 'x':
+					argFns = append(argFns, func(out []byte, r *kgo.Record, _ *kgo.FetchPartition) []byte { return numfn(out, r.ProducerID) })
+				case 'y':
+					argFns = append(argFns, func(out []byte, r *kgo.Record, _ *kgo.FetchPartition) []byte {
+						return numfn(out, int64(r.ProducerEpoch))
+					})
+				case '[':
+					argFns = append(argFns, func(out []byte, _ *kgo.Record, p *kgo.FetchPartition) []byte { return numfn(out, p.LogStartOffset) })
+				case '|':
+					argFns = append(argFns, func(out []byte, _ *kgo.Record, p *kgo.FetchPartition) []byte { return numfn(out, p.LastStableOffset) })
+				case ']':
+					argFns = append(argFns, func(out []byte, _ *kgo.Record, p *kgo.FetchPartition) []byte { return numfn(out, p.HighWatermark) })
+
 				}
 
 			case 't', 'k', 'v':
@@ -110,11 +128,11 @@ func ParseWriteFormat(format string, escape rune) (func([]byte, *kgo.Record) []b
 				}
 				switch next {
 				case 't':
-					argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return appendFn(out, []byte(r.Topic)) })
+					argFns = append(argFns, func(out []byte, r *kgo.Record, _ *kgo.FetchPartition) []byte { return appendFn(out, []byte(r.Topic)) })
 				case 'k':
-					argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return appendFn(out, []byte(r.Key)) })
+					argFns = append(argFns, func(out []byte, r *kgo.Record, _ *kgo.FetchPartition) []byte { return appendFn(out, []byte(r.Key)) })
 				case 'v':
-					argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return appendFn(out, []byte(r.Value)) })
+					argFns = append(argFns, func(out []byte, r *kgo.Record, _ *kgo.FetchPartition) []byte { return appendFn(out, []byte(r.Value)) })
 
 				}
 
@@ -146,11 +164,11 @@ func ParseWriteFormat(format string, escape rune) (func([]byte, *kgo.Record) []b
 				// Unlike parsing in, we do not care if the
 				// specification uses more just %k and %v.
 				reuse := new(kgo.Record)
-				argFns = append(argFns, func(out []byte, r *kgo.Record) []byte {
+				argFns = append(argFns, func(out []byte, r *kgo.Record, _ *kgo.FetchPartition) []byte {
 					for _, header := range r.Headers {
 						reuse.Key = []byte(header.Key)
 						reuse.Value = header.Value
-						out = innerfn(out, reuse)
+						out = innerfn(out, reuse, nil)
 					}
 					return out
 				})
@@ -167,7 +185,9 @@ func ParseWriteFormat(format string, escape rune) (func([]byte, *kgo.Record) []b
 							return nil, fmt.Errorf("%sd{strftime missing closing }", escstr)
 						}
 						format = rem[1:]
-						argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return strftime.AppendFormat(out, tfmt, r.Timestamp) })
+						argFns = append(argFns, func(out []byte, r *kgo.Record, _ *kgo.FetchPartition) []byte {
+							return strftime.AppendFormat(out, tfmt, r.Timestamp)
+						})
 
 					case strings.HasPrefix(format, "go"):
 						tfmt, rem, err := nomOpenClose(format[len("go"):])
@@ -178,7 +198,9 @@ func ParseWriteFormat(format string, escape rune) (func([]byte, *kgo.Record) []b
 							return nil, fmt.Errorf("%sd{go missing closing }", escstr)
 						}
 						format = rem[1:]
-						argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return r.Timestamp.AppendFormat(out, tfmt) })
+						argFns = append(argFns, func(out []byte, r *kgo.Record, _ *kgo.FetchPartition) []byte {
+							return r.Timestamp.AppendFormat(out, tfmt)
+						})
 
 					default:
 						numfn, n, err := parseWriteSize(format)
@@ -186,10 +208,14 @@ func ParseWriteFormat(format string, escape rune) (func([]byte, *kgo.Record) []b
 							return nil, fmt.Errorf("unknown %sd{ time specification", escstr)
 						}
 						format = format[n:]
-						argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return numfn(out, int64(r.Timestamp.UnixNano())) })
+						argFns = append(argFns, func(out []byte, r *kgo.Record, _ *kgo.FetchPartition) []byte {
+							return numfn(out, int64(r.Timestamp.UnixNano()))
+						})
 					}
 				} else {
-					argFns = append(argFns, func(out []byte, r *kgo.Record) []byte { return strconv.AppendInt(out, r.Timestamp.UnixNano(), 10) })
+					argFns = append(argFns, func(out []byte, r *kgo.Record, _ *kgo.FetchPartition) []byte {
+						return strconv.AppendInt(out, r.Timestamp.UnixNano(), 10)
+					})
 				}
 
 			default:
@@ -204,13 +230,13 @@ func ParseWriteFormat(format string, escape rune) (func([]byte, *kgo.Record) []b
 
 	if len(piece) > 0 {
 		pieces = append(pieces, piece)
-		argFns = append(argFns, func(out []byte, _ *kgo.Record) []byte { return out })
+		argFns = append(argFns, func(out []byte, _ *kgo.Record, _ *kgo.FetchPartition) []byte { return out })
 	}
 
-	return func(out []byte, r *kgo.Record) []byte {
+	return func(out []byte, r *kgo.Record, p *kgo.FetchPartition) []byte {
 		for i, piece := range pieces {
 			out = append(out, piece...)
-			out = argFns[i](out, r)
+			out = argFns[i](out, r, p)
 		}
 		return out
 	}, nil

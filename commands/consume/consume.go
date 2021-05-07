@@ -150,8 +150,8 @@ func (c *consumption) run(topics []string) {
 		fn, err := format.ParseWriteFormat(c.format, escape)
 		out.MaybeDie(err, "%v", err)
 		var out []byte
-		co.format = func(r *kgo.Record) {
-			out = fn(out[:0], r)
+		co.format = func(r *kgo.Record, p *kgo.FetchPartition) {
+			out = fn(out[:0], r, p)
 			os.Stdout.Write(out)
 		}
 	}
@@ -226,7 +226,7 @@ type consumeOutput struct {
 	quit   uint32
 	done   chan struct{}
 
-	format func(*kgo.Record)
+	format func(*kgo.Record, *kgo.FetchPartition)
 }
 
 func (co *consumeOutput) consume() {
@@ -234,21 +234,21 @@ func (co *consumeOutput) consume() {
 	for atomic.LoadUint32(&co.quit) == 0 {
 		fetches := co.cl.PollFetches(co.ctx)
 		// TODO Errors(), print to stderr
-		iter := fetches.RecordIter()
-		for !iter.Done() {
-			record := iter.Next()
-			// This record offset could be before the requested start
-			// following an out of range reset.
-			if co.start > 0 && record.Offset < co.start ||
-				co.end > 0 && record.Offset >= co.end {
-				continue
-			}
-			co.num++
-			co.format(record)
+		fetches.EachPartition(func(p kgo.FetchTopicPartition) {
+			p.EachRecord(func(r *kgo.Record) {
+				// This record offset could be before the requested start
+				// following an out of range reset.
+				if co.start > 0 && r.Offset < co.start ||
+					co.end > 0 && r.Offset >= co.end {
+					return
+				}
+				co.num++
+				co.format(r, &p.Partition)
 
-			if co.num == co.max {
-				os.Exit(0)
-			}
-		}
+				if co.num == co.max {
+					os.Exit(0)
+				}
+			})
+		})
 	}
 }

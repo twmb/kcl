@@ -19,7 +19,7 @@ import (
 // from object TransactionLog
 func (co *consumeOutput) buildTransactionStateFormatFn() {
 	var out []byte
-	co.format = func(r *kgo.Record) {
+	co.format = func(r *kgo.Record, _ *kgo.FetchPartition) {
 		out = out[:0]
 		out = co.formatTransactionState(out, r)
 		os.Stdout.Write(out)

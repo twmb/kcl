@@ -38,7 +38,7 @@ func appendInternalTopicRecordStart(out []byte, r *kgo.Record) ([]byte, bool) {
 
 func (co *consumeOutput) buildConsumerOffsetsFormatFn() {
 	var out []byte
-	co.format = func(r *kgo.Record) {
+	co.format = func(r *kgo.Record, _ *kgo.FetchPartition) {
 		out = out[:0]
 		out = co.formatConsumerOffsets(out, r)
 		os.Stdout.Write(out)

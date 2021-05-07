@@ -53,6 +53,13 @@ Format options:
   %o    record offset
   %e    record leader epoch
   %d    record timestamp (date)
+
+  %x    record producer id
+  %y    record producer epoch
+  %[    partition log start offset
+  %|    partition last stable offset
+  %]    partition high watermark
+
   %i    format iteration number (starts at 1)
   %%    percent sign
   %{    left brace
