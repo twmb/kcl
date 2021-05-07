@@ -257,7 +257,7 @@ func (co *consumeOutput) consume() {
 				if co.numPerPartition > 0 {
 					tp := topicPartition{p.Topic, p.Partition.Partition}
 					seen := perPartitionSeen[tp]
-					if seen > co.numPerPartition {
+					if seen >= co.numPerPartition {
 						return
 					}
 					seen++
