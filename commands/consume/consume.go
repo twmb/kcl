@@ -26,16 +26,17 @@ import (
 type consumption struct {
 	cl *client.Client
 
-	group      string
-	groupAlg   string
-	instanceID string
-	regex      bool
-	partitions []int32
-	offset     string
-	num        int
-	format     string
-	escapeChar string
-	rack       string
+	group           string
+	groupAlg        string
+	instanceID      string
+	regex           bool
+	partitions      []int32
+	offset          string
+	num             int
+	numPerPartition int
+	format          string
+	escapeChar      string
+	rack            string
 
 	readUncommitted bool
 
@@ -134,12 +135,13 @@ func (c *consumption) run(topics []string) {
 		cl.AssignPartitions(directOpts...)
 	}
 	co := &consumeOutput{
-		cl:    cl,
-		max:   c.num,
-		start: c.start,
-		end:   c.end,
-		group: c.group,
-		done:  make(chan struct{}),
+		cl:              cl,
+		numPerPartition: c.numPerPartition,
+		max:             c.num,
+		start:           c.start,
+		end:             c.end,
+		group:           c.group,
+		done:            make(chan struct{}),
 	}
 	co.ctx, co.cancel = context.WithCancel(context.Background())
 	if isConsumerOffsets {
@@ -213,6 +215,8 @@ func (c *consumption) parseOffset() kgo.Offset {
 type consumeOutput struct {
 	cl *kgo.Client
 
+	numPerPartition int
+
 	num int
 	max int
 
@@ -231,6 +235,13 @@ type consumeOutput struct {
 
 func (co *consumeOutput) consume() {
 	defer close(co.done)
+
+	type topicPartition struct {
+		topic     string
+		partition int32
+	}
+	perPartitionSeen := make(map[topicPartition]int)
+
 	for atomic.LoadUint32(&co.quit) == 0 {
 		fetches := co.cl.PollFetches(co.ctx)
 		// TODO Errors(), print to stderr
@@ -242,6 +253,17 @@ func (co *consumeOutput) consume() {
 					co.end > 0 && r.Offset >= co.end {
 					return
 				}
+
+				if co.numPerPartition > 0 {
+					tp := topicPartition{p.Topic, p.Partition.Partition}
+					seen := perPartitionSeen[tp]
+					if seen > co.numPerPartition {
+						return
+					}
+					seen++
+					perPartitionSeen[tp] = seen
+				}
+
 				co.num++
 				co.format(r, &p.Partition)
 
