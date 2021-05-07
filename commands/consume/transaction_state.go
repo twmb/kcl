@@ -35,8 +35,8 @@ func (co *consumeOutput) formatTransactionState(out []byte, r *kgo.Record) []byt
 
 	var keep bool
 	switch v := r.Key[1]; v {
-	case 0, 1:
-		out, keep = co.formatTransactionStateV01(out, r, v)
+	case 0:
+		out, keep = co.formatTransactionStateV0(out, r)
 	default:
 		out = append(out, "(unknown transaction state key format version "...)
 		out = append(out, r.Key[1])
@@ -50,7 +50,7 @@ func (co *consumeOutput) formatTransactionState(out []byte, r *kgo.Record) []byt
 	return out
 }
 
-func (co *consumeOutput) formatTransactionStateV01(dst []byte, r *kgo.Record, version byte) ([]byte, bool) {
+func (co *consumeOutput) formatTransactionStateV0(dst []byte, r *kgo.Record) ([]byte, bool) {
 	{
 		var k kmsg.TxnMetadataKey
 		if err := k.ReadFrom(r.Key); err != nil {

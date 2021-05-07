@@ -151,7 +151,7 @@ Unfortunately, with exact sizing, the format string is unavoidably noisy.
 				out.Die("cannot produce to a specific topic; the parse format specifies that it parses a topic")
 			}
 
-			var verboseFn func([]byte, *kgo.Record) []byte
+			var verboseFn func([]byte, *kgo.Record, *kgo.FetchPartition) []byte
 			var verboseBuf []byte
 			if verboseFormat != "" {
 				verboseFn, err = format.ParseWriteFormat(verboseFormat, escape)
@@ -196,6 +196,7 @@ Unfortunately, with exact sizing, the format string is unavoidably noisy.
 				cl.AddOpt(kgo.ProduceRetries(retries))
 			}
 
+			p := &kgo.FetchPartition{}
 			for {
 				r, err := reader.Next()
 				if err != nil {
@@ -207,14 +208,13 @@ Unfortunately, with exact sizing, the format string is unavoidably noisy.
 				if !reader.ParsesTopic() {
 					r.Topic = args[0]
 				}
-				err = cl.Client().Produce(context.Background(), r, func(r *kgo.Record, err error) {
+				cl.Client().Produce(context.Background(), r, func(r *kgo.Record, err error) {
 					out.MaybeDie(err, "unable to produce record: %v", err)
 					if verboseFn != nil {
-						verboseBuf = verboseFn(verboseBuf[:0], r)
+						verboseBuf = verboseFn(verboseBuf[:0], r, p)
 						os.Stdout.Write(verboseBuf)
 					}
 				})
-				out.MaybeDie(err, "unable to produce record: %v", err)
 			}
 
 			cl.Client().Flush(context.Background())

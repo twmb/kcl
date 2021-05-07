@@ -199,7 +199,7 @@ func transact(
 	quitCtx context.Context,
 	cl *kgo.Client,
 	txnSess *kgo.GroupTransactSession,
-	w func([]byte, *kgo.Record) []byte,
+	w func([]byte, *kgo.Record, *kgo.FetchPartition) []byte,
 	r *format.Reader,
 	destTopic string,
 	verbose bool,
@@ -228,7 +228,7 @@ func transact(
 				for _, partition := range topic.Partitions {
 					out.MaybeDie(partition.Err, "fetch partition error: %v", partition.Err)
 					for _, record := range partition.Records {
-						buf = w(buf, record)
+						buf = w(buf, record, &partition)
 					}
 				}
 			}

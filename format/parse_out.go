@@ -208,13 +208,14 @@ func ParseWriteFormat(format string, escape rune) (func([]byte, *kgo.Record, *kg
 							return nil, fmt.Errorf("unknown %sd{ time specification", escstr)
 						}
 						format = format[n:]
+
 						argFns = append(argFns, func(out []byte, r *kgo.Record, _ *kgo.FetchPartition) []byte {
-							return numfn(out, int64(r.Timestamp.UnixNano()))
+							return numfn(out, int64(r.Timestamp.UnixNano())/1e6)
 						})
 					}
 				} else {
 					argFns = append(argFns, func(out []byte, r *kgo.Record, _ *kgo.FetchPartition) []byte {
-						return strconv.AppendInt(out, r.Timestamp.UnixNano(), 10)
+						return strconv.AppendInt(out, r.Timestamp.UnixNano()/1e6, 10)
 					})
 				}
 
