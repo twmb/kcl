@@ -1,5 +1,31 @@
-TBD
+v0.3.0
 ===
+
+The most notable changes are as follows:
+
+- [`a20ea56`](https://github.com/twmb/franz-go/commit/a20ea56) **feature** admin txn: add unstick-lso
+- [`9c461af`](https://github.com/twmb/franz-go/commit/9c461af) **feature** add support for `AWS_MSK_IAM` in config
+- [`da57aa0`](https://github.com/twmb/franz-go/commit/da57aa0) **bugfix** fixup no-config{,-path} to no-config-file
+- [`be842c4`](https://github.com/twmb/franz-go/commit/be842c4) **feature** consumer: allow printing producer ID, producer epoch, high watermark, low watermark
+- [`930a290`](https://github.com/twmb/franz-go/commit/930a290) **feature** myconfig: add interactive config creation under "create"
+- [`ea1857a`](https://github.com/twmb/franz-go/commit/ea1857a) **feature** consuming: support reading uncommitted
+
+The bulk of goodness in this release comes from the updated franz-go dep, going
+from v0.6.6 to v0.7.3. See the
+[CHANGELOG](https://github.com/twmb/franz-go/blob/master/CHANGELOG.md) in that
+repo for more details.
+
+This release includes support for topic IDs from Kafka 2.8.0, but currently,
+Kafka does not actually support topic IDs in MetadataRequest (see
+[KAFKA-12701](https://issues.apache.org/jira/browse/KAFKA-12701) for more
+details).
+
+One major feature of this release is a new command, `kcl admin txn unhang-lso`,
+that supports for un-sticking a stuck `LastStableOffset`. This may occur from
+buggy clients or in some odd edge case scenarios.
+
+Some minor features are left out of the list above, as well as some other minor
+changes.
 
 v0.2.2
 ===
