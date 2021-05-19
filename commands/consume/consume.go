@@ -16,7 +16,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/twmb/franz-go/pkg/kgo"
-	"github.com/twmb/franz-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/format"
@@ -167,12 +166,6 @@ func (c *consumption) run(topics []string) {
 		atomic.StoreUint32(&co.quit, 1)
 		co.cancel()
 		<-co.done
-		if isGroup {
-			cl.BlockingCommitOffsets(context.Background(), cl.UncommittedOffsets(),
-				func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, _ error) {
-					// TODO log to stderr on any partition failure
-				})
-		}
 		cl.Close() // leaves group
 	}()
 	select {
