@@ -229,7 +229,7 @@ func unstick(cl *kgo.Client, topic string) {
 	}
 
 	{
-		fmt.Printf("\nFoudn topic %s stuck with transactional id %s.\nAt this point we can attempt to unhang the transaction.\nIssue AddPartitionsToTxn followed by EndTxn? [Y/n] ", topic, txnid)
+		fmt.Printf("\nFound topic %s stuck with transactional id %s.\nAt this point we can attempt to unhang the transaction.\nIssue AddPartitionsToTxn followed by EndTxn? [Y/n] ", topic, txnid)
 		var s string
 		fmt.Scanln(&s)
 		switch strings.ToLower(s) {
