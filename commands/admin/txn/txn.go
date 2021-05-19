@@ -21,6 +21,7 @@ func Command(cl *client.Client) *cobra.Command {
 		Short: "Commands related to transaction information.",
 	}
 	cmd.AddCommand(describeProducers(cl))
+	cmd.AddCommand(unstickLSO(cl))
 	return cmd
 }
 
@@ -28,7 +29,7 @@ func describeProducers(cl *client.Client) *cobra.Command {
 	var topicParts []string
 
 	cmd := &cobra.Command{
-		Use:     "describe-producers ",
+		Use:     "describe-producers",
 		Aliases: []string{"dp"},
 		Short:   "Describe producers quotas.",
 		Long: `Describe idempotent and transactional producers (Kafka 2.8.0+)
