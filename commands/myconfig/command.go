@@ -131,23 +131,27 @@ The [tls] section
      seen here: https://golang.org/pkg/crypto/tls/#pkg-constants.
 
   curve_preferences="x25519"
-     Comma delimited curve preferences to use for negotiating, overriding
-     the golang default. Underscores and dots can be anywhere, and the
-     names can be upper or lowercase.
-     The names are taken from Go's crypto/tls CurveID constants, which
-     can be seen here: https://golang.org/pkg/crypto/tls/#CurveID
+     Comma delimited curve preferences to use for negotiating, overriding the
+     golang default. Underscores and dots can be anywhere, and the names can be
+     upper or lowercase.
+     The names are taken from Go's crypto/tls CurveID constants, which can be
+     seen here: https://golang.org/pkg/crypto/tls/#CurveID
 
 The [sasl] section
 
   method="scram_sha_256"
-     SASL method to use. Must be paired with sasl_user and sasl_pass.
-     Possible values are "plain", "scram-sha-256", or "scram-sha-512".
-     Dashes and underscores are stripped.
+     SASL method to use. Must be paired with sasl_user and sasl_pass. Possible
+     values are "plain", "scram-sha-256", "scram-sha-512", or "aws_msk_iam".
+     Dashes and underscores are stripped, and what remains is lowercased.
 
   zid="zid"
   user="user"
   pass="pass"
      SASL authzid (always optional), user, and pass.
+
+  access_key="AKIAIOSFODNN7EXAMPLE"
+  secret_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+     AWS access and secret key, if using "aws_msk_iam" sasl.
 
   is_token=false
      Specifies that the sasl user and pass came from a delegation token.

@@ -205,7 +205,8 @@ func parseSASL(cfg *Cfg, s *scanner, noHelp bool) {
 	switch method := s.line("method (plain, scram-sha-256, scram-sha-512)?"); Strnorm(method) {
 	case "plain",
 		"scramsha256",
-		"scramsha512":
+		"scramsha512",
+		"awsmskiam":
 		cfg.SASL.Method = method
 	default:
 		exit("unrecognized sasl method %q, exiting", method)

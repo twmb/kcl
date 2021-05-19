@@ -24,6 +24,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/twmb/franz-go/pkg/kversion"
+	"github.com/twmb/franz-go/pkg/sasl/aws"
 	"github.com/twmb/franz-go/pkg/sasl/plain"
 	"github.com/twmb/franz-go/pkg/sasl/scram"
 
@@ -52,6 +53,9 @@ type CfgSASL struct {
 	User    string `toml:"user,omitempty"`
 	Pass    string `toml:"pass,omitempty"`
 	IsToken bool   `toml:"is_token,omitempty"`
+
+	AccessKey string `toml:"access_key,omitempty"`
+	SecretKey string `toml:"secret_key,omitempty"`
 }
 
 // cfg contains kcl options that can be defined in a file.
@@ -377,23 +381,24 @@ func (c *Client) maybeAddSASL() error {
 			}, nil
 		})))
 	case "scramsha256":
-		c.AddOpt(kgo.SASL(scram.Sha256(func(context.Context) (scram.Auth, error) {
-			return scram.Auth{
-				Zid:     c.cfg.SASL.Zid,
-				User:    c.cfg.SASL.User,
-				Pass:    c.cfg.SASL.Pass,
-				IsToken: c.cfg.SASL.IsToken,
-			}, nil
-		})))
+		c.AddOpt(kgo.SASL(scram.Auth{
+			Zid:     c.cfg.SASL.Zid,
+			User:    c.cfg.SASL.User,
+			Pass:    c.cfg.SASL.Pass,
+			IsToken: c.cfg.SASL.IsToken,
+		}.AsSha256Mechanism()))
 	case "scramsha512":
-		c.AddOpt(kgo.SASL(scram.Sha512(func(context.Context) (scram.Auth, error) {
-			return scram.Auth{
-				Zid:     c.cfg.SASL.Zid,
-				User:    c.cfg.SASL.User,
-				Pass:    c.cfg.SASL.Pass,
-				IsToken: c.cfg.SASL.IsToken,
-			}, nil
-		})))
+		c.AddOpt(kgo.SASL(scram.Auth{
+			Zid:     c.cfg.SASL.Zid,
+			User:    c.cfg.SASL.User,
+			Pass:    c.cfg.SASL.Pass,
+			IsToken: c.cfg.SASL.IsToken,
+		}.AsSha512Mechanism()))
+	case "awsmskiam":
+		c.AddOpt(kgo.SASL(aws.Auth{
+			AccessKey: c.cfg.SASL.AccessKey,
+			SecretKey: c.cfg.SASL.SecretKey,
+		}.AsManagedStreamingIAMMechanism()))
 	default:
 		return fmt.Errorf("unrecognized / unhandled sasl method %q", c.cfg.SASL.Method)
 	}
