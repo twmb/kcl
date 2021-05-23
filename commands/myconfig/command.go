@@ -149,9 +149,8 @@ The [sasl] section
   pass="pass"
      SASL authzid (always optional), user, and pass.
 
-  access_key="AKIAIOSFODNN7EXAMPLE"
-  secret_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-     AWS access and secret key, if using "aws_msk_iam" sasl.
+     Note that these options are not relevant for AWS_MSK_IAM authentication,
+     as that auth flow uses ~/.aws/credentials or environment variables.
 
   is_token=false
      Specifies that the sasl user and pass came from a delegation token.

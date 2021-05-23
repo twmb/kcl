@@ -21,6 +21,8 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
 
+	"github.com/aws/aws-sdk-go/aws/session"
+
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/twmb/franz-go/pkg/kversion"
@@ -53,9 +55,6 @@ type CfgSASL struct {
 	User    string `toml:"user,omitempty"`
 	Pass    string `toml:"pass,omitempty"`
 	IsToken bool   `toml:"is_token,omitempty"`
-
-	AccessKey string `toml:"access_key,omitempty"`
-	SecretKey string `toml:"secret_key,omitempty"`
 }
 
 // cfg contains kcl options that can be defined in a file.
@@ -395,10 +394,21 @@ func (c *Client) maybeAddSASL() error {
 			IsToken: c.cfg.SASL.IsToken,
 		}.AsSha512Mechanism()))
 	case "awsmskiam":
-		c.AddOpt(kgo.SASL(aws.Auth{
-			AccessKey: c.cfg.SASL.AccessKey,
-			SecretKey: c.cfg.SASL.SecretKey,
-		}.AsManagedStreamingIAMMechanism()))
+		sess, err := session.NewSession()
+		out.MaybeDie(err, "unable to create aws session: %v", err)
+
+		c.AddOpt(kgo.SASL(aws.ManagedStreamingIAM(func(ctx context.Context) (aws.Auth, error) {
+			creds, err := sess.Config.Credentials.GetWithContext(ctx)
+			if err != nil {
+				return aws.Auth{}, err
+			}
+			return aws.Auth{
+				AccessKey:    creds.AccessKeyID,
+				SecretKey:    creds.SecretAccessKey,
+				SessionToken: creds.SessionToken,
+			}, nil
+		})))
+
 	default:
 		return fmt.Errorf("unrecognized / unhandled sasl method %q", c.cfg.SASL.Method)
 	}

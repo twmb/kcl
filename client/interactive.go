@@ -202,28 +202,38 @@ func parseSASL(cfg *Cfg, s *scanner, noHelp bool) {
     Which SASL method is required, and what is the user/pass?
 
 `)
+	var isscram, isaws bool
 	switch method := s.line("method (plain, scram-sha-256, scram-sha-512)?"); Strnorm(method) {
-	case "plain",
-		"scramsha256",
-		"scramsha512",
-		"awsmskiam":
+	case "awsmskiam":
+		isaws = true
+		cfg.SASL.Method = method
+
+	case "scramsha256",
+		"scramsha512":
+		isscram = true
+		cfg.SASL.Method = method
+	case "plain":
 		cfg.SASL.Method = method
 	default:
 		exit("unrecognized sasl method %q, exiting", method)
 	}
 
-	cfg.SASL.User = s.line("user?")
-	cfg.SASL.Pass = s.line("pass?")
+	if !isaws {
+		cfg.SASL.User = s.line("user?")
+		cfg.SASL.Pass = s.line("pass?")
+	}
 
-	p(noHelp, `
+	if isscram {
+		p(noHelp, `
     Is this SASL from a delegation token?
 
 `)
 
-	l := strings.ToLower(s.line("is token?"))
-	switch {
-	case strings.HasPrefix("yes", l):
-		cfg.SASL.IsToken = true
+		l := strings.ToLower(s.line("is token?"))
+		switch {
+		case strings.HasPrefix("yes", l):
+			cfg.SASL.IsToken = true
+		}
 	}
 }
 
