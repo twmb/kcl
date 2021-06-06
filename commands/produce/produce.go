@@ -192,7 +192,6 @@ Unfortunately, with exact sizing, the format string is unavoidably noisy.
 			}
 
 			if retries > -1 {
-				cl.AddOpt(kgo.RequestRetries(retries))
 				cl.AddOpt(kgo.ProduceRetries(retries))
 			}
 
