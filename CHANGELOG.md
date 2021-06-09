@@ -1,3 +1,15 @@
+v0.4.0
+===
+
+- [`1618283`](https://github.com/twmb/kcl/commit/1618283) duplicate topic / group into top level
+- [`784adc1`](https://github.com/twmb/kcl/commit/784adc1) update deps & fix api breakage from franz-go 0.8.0
+- [`78d50a5`](https://github.com/twmb/kcl/commit/78d50a5) change how `AWS_MSK_IAM` is supported
+
+This is a small release that is notable for (a) raising topic & group into top
+level commands, and (b) updating the franz-go dep to what is hopefully its
+final API before stabilization.
+
+
 v0.3.0
 ===
 
