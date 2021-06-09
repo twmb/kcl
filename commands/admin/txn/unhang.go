@@ -14,7 +14,7 @@ import (
 	"github.com/twmb/kcl/out"
 )
 
-func unstickLSO(cl *client.Client) *cobra.Command {
+func unstickLSO(kcl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:     "unstick-lso",
 		Aliases: []string{"unhang-lso"},
@@ -39,12 +39,13 @@ anyway).
 		Args:    cobra.ExactArgs(1),
 
 		Run: func(_ *cobra.Command, topics []string) {
-			unstick(cl.Client(), topics[0])
+			unstick(kcl, topics[0])
 		},
 	}
 }
 
-func unstick(cl *kgo.Client, topic string) {
+func unstick(kcl *client.Client, topic string) {
+	cl := kcl.Client()
 	defer cl.Close()
 
 	var nparts int
@@ -140,7 +141,7 @@ func unstick(cl *kgo.Client, topic string) {
 	{
 		// First find the stuck LSO.
 		fmt.Printf("Looking for the last stable offset on a partition in %s...\n", topic)
-		cl.AssignPartitions(kgo.ConsumeTopics(kgo.NewOffset().AtStart(), topic))
+		cl = kcl.RemakeWithOpts(kgo.ConsumeTopics(topic))
 		var found bool
 		for !found && len(possibleParts) > 0 {
 			fetches := cl.PollFetches(context.Background())
@@ -171,7 +172,7 @@ func unstick(cl *kgo.Client, topic string) {
 		// Now we directly consume at that offset to find which
 		// producer ID and epoch caused this.
 		fmt.Printf("Found partition %d stuck at offset %d, looking for producer that caused this...\n", stuckPartition, stuckOffset)
-		cl.AssignPartitions(kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
+		cl = kcl.RemakeWithOpts(kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
 			topic: map[int32]kgo.Offset{
 				stuckPartition: kgo.NewOffset().At(stuckOffset),
 			},
@@ -198,7 +199,7 @@ func unstick(cl *kgo.Client, topic string) {
 	var txnid string
 	{
 		fmt.Printf("Found causing producer ID and epoch %d/%d, looking in __transaction_state to find its transactional id...\n", pid, epoch)
-		cl.AssignPartitions(kgo.ConsumeTopics(kgo.NewOffset().AtStart(), "__transaction_state"))
+		cl = kcl.RemakeWithOpts(kgo.ConsumeTopics("__transaction_state"))
 		var found bool
 		for !found {
 			fetches := cl.PollFetches(context.Background())
@@ -225,7 +226,7 @@ func unstick(cl *kgo.Client, topic string) {
 				txnid = k.TransactionalID
 			})
 		}
-		cl.AssignPartitions() // stop consuming, drop buffered data
+		cl = kcl.RemakeWithOpts() // stop consuming, drop buffered data
 	}
 
 	{

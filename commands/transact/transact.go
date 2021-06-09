@@ -96,10 +96,9 @@ func Command(cl *client.Client) *cobra.Command {
 			// regex,
 			// balancer,
 			// instance ID
-			var groupOpts []kgo.GroupOpt
-			groupOpts = append(groupOpts, kgo.GroupTopics(topics...))
+			cl.AddOpt(kgo.ConsumeTopics(topics...))
 			if regex {
-				groupOpts = append(groupOpts, kgo.GroupTopicsRegex())
+				cl.AddOpt(kgo.ConsumeRegex())
 			}
 			var balancer kgo.GroupBalancer
 			switch groupAlg {
@@ -114,9 +113,9 @@ func Command(cl *client.Client) *cobra.Command {
 			default:
 				out.Die("unrecognized group balancer %q", groupAlg)
 			}
-			groupOpts = append(groupOpts, kgo.Balancers(balancer))
+			cl.AddOpt(kgo.Balancers(balancer))
 			if instanceID != "" {
-				groupOpts = append(groupOpts, kgo.InstanceID(instanceID))
+				cl.AddOpt(kgo.InstanceID(instanceID))
 			}
 
 			cl.AddOpt(kgo.FetchIsolationLevel(kgo.ReadCommitted())) // we will be reading committed
@@ -152,6 +151,7 @@ func Command(cl *client.Client) *cobra.Command {
 			cl.AddOpt(kgo.TransactionalID(txnID))
 			cl.AddOpt(kgo.StopOnDataLoss())
 			cl.AddOpt(kgo.BatchCompression(codec))
+			cl.AddOpt(kgo.ConsumerGroup(group))
 
 			sigs := make(chan os.Signal, 2)
 			signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
@@ -162,7 +162,7 @@ func Command(cl *client.Client) *cobra.Command {
 
 			// If we made it this far, our options are valid:
 			// assign our group and begin execing.
-			txnSess := cl.Client().AssignGroupTransactSession(group, groupOpts...)
+			txnSess := cl.GroupTransactSession()
 
 			quitCtx, cancel := context.WithCancel(context.Background())
 			go transact(quitCtx, cl.Client(), txnSess, w, r, destTopic, verbose, args...)

@@ -69,9 +69,10 @@ type Cfg struct {
 
 // Client contains kgo client options and a kgo client.
 type Client struct {
-	opts   []kgo.Opt
-	once   sync.Once
-	client *kgo.Client
+	opts    []kgo.Opt
+	once    sync.Once
+	client  *kgo.Client
+	txnSess *kgo.GroupTransactSession
 
 	logLevel string
 	logFile  string
@@ -151,6 +152,15 @@ func (c *Client) Client() *kgo.Client {
 	return c.client
 }
 
+// GroupTransactSession returns a new kgo.GroupTransactSession using all
+// buffered options.
+//
+// This can only be used once, and is incompatible with the Client function.
+func (c *Client) GroupTransactSession() *kgo.GroupTransactSession {
+	c.loadTxnSessOnce()
+	return c.txnSess
+}
+
 // DiskCfg returns the loaded disk configuration.
 func (c *Client) DiskCfg() Cfg {
 	c.loadClientOnce()
@@ -165,11 +175,12 @@ func (c *Client) DefaultCfgPath() string {
 // RemakeWithOpts remakes the client with additional opts added. The opts are
 // not persisted to the overall Client opts, but the created client does
 // persist. This is not concurrent safe.
-func (c *Client) RemakeWithOpts(opts ...kgo.Opt) {
+func (c *Client) RemakeWithOpts(opts ...kgo.Opt) *kgo.Client {
 	var err error
 	c.client.Close()
 	c.client, err = kgo.NewClient(append(c.opts, opts...)...)
 	out.MaybeDie(err, "unable to load client: %v", err)
+	return c.client
 }
 
 func (c *Client) loadClientOnce() {
@@ -178,6 +189,14 @@ func (c *Client) loadClientOnce() {
 		var err error
 		c.client, err = kgo.NewClient(c.opts...)
 		out.MaybeDie(err, "unable to load client: %v", err)
+	})
+}
+func (c *Client) loadTxnSessOnce() {
+	c.once.Do(func() {
+		c.fillOpts()
+		var err error
+		c.txnSess, err = kgo.NewGroupTransactSession(c.opts...)
+		out.MaybeDie(err, "unable to load group transact session: %v", err)
 	})
 }
 

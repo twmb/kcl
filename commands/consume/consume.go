@@ -69,12 +69,10 @@ func (c *consumption) run(topics []string) {
 		out.Die("__consumer_offsets or __transaction_state must be the only topic listed when trying to consume it")
 	}
 
-	var directOpts []kgo.DirectConsumeOpt
-	var groupOpts []kgo.GroupOpt
 	offset := c.parseOffset()
+	c.cl.AddOpt(kgo.ConsumeResetOffset(offset))
 	if len(c.partitions) == 0 {
-		directOpts = append(directOpts, kgo.ConsumeTopics(offset, topics...))
-		groupOpts = append(groupOpts, kgo.GroupTopics(topics...))
+		c.cl.AddOpt(kgo.ConsumeTopics(topics...))
 	} else {
 		if len(c.group) != 0 {
 			out.Die("incompatible flag assignment: group consuming cannot be used with direct partition consuming")
@@ -87,11 +85,10 @@ func (c *consumption) run(topics []string) {
 			}
 			offsets[topic] = partOffsets
 		}
-		directOpts = append(directOpts, kgo.ConsumePartitions(offsets))
+		c.cl.AddOpt(kgo.ConsumePartitions(offsets))
 	}
 	if c.regex {
-		directOpts = append(directOpts, kgo.ConsumeTopicsRegex())
-		groupOpts = append(groupOpts, kgo.GroupTopicsRegex())
+		c.cl.AddOpt(kgo.ConsumeRegex())
 	}
 
 	var balancer kgo.GroupBalancer
@@ -107,10 +104,10 @@ func (c *consumption) run(topics []string) {
 	default:
 		out.Die("unrecognized group balancer %q", c.groupAlg)
 	}
-	groupOpts = append(groupOpts, kgo.Balancers(balancer))
+	c.cl.AddOpt(kgo.Balancers(balancer))
 
 	if c.instanceID != "" {
-		groupOpts = append(groupOpts, kgo.InstanceID(c.instanceID))
+		c.cl.AddOpt(kgo.InstanceID(c.instanceID))
 	}
 
 	sigs := make(chan os.Signal, 2)
@@ -126,13 +123,12 @@ func (c *consumption) run(topics []string) {
 	c.cl.AddOpt(kgo.FetchMaxWait(c.fetchMaxWait))
 	c.cl.AddOpt(kgo.Rack(c.rack))
 
-	cl := c.cl.Client()
 	isGroup := len(c.group) > 0 && !(isConsumerOffsets || isTransactionState)
 	if isGroup {
-		cl.AssignGroup(c.group, groupOpts...)
-	} else {
-		cl.AssignPartitions(directOpts...)
+		c.cl.AddOpt(kgo.ConsumerGroup(c.group))
 	}
+
+	cl := c.cl.Client()
 	co := &consumeOutput{
 		cl:              cl,
 		numPerPartition: c.numPerPartition,
