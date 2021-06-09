@@ -128,6 +128,17 @@ kcl
 
  metadata                           -- print broker, cluster, and topic information
 
+ group
+   list                             -- list consumer groups
+   describe                         -- describe consumer groups
+   delete                           -- delete consumer groups
+   offset-delete                    -- forcefully delete committed offsets a group (see KIP-496)
+
+ topic
+   create                         -- create topics
+   delete                         -- delete topics
+   add-partitions                 -- add partitions to topics
+
  misc
    api-versions                     -- print api versions for requests
    probe-version                    -- probe for the currently running Kafka version
@@ -160,11 +171,7 @@ kcl
      describe                       -- describe delegation tokens
      expire                         -- expire delegation tokens
 
-   group
-     list                           -- list consumer groups
-     describe                       -- describe consumer groups
-     delete                         -- delete consumer groups
-     offset-delete                  -- forcefully delete committed offsets a group (see KIP-496)
+   group                            -- duplicate of `kcl group` top level command
 
    logdirs
      alter                          -- alter log directories that partitions are in
@@ -174,10 +181,7 @@ kcl
      alter                          -- alter partition assignments
      list                           -- list partition reassignments
 
-   topic
-     create                         -- create topics
-     delete                         -- delete topics
-     add-partitions                 -- add partitions to topics
+   topic                            -- duplicate of `kcl topic` top level command
 
    user-scram
      alter                          -- alter user scram

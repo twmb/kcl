@@ -9,6 +9,8 @@ import (
 
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/commands/admin"
+	"github.com/twmb/kcl/commands/admin/group"
+	"github.com/twmb/kcl/commands/admin/topic"
 	"github.com/twmb/kcl/commands/consume"
 	"github.com/twmb/kcl/commands/metadata"
 	"github.com/twmb/kcl/commands/misc"
@@ -50,6 +52,9 @@ Command completion is available at:
 		misc.Command(cl),
 		admin.Command(cl),
 		myconfig.Command(cl),
+
+		topic.Command(cl),
+		group.Command(cl),
 	)
 
 	allCommands(root, func(cmd *cobra.Command) {
