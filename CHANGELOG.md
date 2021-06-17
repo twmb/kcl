@@ -9,6 +9,9 @@ This is a small release that is notable for (a) raising topic & group into top
 level commands, and (b) updating the franz-go dep to what is hopefully its
 final API before stabilization.
 
+The `AWS_MSK_IAM` change now makes it such that kcl loads credentials
+directly from your `~/.aws/credentials` file, so that you do not need to
+duplicate those credentials into a kcl config.
 
 v0.3.0
 ===
