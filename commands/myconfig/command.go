@@ -105,14 +105,14 @@ OPTIONS
 
 The [tls] section
 
-  ca_cert_path="/path/to/my/ca.cert"
+  ca_cert_path="/path/to/my/ca_pem.cert"
      Path to a CA cert to load and use for connecting to brokers over TLS.
 
-  client_cert_path="/path/to/my/ca.cert"
+  client_cert_path="/path/to/my/client_pem.cert"
      Path to a client cert to load and use for connecting to brokers over TLS.
      This must be paired with tls_client_key_path.
 
-  client_key_path="/path/to/my/ca.cert"
+  client_key_path="/path/to/my/client_pem.key"
      Path to a client key to load and use for connecting to brokers over TLS.
      This must be paired with tls_client_cert_path.
 
