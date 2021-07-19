@@ -492,12 +492,14 @@ func atoiResourceType(s string) kmsg.ACLResourceType {
 
 func atoiResourcePattern(p string) kmsg.ACLResourcePatternType {
 	switch client.Strnorm(p) {
-	case "match":
+	case "any":
 		return 1
-	case "literal":
+	case "match":
 		return 2
-	case "prefixed":
+	case "literal":
 		return 3
+	case "prefixed":
+		return 4
 	default:
 		return 0
 	}
