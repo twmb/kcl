@@ -149,14 +149,13 @@ func unstick(kcl *client.Client, topic string) {
 				out.Die("fetch errors while looking for stuck partition: %v", errs)
 			}
 			fetches.EachPartition(func(tp kgo.FetchTopicPartition) {
-				p := tp.Partition
-				delete(possibleParts, p.Partition)
-				if p.HighWatermark == p.LastStableOffset {
+				delete(possibleParts, tp.Partition)
+				if tp.HighWatermark == tp.LastStableOffset {
 					return
 				}
 				found = true
-				stuckPartition = p.Partition
-				stuckOffset = p.LastStableOffset
+				stuckPartition = tp.Partition
+				stuckOffset = tp.LastStableOffset
 			})
 		}
 

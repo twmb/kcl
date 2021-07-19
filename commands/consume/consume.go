@@ -244,7 +244,7 @@ func (co *consumeOutput) consume() {
 				}
 
 				if co.numPerPartition > 0 {
-					tp := topicPartition{p.Topic, p.Partition.Partition}
+					tp := topicPartition{p.Topic, p.Partition}
 					seen := perPartitionSeen[tp]
 					if seen >= co.numPerPartition {
 						return
@@ -254,7 +254,7 @@ func (co *consumeOutput) consume() {
 				}
 
 				co.num++
-				co.format(r, &p.Partition)
+				co.format(r, &p.FetchPartition)
 
 				if co.num == co.max {
 					os.Exit(0)
