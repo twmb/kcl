@@ -40,6 +40,10 @@ If this is your first time running kcl, you can create a configuration with:
 Command completion is available at:
   kcl misc gen-autocomplete
 `,
+
+		CompletionOptions: cobra.CompletionOptions{
+			DisableDefaultCmd: true,
+		},
 	}
 
 	cl := client.New(root)
