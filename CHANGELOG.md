@@ -1,3 +1,11 @@
+v0.5.0
+===
+
+This small release mirrors the franz-go ACL resource pattern type bugfix from
+v0.8.1 to kcl's string parsing. This also bumps all deps, which includes a few
+minor franz-go bugfixes from v0.8.3 to v0.8.7.
+
+
 v0.4.0
 ===
 
