@@ -16,6 +16,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/commands/metadata"
 	"github.com/twmb/kcl/kv"
 	"github.com/twmb/kcl/out"
 )
@@ -24,10 +25,11 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "topic",
 		Aliases: []string{"t"},
-		Short:   "Perform topic relation actions (create, delete, add-partitions).",
+		Short:   "Perform topic relation actions (create, list, delete, add-partitions).",
 	}
 
 	cmd.AddCommand(topicCreateCommand(cl))
+	cmd.AddCommand(topicListCommand(cl))
 	cmd.AddCommand(topicDeleteCommand(cl))
 	cmd.AddCommand(topicAddPartitionsCommand(cl))
 	return cmd
@@ -103,6 +105,28 @@ replication factor, and key/value configs.
 	cmd.Flags().Int16VarP(&replicationFactor, "replication-factor", "r", 1, "number of replicas to have of each partition")
 	cmd.Flags().StringArrayVarP(&configKVs, "kv", "k", nil, "list of key=value config parameters (repeatable, e.g. -k cleanup.policy=compact -k preallocate=true)")
 
+	return cmd
+}
+
+func topicListCommand(cl *client.Client) *cobra.Command {
+	var detailed bool
+
+	cmd := &cobra.Command{
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List all topics",
+		Long:    "List all topics (alias for metadata -t)",
+		Run: func(_ *cobra.Command, _ []string) {
+			args := []string{"-t"}
+			if detailed {
+				args = append(args, "-d")
+			}
+			cmd := metadata.Command(cl)
+			cmd.SetArgs(args)
+			cmd.Execute()
+		},
+	}
+	cmd.Flags().BoolVarP(&detailed, "detailed", "d", false, "include detailed information about all topic partitions")
 	return cmd
 }
 
