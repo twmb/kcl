@@ -1,3 +1,8 @@
+TBD
+===
+
+- `4b9e01f` add `topic list` as an alias for `metadata -t`
+
 v0.5.0
 ===
 
