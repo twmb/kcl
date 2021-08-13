@@ -45,6 +45,7 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd.AddCommand(probeVersionCommand(cl))
 	cmd.AddCommand(rawCommand(cl))
 	cmd.AddCommand(listOffsetsCommand(cl))
+	cmd.AddCommand(offsetForLeaderEpochCommand(cl))
 
 	return cmd
 }
@@ -343,26 +344,7 @@ offset.
 		Example: "list-offsets foo:1,2,3 bar:0",
 		Args:    cobra.MinimumNArgs(1),
 		Run: func(_ *cobra.Command, topicParts []string) {
-			tps, err := flagutil.ParseTopicPartitions(topicParts)
-			out.MaybeDie(err, "unable to parse topic partitions: %v", err)
-
-			var metaTopics []kmsg.MetadataRequestTopic
-			for topic, partitions := range tps {
-				if len(partitions) == 0 {
-					t := topic
-					metaTopics = append(metaTopics, kmsg.MetadataRequestTopic{Topic: &t})
-				}
-			}
-			if len(metaTopics) > 0 {
-				kresp, err := cl.Client().Request(context.Background(), &kmsg.MetadataRequest{Topics: metaTopics})
-				out.MaybeDie(err, "unable to get metadata: %v", err)
-				resp := kresp.(*kmsg.MetadataResponse)
-				for _, topic := range resp.Topics {
-					for _, partition := range topic.Partitions {
-						tps[topic.Topic] = append(tps[topic.Topic], partition.Partition)
-					}
-				}
-			}
+			tps := loadTopicParts(cl, topicParts)
 
 			reqStart := &kmsg.ListOffsetsRequest{
 				ReplicaID:      -1,
@@ -546,4 +528,104 @@ offset.
 	cmd.Flags().BoolVar(&withEpochs, "with-epochs", false, "whether to include the epoch for the start and end offsets (Kafka 2.1.0+)")
 
 	return cmd
+}
+
+func offsetForLeaderEpochCommand(cl *client.Client) *cobra.Command {
+	var currentLeaderEpoch int32
+	var leaderEpoch int32
+
+	cmd := &cobra.Command{
+		Use:   "offset-for-leader-epoch",
+		Short: "See the offsets for a leader epoch.",
+		Long: `See the offsets for a leader epoch.
+
+This is an advanced command strictly for debugging purposes. To discover what
+it does, read the documentation for kmsg.OffsetForLeaderEpochRequest.
+`,
+
+		Example: "offset-for-leader-epoch foo bar biz:0,1,2",
+		Run: func(_ *cobra.Command, topicParts []string) {
+			tps := loadTopicParts(cl, topicParts)
+
+			req := &kmsg.OffsetForLeaderEpochRequest{
+				ReplicaID: -1,
+			}
+			for topic, parts := range tps {
+				reqTopic := kmsg.OffsetForLeaderEpochRequestTopic{
+					Topic: topic,
+				}
+				for _, partition := range parts {
+					reqTopic.Partitions = append(reqTopic.Partitions, kmsg.OffsetForLeaderEpochRequestTopicPartition{
+						Partition:          partition,
+						CurrentLeaderEpoch: currentLeaderEpoch,
+						LeaderEpoch:        leaderEpoch,
+					})
+				}
+				req.Topics = append(req.Topics, reqTopic)
+			}
+
+			shards := cl.Client().RequestSharded(context.Background(), req)
+			tw := out.BeginTabWrite()
+			defer tw.Flush()
+
+			fmt.Fprintf(tw, "BROKER\tTOPIC\tPARTITION\tLEADER EPOCH\tEND OFFSET\tERROR\n")
+
+			for _, shard := range shards {
+				if shard.Err != nil {
+					fmt.Printf("unable to issue request to broker %d (%s:%d): %v\n", shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
+					continue
+				}
+
+				resp := shard.Resp.(*kmsg.OffsetForLeaderEpochResponse)
+
+				sort.Slice(resp.Topics, func(i, j int) bool { return resp.Topics[i].Topic < resp.Topics[j].Topic })
+				for _, topic := range resp.Topics {
+					sort.Slice(topic.Partitions, func(i, j int) bool { return topic.Partitions[i].Partition < topic.Partitions[j].Partition })
+					for _, partition := range topic.Partitions {
+						var msg string
+						if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
+							msg = err.Error()
+						}
+						fmt.Fprintf(tw, "%d\t%s\t%d\t%d\t%d\t%s\n",
+							shard.Meta.NodeID,
+							topic.Topic,
+							partition.Partition,
+							partition.LeaderEpoch,
+							partition.EndOffset,
+							msg,
+						)
+					}
+				}
+			}
+		},
+	}
+
+	cmd.Flags().Int32VarP(&currentLeaderEpoch, "current-leader-epoch", "c", -1, "current leader epoch to use in the request")
+	cmd.Flags().Int32VarP(&leaderEpoch, "leader-epoch", "e", 0, "leader epoch to ask for")
+
+	return cmd
+}
+
+func loadTopicParts(cl *client.Client, topicParts []string) map[string][]int32 {
+	tps, err := flagutil.ParseTopicPartitions(topicParts)
+	out.MaybeDie(err, "unable to parse topic partitions: %v", err)
+
+	var metaTopics []kmsg.MetadataRequestTopic
+	for topic, partitions := range tps {
+		if len(partitions) == 0 {
+			t := topic
+			metaTopics = append(metaTopics, kmsg.MetadataRequestTopic{Topic: &t})
+		}
+	}
+	if len(metaTopics) > 0 {
+		kresp, err := cl.Client().Request(context.Background(), &kmsg.MetadataRequest{Topics: metaTopics})
+		out.MaybeDie(err, "unable to get metadata: %v", err)
+		resp := kresp.(*kmsg.MetadataResponse)
+		for _, topic := range resp.Topics {
+			for _, partition := range topic.Partitions {
+				tps[topic.Topic] = append(tps[topic.Topic], partition.Partition)
+			}
+		}
+	}
+	return tps
 }
