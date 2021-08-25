@@ -342,7 +342,6 @@ the offset number, where ### corresponds to the broker epoch at at that given
 offset.
 `,
 		Example: "list-offsets foo:1,2,3 bar:0",
-		Args:    cobra.MinimumNArgs(1),
 		Run: func(_ *cobra.Command, topicParts []string) {
 			tps := loadTopicParts(cl, topicParts)
 
@@ -617,11 +616,18 @@ func loadTopicParts(cl *client.Client, topicParts []string) map[string][]int32 {
 			metaTopics = append(metaTopics, kmsg.MetadataRequestTopic{Topic: &t})
 		}
 	}
-	if len(metaTopics) > 0 {
-		kresp, err := cl.Client().Request(context.Background(), &kmsg.MetadataRequest{Topics: metaTopics})
+	if len(metaTopics) > 0 || len(tps) == 0 {
+		req := &kmsg.MetadataRequest{Topics: metaTopics}
+		if len(tps) == 0 {
+			req.Topics = nil
+		}
+		kresp, err := cl.Client().Request(context.Background(), req)
 		out.MaybeDie(err, "unable to get metadata: %v", err)
 		resp := kresp.(*kmsg.MetadataResponse)
 		for _, topic := range resp.Topics {
+			if req.Topics == nil && topic.IsInternal {
+				continue
+			}
 			for _, partition := range topic.Partitions {
 				tps[topic.Topic] = append(tps[topic.Topic], partition.Partition)
 			}
