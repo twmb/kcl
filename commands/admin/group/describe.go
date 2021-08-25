@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 
 	"github.com/spf13/cobra"
 
 	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
@@ -15,7 +17,6 @@ import (
 )
 
 func describeCommand(cl *client.Client) *cobra.Command {
-	var req kmsg.DescribeGroupsRequest
 	var verbose bool
 	var readCommitted bool
 
@@ -24,42 +25,49 @@ func describeCommand(cl *client.Client) *cobra.Command {
 		Use:     "describe GROUPS...",
 		Aliases: []string{"d"},
 		Short:   "Describe Kafka groups (Kafka 0.9.0+)",
-		Args:    cobra.MinimumNArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
-			req.Groups = args
-
-			brokerResps := cl.Client().RequestSharded(context.Background(), &req)
-
-			tw := out.BeginTabWrite()
-			if !verbose {
-				defer tw.Flush()
+		Run: func(_ *cobra.Command, groups []string) {
+			if len(groups) == 0 {
+				groups = listGroups(cl)
+			}
+			if len(groups) == 0 {
+				out.Die("no groups to describe")
 			}
 
-			for _, brokerResp := range brokerResps {
-				kresp, err := brokerResp.Resp, brokerResp.Err
-				if err != nil {
-					fmt.Printf("unable to issue DescribeGroups to broker %d (%s:%d): %v\n", brokerResp.Meta.NodeID, brokerResp.Meta.Host, brokerResp.Meta.Port, err)
+			if verbose {
+				described := describeGroups(cl, groups)
+				fetchedOffsets := fetchOffsets(cl, groups)
+				listedOffsets := listOffsets(cl, described, readCommitted)
+				printDescribed(
+					described,
+					fetchedOffsets,
+					listedOffsets,
+				)
+				return
+			}
+
+			req := kmsg.NewPtrDescribeGroupsRequest()
+			req.Groups = groups
+
+			shards := cl.Client().RequestSharded(context.Background(), req)
+
+			tw := out.BeginTabWrite()
+			defer tw.Flush()
+			fmt.Fprintf(tw, "BROKER\tGROUP ID\tSTATE\tPROTO TYPE\tPROTO\tERROR\n")
+
+			var failures int
+			for _, shard := range shards {
+				if shard.Err != nil {
+					shardFail("DescribeGroups", shard, &failures)
 					continue
 				}
 
-				resp := unbinaryGroupDescribeMembers(kresp.(*kmsg.DescribeGroupsResponse))
-
-				if verbose {
-					for _, group := range resp.Groups {
-						describeGroupVerbose(cl, brokerResp.Meta.NodeID, &group, readCommitted)
-						fmt.Println()
-					}
-					continue
-				}
-
-				fmt.Fprintf(tw, "BROKER\tGROUP ID\tSTATE\tPROTO TYPE\tPROTO\tERROR\n")
-				for _, group := range resp.Groups {
+				for _, group := range shard.Resp.(*kmsg.DescribeGroupsResponse).Groups {
 					errMsg := ""
 					if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
 						errMsg = err.Error()
 					}
 					fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\n",
-						brokerResp.Meta.NodeID,
+						shard.Meta.NodeID,
 						group.Group,
 						group.State,
 						group.ProtocolType,
@@ -77,192 +85,323 @@ func describeCommand(cl *client.Client) *cobra.Command {
 	return cmd
 }
 
-func describeGroupVerbose(cl *client.Client, broker int32, group *consumerGroup, readCommitted bool) {
-	tw := out.BeginTabWrite()
-	fmt.Fprintf(tw, "BROKER\t%d\n", broker)
-	fmt.Fprintf(tw, "ID\t%s\n", group.Group)
-	fmt.Fprintf(tw, "STATE\t%s\n", group.State)
-	fmt.Fprintf(tw, "PROTO TYPE\t%s\n", group.ProtocolType)
-	fmt.Fprintf(tw, "PROTO\t%s\n", group.Protocol)
-	fmt.Fprintf(tw, "MEMBERS\t%d\n", len(group.Members))
-	errStr := ""
-	if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
-		errStr = err.Error()
-	}
-	fmt.Fprintf(tw, "ERROR\t%s\n", errStr)
-	tw.Flush()
+func shardFail(name string, shard kgo.ResponseShard, failures *int) {
+	fmt.Printf("unable to issue %s to broker %d (%s:%d): %v\n", name, shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
+	*failures++
+}
 
-	type offsets struct {
-		err          error
-		endOffset    int64
-		commitOffset int64
-		member       *consumerGroupMember
-	}
-	allOffsets := make(map[string]map[int32]offsets)
+func shardErr(name string, shard kgo.ResponseShard, err error) {
+	fmt.Printf("%s request error to broker %d (%s:%d): %v\n", name, shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, err)
+}
 
-	// For the group, first get the last committed offsets. This will
-	// also tell us the topics and partitions in the group, which we
-	// will use for listing offsets.
-	{
-		req := &kmsg.OffsetFetchRequest{
-			Group:         group.Group,
-			RequireStable: false,
+func listGroups(cl *client.Client) []string {
+	req := kmsg.NewPtrListGroupsRequest()
+
+	shards := cl.Client().RequestSharded(context.Background(), req)
+	var groups []string
+	var failures int
+	for _, shard := range shards {
+		if shard.Err != nil {
+			shardFail("ListGroups", shard, &failures)
+			continue
+		}
+		resp := shard.Resp.(*kmsg.ListGroupsResponse)
+		if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+			shardErr("ListGroups", shard, err)
+			continue
+		}
+		for _, group := range resp.Groups {
+			groups = append(groups, group.Group)
+		}
+	}
+	if failures == len(shards) {
+		out.Die("all %d ListGroups requests failed", failures)
+	}
+	return groups
+}
+
+func describeGroups(cl *client.Client, groups []string) []describedGroup {
+	req := kmsg.NewPtrDescribeGroupsRequest()
+	req.Groups = groups
+
+	shards := cl.Client().RequestSharded(context.Background(), req)
+	var described []describedGroup
+	var failures int
+	for _, shard := range shards {
+		if shard.Err != nil {
+			shardFail("DescribeGroups", shard, &failures)
+			failures++
+			continue
 		}
 
-		kresp, err := cl.Client().Request(context.Background(), req)
-		out.MaybeDie(err, "unable to fetch offsets: %v", err)
-		resp := kresp.(*kmsg.OffsetFetchResponse)
+		resp := unmarshalGroupDescribeMembers(shard.Meta, shard.Resp.(*kmsg.DescribeGroupsResponse))
+		described = append(described, resp.Groups...)
+	}
+	if failures == len(shards) {
+		out.Die("all %d DescribeGroups requests failed", failures)
+	}
+	return described
+}
+
+type offset struct {
+	at  int64
+	err error
+}
+
+func fetchOffsets(cl *client.Client, groups []string) map[string]map[int32]offset {
+	fetched := make(map[string]map[int32]offset)
+	var failures int
+	for i := range groups {
+		req := kmsg.NewPtrOffsetFetchRequest()
+		req.Group = groups[i]
+		resp, err := req.RequestWith(context.Background(), cl.Client())
+		if err != nil {
+			fmt.Printf("unable to issue OffsetFetch: %v\n", err)
+			failures++
+			continue
+		}
 
 		for _, topic := range resp.Topics {
-			topicPartitions := allOffsets[topic.Topic]
-			if topicPartitions == nil {
-				topicPartitions = make(map[int32]offsets)
-				allOffsets[topic.Topic] = topicPartitions
+			fetchedt := fetched[topic.Topic]
+			if fetchedt == nil {
+				fetchedt = make(map[int32]offset)
+				fetched[topic.Topic] = fetchedt
 			}
 			for _, partition := range topic.Partitions {
-				topicPartitions[partition.Partition] = offsets{
-					err:          kerr.ErrorForCode(partition.ErrorCode),
-					commitOffset: partition.Offset,
+				fetchedt[partition.Partition] = offset{
+					at:  partition.Offset,
+					err: kerr.ErrorForCode(partition.ErrorCode),
+				}
+			}
+		}
+	}
+	if failures == len(groups) {
+		out.Die("all %d OffsetFetch requests failed", failures)
+	}
+	return fetched
+}
+
+func listOffsets(cl *client.Client, described []describedGroup, readCommitted bool) map[string]map[int32]offset {
+	tps := make(map[string]map[int32]struct{})
+	for _, group := range described {
+		for _, member := range group.Members {
+			for _, topic := range member.MemberAssignment.Topics {
+				if tps[topic.Topic] == nil {
+					tps[topic.Topic] = make(map[int32]struct{})
+				}
+				for _, partition := range topic.Partitions {
+					tps[topic.Topic][partition] = struct{}{}
 				}
 			}
 		}
 	}
 
-	// Now we load the partition's latest offsets with list offsets.
-	{
-		req := &kmsg.ListOffsetsRequest{
-			ReplicaID:      -1,
-			IsolationLevel: 0,
+	req := kmsg.NewPtrListOffsetsRequest()
+	if readCommitted {
+		req.IsolationLevel = 1
+	}
+	for topic, partitions := range tps {
+		reqTopic := kmsg.NewListOffsetsRequestTopic()
+		reqTopic.Topic = topic
+		for partition := range partitions {
+			reqPartition := kmsg.NewListOffsetsRequestTopicPartition()
+			reqPartition.Partition = partition
+			reqPartition.Timestamp = -1 // latest
+			reqTopic.Partitions = append(reqTopic.Partitions, reqPartition)
 		}
-		if readCommitted {
-			req.IsolationLevel = 1
-		}
-		for topic, partitions := range allOffsets {
-			reqTopic := kmsg.ListOffsetsRequestTopic{
-				Topic: topic,
-			}
-			for partition, _ := range partitions {
-				reqTopic.Partitions = append(reqTopic.Partitions, kmsg.ListOffsetsRequestTopicPartition{
-					Partition:          partition,
-					CurrentLeaderEpoch: -1,
-					Timestamp:          -1,
-				})
-			}
-			req.Topics = append(req.Topics, reqTopic)
+		req.Topics = append(req.Topics, reqTopic)
+	}
+
+	shards := cl.Client().RequestSharded(context.Background(), req)
+	listed := make(map[string]map[int32]offset)
+	var failures int
+	for _, shard := range shards {
+		if shard.Err != nil {
+			shardFail("ListOffsets", shard, &failures)
+			continue
 		}
 
-		kresp, err := cl.Client().Request(context.Background(), req)
-		out.MaybeDie(err, "unable to list offsets: %v", err)
-		resp := kresp.(*kmsg.ListOffsetsResponse)
-
+		resp := shard.Resp.(*kmsg.ListOffsetsResponse)
 		for _, topic := range resp.Topics {
+			listedt := listed[topic.Topic]
+			if listedt == nil {
+				listedt = make(map[int32]offset)
+				listed[topic.Topic] = listedt
+			}
 			for _, partition := range topic.Partitions {
-				offsets := allOffsets[topic.Topic][partition.Partition]
-				if offsets.err == nil {
-					offsets.err = kerr.ErrorForCode(partition.ErrorCode)
+				listedt[partition.Partition] = offset{
+					at:  partition.Offset,
+					err: kerr.ErrorForCode(partition.ErrorCode),
 				}
-				offsets.endOffset = partition.Offset
-				allOffsets[topic.Topic][partition.Partition] = offsets
 			}
 		}
 	}
+	if failures == len(shards) {
+		out.Die("all %d ListOffsets requests failed", failures)
+	}
+	return listed
+}
 
-	// Now we pair the member to the partitions.
-	for i := range group.Members {
-		member := &group.Members[i]
-		for _, topic := range member.MemberAssignment.Topics {
-			if allOffsets[topic.Topic] == nil {
-				allOffsets[topic.Topic] = make(map[int32]offsets)
-			}
-			topicOffsets := allOffsets[topic.Topic]
-			for _, partition := range topic.Partitions {
-				partOffsets, exists := topicOffsets[partition]
-				if !exists {
-					// assigned, but partition is empty
-					partOffsets = offsets{
-						err:          nil,
-						endOffset:    -1,
-						commitOffset: -1,
+type describeRow struct {
+	topic         string
+	partition     int32
+	currentOffset string
+	logEndOffset  int64
+	lag           string
+	memberID      string
+	instanceID    *string
+	clientID      string
+	host          string
+	err           error
+}
+
+func printDescribed(
+	groups []describedGroup,
+	fetched map[string]map[int32]offset,
+	listed map[string]map[int32]offset,
+) {
+	lookup := func(m map[string]map[int32]offset, topic string, partition int32) offset {
+		p := m[topic]
+		if p == nil {
+			return offset{at: -1}
+		}
+		o, exists := p[partition]
+		if !exists {
+			return offset{at: -1}
+		}
+		return o
+	}
+
+	sort.Slice(groups, func(i, j int) bool {
+		return groups[i].Group < groups[j].Group
+	})
+
+	for _, group := range groups {
+		var rows []describeRow
+		var useInstanceID, useErr bool
+		for _, member := range group.Members {
+			for _, topic := range member.MemberAssignment.Topics {
+				t := topic.Topic
+				for _, p := range topic.Partitions {
+					committed := lookup(fetched, t, p)
+					end := lookup(listed, t, p)
+
+					row := describeRow{
+						topic:     t,
+						partition: p,
+
+						logEndOffset: end.at,
+
+						memberID:   member.MemberID,
+						instanceID: member.InstanceID,
+						clientID:   member.ClientID,
+						host:       member.ClientHost,
+						err:        committed.err,
 					}
+					if row.err == nil {
+						row.err = end.err
+					}
+
+					useErr = row.err != nil
+					useInstanceID = row.instanceID != nil
+
+					row.currentOffset = strconv.FormatInt(committed.at, 10)
+					if committed.at == -1 {
+						row.currentOffset = "-"
+					}
+
+					row.lag = strconv.FormatInt(end.at-committed.at, 10)
+					if end.at == 0 {
+						row.lag = "-"
+					} else if committed.at == -1 {
+						row.lag = strconv.FormatInt(end.at, 10)
+					}
+
+					rows = append(rows, row)
+
 				}
-				partOffsets.member = member
-				topicOffsets[partition] = partOffsets
 			}
 		}
-	}
 
-	// Now we sort the map so that our output will be nice.
-	type partOffsets struct {
-		part int32
-		offsets
-	}
-	type topicOffsets struct {
-		topic string
-		parts []partOffsets
-	}
-	var sortedOffsets []topicOffsets
-	for topic, partitions := range allOffsets {
-		to := topicOffsets{
-			topic: topic,
-		}
-		for partition, offsets := range partitions {
-			to.parts = append(to.parts, partOffsets{
-				part:    partition,
-				offsets: offsets,
-			})
-		}
-		sort.Slice(to.parts, func(i, j int) bool { return to.parts[i].part < to.parts[j].part })
-		sortedOffsets = append(sortedOffsets, to)
-	}
-	sort.Slice(sortedOffsets, func(i, j int) bool { return sortedOffsets[i].topic < sortedOffsets[j].topic })
-
-	// Finally, we can print everything.
-	tw = out.BeginTabWrite()
-	defer tw.Flush()
-	fmt.Fprintf(tw, "TOPIC\tPARTITION\tCURRENT OFFSET\tLOG END OFFSET\tLAG\tMEMBER ID\tINSTANCE ID\tCLIENT ID\tHOST\tUSER DATA\tLOAD ERR\n")
-	for _, topic := range sortedOffsets {
-		for _, part := range topic.parts {
-			memberID, instanceID, clientID, host, userData := "", "", "", "", ""
-			loadErr := ""
-			if part.member != nil {
-				loadErr = ""
-				m := part.member
-				memberID = m.MemberID
-				if m.InstanceID != nil {
-					instanceID = *m.InstanceID
-				}
-				clientID = m.ClientID
-				host = m.ClientHost
-				userData = string(m.MemberAssignment.UserData)
-			}
-			if part.err != nil {
-				loadErr = part.err.Error()
-			}
-
-			lag := part.endOffset - part.commitOffset
-			lagstr := fmt.Sprintf("%d", lag)
-			if lag < 0 {
-				lagstr = "???"
-			}
-
-			fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				topic.topic,
-				part.part,
-				part.commitOffset,
-				part.endOffset,
-				lagstr,
-				memberID,
-				instanceID,
-				clientID,
-				host,
-				userData,
-				loadErr,
-			)
-		}
+		printDescribedGroup(group, rows, useInstanceID, useErr)
+		fmt.Println()
 	}
 }
 
-type consumerGroupMember struct {
+func printDescribedGroup(group describedGroup, rows []describeRow, useInstanceID bool, useErr bool) {
+	tw := out.NewTabWriter()
+	fmt.Fprintf(tw, "GROUP\t%s\n", group.Group)
+	fmt.Fprintf(tw, "COORDINATOR\t%d\n", group.Broker.NodeID)
+	fmt.Fprintf(tw, "STATE\t%s\n", group.State)
+	fmt.Fprintf(tw, "BALANCER\t%s\n", group.Protocol)
+	fmt.Fprintf(tw, "MEMBERS\t%d\n", len(group.Members))
+	if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
+		fmt.Fprintf(tw, "ERROR\t%s\n", err)
+	}
+	tw.Flush()
+
+	if len(rows) == 0 {
+		return
+	}
+
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].topic < rows[j].topic ||
+			rows[i].topic == rows[j].topic &&
+				rows[i].partition < rows[j].partition
+	})
+
+	headers := []string{
+		"TOPIC",
+		"PARTITION",
+		"CURRENT-OFFSET",
+		"LOG-END-OFFSET",
+		"LAG",
+		"MEMBER-ID",
+	}
+	args := func(r *describeRow) []interface{} {
+		return []interface{}{
+			r.topic,
+			r.partition,
+			r.currentOffset,
+			r.logEndOffset,
+			r.lag,
+			r.memberID,
+		}
+	}
+
+	if useInstanceID {
+		headers = append(headers, "INSTANCE-ID")
+		orig := args
+		args = func(r *describeRow) []interface{} {
+			return append(orig(r), r.instanceID)
+		}
+	}
+
+	{
+		headers = append(headers, "CLIENT-ID", "HOST")
+		orig := args
+		args = func(r *describeRow) []interface{} {
+			return append(orig(r), r.clientID, r.host)
+		}
+
+	}
+
+	if useErr {
+		headers = append(headers, "ERROR")
+		orig := args
+		args = func(r *describeRow) []interface{} {
+			return append(orig(r), r.err)
+		}
+	}
+
+	tw = out.NewTable(headers...)
+	defer tw.Flush()
+	for _, row := range rows {
+		tw.Print(args(&row)...)
+	}
+}
+
+type describedGroupMember struct {
 	MemberID         string
 	InstanceID       *string
 	ClientID         string
@@ -270,27 +409,32 @@ type consumerGroupMember struct {
 	MemberMetadata   kmsg.GroupMemberMetadata
 	MemberAssignment kmsg.GroupMemberAssignment
 }
-type consumerGroup struct {
+
+type describedGroup struct {
+	Broker               kgo.BrokerMetadata
 	ErrorCode            int16
 	Group                string
 	State                string
 	ProtocolType         string
 	Protocol             string
-	Members              []consumerGroupMember
+	Members              []describedGroupMember
 	AuthorizedOperations int32
 }
-type consumerGroups struct {
+
+type describeGroupsResponse struct {
 	ThrottleMillis int32
-	Groups         []consumerGroup
+	Groups         []describedGroup
 }
 
-// unmarshals and prints the standard java protocol type
-func unbinaryGroupDescribeMembers(resp *kmsg.DescribeGroupsResponse) *consumerGroups {
-	cresp := &consumerGroups{
+func unmarshalGroupDescribeMembers(
+	meta kgo.BrokerMetadata, resp *kmsg.DescribeGroupsResponse,
+) *describeGroupsResponse {
+	dresp := &describeGroupsResponse{
 		ThrottleMillis: resp.ThrottleMillis,
 	}
 	for _, group := range resp.Groups {
-		cgroup := consumerGroup{
+		dgroup := describedGroup{
+			Broker:               meta,
 			ErrorCode:            group.ErrorCode,
 			Group:                group.Group,
 			State:                group.State,
@@ -299,19 +443,19 @@ func unbinaryGroupDescribeMembers(resp *kmsg.DescribeGroupsResponse) *consumerGr
 			AuthorizedOperations: group.AuthorizedOperations,
 		}
 		for _, member := range group.Members {
-			cmember := consumerGroupMember{
+			dmember := describedGroupMember{
 				MemberID:   member.MemberID,
 				InstanceID: member.InstanceID,
 				ClientID:   member.ClientID,
 				ClientHost: member.ClientHost,
 			}
-			cmember.MemberMetadata.ReadFrom(member.ProtocolMetadata)
-			cmember.MemberAssignment.ReadFrom(member.MemberAssignment)
+			dmember.MemberMetadata.ReadFrom(member.ProtocolMetadata)
+			dmember.MemberAssignment.ReadFrom(member.MemberAssignment)
 
-			cgroup.Members = append(cgroup.Members, cmember)
+			dgroup.Members = append(dgroup.Members, dmember)
 		}
-		cresp.Groups = append(cresp.Groups, cgroup)
+		dresp.Groups = append(dresp.Groups, dgroup)
 	}
 
-	return cresp
+	return dresp
 }
