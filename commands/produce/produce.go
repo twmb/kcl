@@ -192,7 +192,7 @@ Unfortunately, with exact sizing, the format string is unavoidably noisy.
 			}
 
 			if retries > -1 {
-				cl.AddOpt(kgo.ProduceRetries(retries))
+				cl.AddOpt(kgo.RecordRetries(retries))
 			}
 
 			p := &kgo.FetchPartition{}
