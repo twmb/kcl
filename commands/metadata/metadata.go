@@ -185,9 +185,9 @@ func printTopics(version int16, topics []kmsg.MetadataResponseTopic, pinternal, 
 				replicas = len(topic.Partitions[0].Replicas)
 			}
 			if hasID {
-				fmt.Fprintf(tw, "%s\t%x\t%d\t%d\n", topic.Topic, topic.TopicID, parts, replicas)
+				fmt.Fprintf(tw, "%s\t%x\t%d\t%d\n", topicOut(topic.Topic), topic.TopicID, parts, replicas)
 			} else {
-				fmt.Fprintf(tw, "%s\t%d\t%d\n", topic.Topic, parts, replicas)
+				fmt.Fprintf(tw, "%s\t%d\t%d\n", topicOut(topic.Topic), parts, replicas)
 			}
 		}
 		tw.Flush()
@@ -199,7 +199,7 @@ func printTopics(version int16, topics []kmsg.MetadataResponseTopic, pinternal, 
 	defer func() { os.Stdout.Write(buf.Bytes()) }()
 
 	for _, topic := range topics {
-		fmt.Fprintf(buf, "%s", topic.Topic)
+		fmt.Fprintf(buf, "%s", topicOut(topic.Topic))
 		if hasID {
 			fmt.Fprintf(buf, " [%x]", topic.TopicID)
 		}
@@ -236,4 +236,11 @@ func printTopics(version int16, topics []kmsg.MetadataResponseTopic, pinternal, 
 			fmt.Fprintln(buf)
 		}
 	}
+}
+
+func topicOut(t *string) string {
+	if t == nil {
+		return "ERR-UNKNOWN"
+	}
+	return *t
 }
