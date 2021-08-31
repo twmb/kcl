@@ -92,8 +92,11 @@ describe // describes all`,
 					metaResp, err := metaReq.RequestWith(context.Background(), cl.Client())
 					out.MaybeDie(err, "unable to request metadata: %v", err)
 					for _, topic := range metaResp.Topics {
+						if topic.Topic == nil {
+							out.Die("metadata returned nil topic when we did not fetch with topic IDs")
+						}
 						for _, partition := range topic.Partitions {
-							tps[topic.Topic] = append(tps[topic.Topic], partition.Partition)
+							tps[*topic.Topic] = append(tps[*topic.Topic], partition.Partition)
 						}
 					}
 				}

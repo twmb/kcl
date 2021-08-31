@@ -625,11 +625,14 @@ func loadTopicParts(cl *client.Client, topicParts []string) map[string][]int32 {
 		out.MaybeDie(err, "unable to get metadata: %v", err)
 		resp := kresp.(*kmsg.MetadataResponse)
 		for _, topic := range resp.Topics {
+			if topic.Topic == nil {
+				out.Die("metadata returned nil topic when we did not fetch with topic IDs")
+			}
 			if req.Topics == nil && topic.IsInternal {
 				continue
 			}
 			for _, partition := range topic.Partitions {
-				tps[topic.Topic] = append(tps[topic.Topic], partition.Partition)
+				tps[*topic.Topic] = append(tps[*topic.Topic], partition.Partition)
 			}
 		}
 	}

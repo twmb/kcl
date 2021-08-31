@@ -110,7 +110,6 @@ If the brokers section is printed, the controller broker is marked with *.
 				}
 				printTopics(resp.Version, resp.Topics, pinternal, detailed)
 			}
-
 		},
 	}
 
@@ -151,7 +150,18 @@ func printBrokers(controllerID int32, brokers []kmsg.MetadataResponseBroker) {
 
 func printTopics(version int16, topics []kmsg.MetadataResponseTopic, pinternal, detailed bool) {
 	sort.Slice(topics, func(i, j int) bool {
-		return topics[i].Topic < topics[j].Topic
+		l := topics[i].Topic
+		r := topics[j].Topic
+		switch {
+		case l != nil && r != nil:
+			return *l < *r
+		case l != nil && r == nil:
+			return true
+		case r != nil:
+			return false
+		default:
+			return string(topics[i].TopicID[:]) < string(topics[j].TopicID[:])
+		}
 	})
 
 	hasID := version >= 10

@@ -241,6 +241,9 @@ add-partitions -t bar -t baz 1, 2, 3`,
 				TimeoutMillis: cl.TimeoutMillis(),
 			}
 			for _, topic := range metaResp.Topics {
+				if topic.Topic == nil {
+					out.Die("metadata returned nil topic, unknown topic ID!")
+				}
 				currentPartitionCount := len(topic.Partitions)
 				if currentPartitionCount > 0 {
 					currentReplicaCount := len(topic.Partitions[0].Replicas)
