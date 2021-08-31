@@ -254,7 +254,7 @@ add-partitions -t bar -t baz 1, 2, 3`,
 				}
 
 				createReq.Topics = append(createReq.Topics, kmsg.CreatePartitionsRequestTopic{
-					Topic:      topic.Topic,
+					Topic:      *topic.Topic,
 					Count:      int32(currentPartitionCount + len(assignments)),
 					Assignment: assignments,
 				})
