@@ -105,6 +105,13 @@ values to it prefixed with the four byte big endian value length, reads
 back records in the same format, and produces to topic `txn` all using the
 transactional id `mytxn`.
 
+Additionally, you can use the special command "mirror" to have poor man's
+mirrormarker:
+
+```
+kcl transact -x mytxn -g group -t srcTopic -d destTopic -v mirror
+```
+
 ## Group Consuming
 
 Group consuming is supported with the `-g` or `--group` flag to `kcl consume`
