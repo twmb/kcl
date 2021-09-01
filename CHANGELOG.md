@@ -1,12 +1,15 @@
-TBD
+v0.6.0
 ===
 
 This release introduces a new command, `kcl misc offset-for-leader-epoch`,
 which can be useful in some debugging scenarios, as well as allows leaving off
 any groups to `kcl group describe`, and any topics to `kcl misc list-offsets`.
 
+This also fixes the previously broken `kcl transact`, and adds a mirror mode.
+
 As always, this pulls in the latest franz-go, which includes important fixes.
 
+- [`4786fc2`](https://github.com/twmb/kcl/commit/4786fc2) kcl transact: add mirror mode
 - [`1eb1b67`](https://github.com/twmb/kcl/commit/1eb1b67) group describe: rewrite, allow no groups to describe all groups
 - [`0902b98`](https://github.com/twmb/kcl/commit/0902b98) misc: allow list-offsets and offset-for-leader-epoch to dump all topics
 - [`3aa3602`](https://github.com/twmb/kcl/commit/3aa3602) misc: add offset-for-leader-epoch
