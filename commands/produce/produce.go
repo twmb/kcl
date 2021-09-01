@@ -177,7 +177,7 @@ Unfortunately, with exact sizing, the format string is unavoidably noisy.
 			default:
 				out.Die("invalid compression codec %q", codec)
 			}
-			cl.AddOpt(kgo.BatchCompression(codec))
+			cl.AddOpt(kgo.ProducerBatchCompression(codec))
 
 			switch acks {
 			case -1:
