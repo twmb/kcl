@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"sync/atomic"
 	"syscall"
 	"unicode/utf8"
 
@@ -33,7 +32,9 @@ will be fenced.
 
 kcl executes the ETL_COMMAND for every batch of records received, formatting
 the records as requested per the -w flag to the commands STDIN, and reading
-back modified records from the commands STDOUT as per the -r flag.
+back modified records from the commands STDOUT as per the -r flag. The special
+ETL_COMMAND "mirror" mirrors the records to a new topic (unless you have a
+local executable file named mirror).
 
 Once all records are read, kcl begins a transaction, writes all records to
 Kafka, and finishes the transaction.
@@ -69,27 +70,13 @@ func Command(cl *client.Client) *cobra.Command {
 		Long:  help,
 		Args:  cobra.MinimumNArgs(1), // exec
 		Run: func(_ *cobra.Command, args []string) {
-			if len(escapeChar) == 0 {
-				out.Die("invalid empty escape character")
-			}
-			escape, size := utf8.DecodeRuneInString(escapeChar)
-			if size != len(escapeChar) {
-				out.Die("invalid multi character escape character")
-			}
 			if len(txnID) == 0 {
 				out.Die("invalid empty transactional id")
-			}
-
-			if rwFormat != "" {
-				readFormat = rwFormat
-				writeFormat = rwFormat
 			}
 
 			///////////////
 			// consuming //
 			///////////////
-			w, err := format.ParseWriteFormat(writeFormat, escape)
-			out.MaybeDie(err, "unable to parse write format: %v", err)
 
 			// create group opts:
 			// topics,
@@ -124,14 +111,6 @@ func Command(cl *client.Client) *cobra.Command {
 			///////////////
 			// producing //
 			///////////////
-			r, err := format.NewReader(readFormat, escape, maxBuf, nil)
-			out.MaybeDie(err, "unable to parse read format: %v", err)
-			if r.ParsesTopic() && len(destTopic) != 0 {
-				out.Die("cannot produce to a destination topic; the read format specifies that it parses a topic")
-			}
-			if !r.ParsesTopic() && len(destTopic) == 0 {
-				out.Die("destiniation topic is missing and the read format does not specify that it parses a topic")
-			}
 
 			var codec kgo.CompressionCodec
 			switch compression {
@@ -149,27 +128,66 @@ func Command(cl *client.Client) *cobra.Command {
 				out.Die("invalid compression codec %q", codec)
 			}
 			cl.AddOpt(kgo.TransactionalID(txnID))
-			cl.AddOpt(kgo.StopOnDataLoss())
-			cl.AddOpt(kgo.BatchCompression(codec))
+			cl.AddOpt(kgo.ProducerBatchCompression(codec))
 			cl.AddOpt(kgo.ConsumerGroup(group))
+
+			/////////////////////
+			// signal handling //
+			/////////////////////
 
 			sigs := make(chan os.Signal, 2)
 			signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
-
-			///////////
-			// begin //
-			///////////
-
-			// If we made it this far, our options are valid:
-			// assign our group and begin execing.
-			txnSess := cl.GroupTransactSession()
-
 			quitCtx, cancel := context.WithCancel(context.Background())
-			go transact(quitCtx, cl.Client(), txnSess, w, r, destTopic, verbose, args...)
+			dead := make(chan struct{})
+			go func() {
+				defer close(dead)
+				<-sigs
+				cancel()
+				<-sigs
+			}()
+			defer func() { <-dead }()
 
-			<-sigs
-			cancel()
-			<-sigs
+			if len(args) == 1 && args[0] == "mirror" {
+				if readFormat != "" || writeFormat != "" || rwFormat != "" {
+					out.Die("formats must not be specified when mirroring")
+				}
+				if len(destTopic) == 0 {
+					out.Die("destiniation topic is missing (required for mirroring)")
+				}
+				go transactMirror(quitCtx, cl.GroupTransactSession(), destTopic, verbose)
+				return
+			}
+
+			////////////////
+			// formatting //
+			////////////////
+
+			if len(escapeChar) == 0 {
+				out.Die("invalid empty escape character")
+			}
+			escape, size := utf8.DecodeRuneInString(escapeChar)
+			if size != len(escapeChar) {
+				out.Die("invalid multi character escape character")
+			}
+
+			if rwFormat != "" {
+				readFormat = rwFormat
+				writeFormat = rwFormat
+			}
+
+			w, err := format.ParseWriteFormat(writeFormat, escape)
+			out.MaybeDie(err, "unable to parse write format: %v", err)
+
+			r, err := format.NewReader(readFormat, escape, maxBuf, nil)
+			out.MaybeDie(err, "unable to parse read format: %v", err)
+			if r.ParsesTopic() && len(destTopic) != 0 {
+				out.Die("cannot produce to a destination topic; the read format specifies that it parses a topic")
+			}
+			if !r.ParsesTopic() && len(destTopic) == 0 {
+				out.Die("destiniation topic is missing and the read format does not specify that it parses a topic")
+			}
+
+			go transact(quitCtx, cl.GroupTransactSession(), w, r, destTopic, verbose, args...)
 		},
 	}
 
@@ -182,8 +200,8 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd.Flags().StringVarP(&instanceID, "instance-id", "i", "", "group instance ID to use for consuming; empty means none (implies static membership; Kafka 2.5.0+)")
 	cmd.Flags().StringVar(&rack, "rack", "", "the rack to use for fetch requests; setting this opts in to nearest replica fetching (Kafka 2.2.0+)")
 
-	cmd.Flags().StringVarP(&writeFormat, "write-format", "w", "%t\t%k\t%v\n", "format to write to the transform program")
-	cmd.Flags().StringVarP(&readFormat, "read-format", "r", "%t\t%k\t%v\n", "format to read from the transform program")
+	cmd.Flags().StringVarP(&writeFormat, "write-format", "w", "", "format to write to the transform program")
+	cmd.Flags().StringVarP(&readFormat, "read-format", "r", "", "format to read from the transform program")
 	cmd.Flags().StringVar(&rwFormat, "rw", "", "if non-empty, the format to use for both reading and writing (overrides w and r)")
 
 	cmd.Flags().IntVar(&maxBuf, "max-delim-buf", bufio.MaxScanTokenSize, "maximum input to buffer before a delimiter is required, if using delimiters")
@@ -197,21 +215,20 @@ func Command(cl *client.Client) *cobra.Command {
 
 func transact(
 	quitCtx context.Context,
-	cl *kgo.Client,
-	txnSess *kgo.GroupTransactSession,
+	sess *kgo.GroupTransactSession,
 	w func([]byte, *kgo.Record, *kgo.FetchPartition) []byte,
 	r *format.Reader,
 	destTopic string,
 	verbose bool,
 	args ...string,
 ) {
-	defer cl.Close()
+	defer sess.Close()
 
 	var buf []byte
 
 	for {
 
-		fetches := cl.PollFetches(quitCtx)
+		fetches := sess.PollFetches(quitCtx)
 		select {
 		case <-quitCtx.Done():
 			out.Die("Quitting.")
@@ -278,23 +295,15 @@ func transact(
 			fmt.Printf("Finished receiving %d records, beginning a transaction to produce them...\n", len(received))
 		}
 
-		if err = txnSess.Begin(); err != nil {
+		if err = sess.Begin(); err != nil {
 			out.MaybeDie(err, "error beginning transaction: %v", err)
 		}
 
-		var stopProduction uint32
-		var firstProduceErr error
-		ctx, cancel := context.WithCancel(context.Background())
+		promise := kgo.AbortingFirstErrPromise(sess.Client())
 		for _, record := range received {
-			cl.Produce(ctx, record, func(_ *kgo.Record, err error) {
-				if err != nil {
-					if atomic.SwapUint32(&stopProduction, 1) == 0 {
-						firstProduceErr = err
-						cancel()
-					}
-				}
-			})
+			sess.Produce(context.Background(), record, promise.Promise())
 		}
+		firstProduceErr := promise.Err()
 
 		if verbose {
 			if firstProduceErr == nil {
@@ -304,7 +313,7 @@ func transact(
 			}
 		}
 
-		committed, err := txnSess.End(context.Background(), kgo.TransactionEndTry(firstProduceErr == nil))
+		committed, err := sess.End(context.Background(), kgo.TransactionEndTry(firstProduceErr == nil))
 		out.MaybeDie(err, "unable to end transaction: %v", err)
 
 		if !committed {
@@ -313,5 +322,62 @@ func transact(
 			fmt.Println("Transaction was committed.")
 		}
 	}
+}
 
+func transactMirror(
+	quitCtx context.Context,
+	sess *kgo.GroupTransactSession,
+	destTopic string,
+	verbose bool,
+) {
+	defer sess.Close()
+
+	for {
+
+		fetches := sess.PollFetches(quitCtx)
+		select {
+		case <-quitCtx.Done():
+			out.Die("Quitting.")
+		default:
+		}
+
+		if err := sess.Begin(); err != nil {
+			out.MaybeDie(err, "error beginning transaction: %v", err)
+		}
+
+		if verbose {
+			fmt.Println("Fetched, mirroring records...")
+		}
+
+		promise := kgo.AbortingFirstErrPromise(sess.Client())
+		for _, fetch := range fetches {
+			for _, topic := range fetch.Topics {
+				for _, partition := range topic.Partitions {
+					out.MaybeDie(partition.Err, "fetch partition error: %v", partition.Err)
+					for _, record := range partition.Records {
+						record.Topic = destTopic
+						sess.Produce(context.Background(), record, promise.Promise())
+					}
+				}
+			}
+		}
+		firstProduceErr := promise.Err()
+
+		if verbose {
+			if firstProduceErr == nil {
+				fmt.Println("Mirroring complete, flushing and potentially committing...")
+			} else {
+				fmt.Fprintf(os.Stderr, "Mirroring of records failed, first produce error: %v; aborting transaction...\n", firstProduceErr)
+			}
+		}
+
+		committed, err := sess.End(context.Background(), kgo.TransactionEndTry(firstProduceErr == nil))
+		out.MaybeDie(err, "unable to end transaction: %v", err)
+
+		if !committed {
+			fmt.Fprintln(os.Stderr, "Transaction was aborted.")
+		} else if verbose {
+			fmt.Println("Transaction was committed.")
+		}
+	}
 }
