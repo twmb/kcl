@@ -24,9 +24,7 @@ func Command(cl *client.Client) *cobra.Command {
 }
 
 func alterPartitionAssignments(cl *client.Client) *cobra.Command {
-	var topicPartReplicas []string
-
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:   "alter",
 		Short: "Alter partition assignments.",
 		Long: `Alter which brokers partitions are assigned to (Kafka 2.4.0+).
@@ -42,8 +40,8 @@ need to quote your input to the flag.
 If a replica list is empty for a specific partition, this cancels any active
 reassignment for that partition.
 `,
-		Example: "alter -t 'foo:1->1,2,3' -t 'bar:2->3,4,5;5->3,4,5'",
-		Run: func(_ *cobra.Command, args []string) {
+		Example: "alter 'foo:1->1,2,3' 'bar:2->3,4,5;5->3,4,5'",
+		Run: func(_ *cobra.Command, topicPartReplicas []string) {
 			tprs, err := flagutil.ParseTopicPartitionReplicas(topicPartReplicas)
 			out.MaybeDie(err, "unable to parse topic partitions replicas: %v", err)
 
@@ -51,6 +49,8 @@ reassignment for that partition.
 				TimeoutMillis: cl.TimeoutMillis(),
 			}
 			for topic, partitions := range tprs {
+				if len(partitions) == 0 {
+				}
 				t := kmsg.AlterPartitionAssignmentsRequestTopic{
 					Topic: topic,
 				}
@@ -92,15 +92,10 @@ reassignment for that partition.
 			}
 		},
 	}
-
-	cmd.Flags().StringArrayVarP(&topicPartReplicas, "topic", "t", nil, "topic, partitions, and replica destinations; repeatable")
-	return cmd
 }
 
 func listPartitionReassignments(cl *client.Client) *cobra.Command {
-	var topicParts []string
-
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List partition reassignments.",
@@ -114,7 +109,7 @@ where the numbers correspond to partitions for a topic.
 
 If no topics are specified, this lists all active reassignments.
 `,
-		Run: func(_ *cobra.Command, args []string) {
+		Run: func(_ *cobra.Command, topicParts []string) {
 			tps, err := flagutil.ParseTopicPartitions(topicParts)
 			out.MaybeDie(err, "unable to parse topic partitions: %v", err)
 
@@ -122,6 +117,9 @@ If no topics are specified, this lists all active reassignments.
 				TimeoutMillis: cl.TimeoutMillis(),
 			}
 			for topic, partitions := range tps {
+				if len(partitions) == 0 {
+					out.Die("topic %s has no partitions specified to list", topic)
+				}
 				req.Topics = append(req.Topics, kmsg.ListPartitionReassignmentsRequestTopic{
 					Topic:      topic,
 					Partitions: partitions,
@@ -153,8 +151,4 @@ If no topics are specified, this lists all active reassignments.
 			}
 		},
 	}
-
-	cmd.Flags().StringArrayVarP(&topicParts, "topic", "t", nil, "topic and partitions to list partition reassignments for; repeatable")
-
-	return cmd
 }

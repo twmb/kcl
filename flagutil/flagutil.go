@@ -42,7 +42,7 @@ func ParseTopicPartitionReplicas(list []string) (map[string]map[int32][]int32, e
 	for _, item := range list {
 		tps := strings.SplitN(item, ":", 2)
 		if len(tps) != 2 {
-			return nil, fmt.Errorf("item %q invalid empty topic", item)
+			return nil, fmt.Errorf("%q invalid empty topic", item)
 		}
 
 		topic := strings.TrimSpace(tps[0])
@@ -52,11 +52,11 @@ func ParseTopicPartitionReplicas(list []string) (map[string]map[int32][]int32, e
 		for _, partitionReplicasRaw := range strings.Split(tps[1], ";") {
 			partitionReplicas := strings.SplitN(partitionReplicasRaw, "->", 2)
 			if len(partitionReplicas) != 2 {
-				return nil, fmt.Errorf("item %q invalid partition->replicas bit %q", item, partitionReplicasRaw)
+				return nil, fmt.Errorf("%q invalid partition->replicas bit %q", item, partitionReplicasRaw)
 			}
 			partition, err := strconv.Atoi(strings.TrimSpace(partitionReplicas[0]))
 			if err != nil {
-				return nil, fmt.Errorf("item %q invalid partition in %q", item, partitionReplicasRaw)
+				return nil, fmt.Errorf("%q invalid partition in %q", item, partitionReplicasRaw)
 			}
 			p := int32(partition)
 			prs[p] = nil
@@ -67,10 +67,16 @@ func ParseTopicPartitionReplicas(list []string) (map[string]map[int32][]int32, e
 				}
 				replica, err := strconv.Atoi(r)
 				if err != nil {
-					return nil, fmt.Errorf("item %q invalid replica in %q", item, partitionReplicasRaw)
+					return nil, fmt.Errorf("%q invalid replica in %q", item, partitionReplicasRaw)
 				}
 				prs[p] = append(prs[p], int32(replica))
 			}
+			if len(prs[p]) == 0 {
+				return nil, fmt.Errorf("%q has no replicas specified", item)
+			}
+		}
+		if len(prs) == 0 {
+			return nil, fmt.Errorf("%q has no partitions specified", item)
 		}
 	}
 	return tprs, nil
