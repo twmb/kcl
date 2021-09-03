@@ -1,3 +1,8 @@
+v0.7.0
+===
+
+This release bumps franz-go to v1.0.0, and drops the -t flag from partas.
+
 v0.6.0
 ===
 
