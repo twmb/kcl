@@ -117,13 +117,10 @@ func topicListCommand(cl *client.Client) *cobra.Command {
 		Short:   "List all topics",
 		Long:    "List all topics (alias for metadata -t)",
 		Run: func(_ *cobra.Command, _ []string) {
-			args := []string{"-t"}
-			if detailed {
-				args = append(args, "-d")
-			}
-			cmd := metadata.Command(cl)
-			cmd.SetArgs(args)
-			cmd.Execute()
+			req := kmsg.NewPtrMetadataRequest()
+			resp, err := req.RequestWith(context.Background(), cl.Client())
+			out.MaybeDie(err, "unable to list topics: %v", err)
+			metadata.PrintTopics(resp.Version, resp.Topics, false, detailed)
 		},
 	}
 	cmd.Flags().BoolVarP(&detailed, "detailed", "d", false, "include detailed information about all topic partitions")

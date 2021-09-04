@@ -108,7 +108,7 @@ If the brokers section is printed, the controller broker is marked with *.
 				if includeHeader {
 					fmt.Printf("TOPICS\n======\n")
 				}
-				printTopics(resp.Version, resp.Topics, pinternal, detailed)
+				PrintTopics(resp.Version, resp.Topics, pinternal, detailed)
 			}
 		},
 	}
@@ -148,7 +148,7 @@ func printBrokers(controllerID int32, brokers []kmsg.MetadataResponseBroker) {
 	}
 }
 
-func printTopics(version int16, topics []kmsg.MetadataResponseTopic, pinternal, detailed bool) {
+func PrintTopics(version int16, topics []kmsg.MetadataResponseTopic, pinternal, detailed bool) {
 	sort.Slice(topics, func(i, j int) bool {
 		l := topics[i].Topic
 		r := topics[j].Topic
