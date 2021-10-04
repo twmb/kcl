@@ -298,6 +298,7 @@ func probeVersion(cl *client.Client) {
 
 func rawCommand(cl *client.Client) *cobra.Command {
 	var key int16
+	var b int
 	cmd := &cobra.Command{
 		Use:   "raw-req",
 		Short: "Issue an arbitrary request parsed from JSON read from STDIN.",
@@ -313,12 +314,20 @@ func rawCommand(cl *client.Client) *cobra.Command {
 			out.MaybeDie(err, "unable to unmarshal stdin: %v", err)
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			kresp, err := cl.Client().Request(ctx, req)
+			var r interface {
+				Request(context.Context, kmsg.Request) (kmsg.Response, error)
+			}
+			r = cl.Client()
+			if b >= 0 {
+				r = cl.Client().Broker(b)
+			}
+			kresp, err := r.Request(ctx, req)
 			out.MaybeDie(err, "response error: %v", err)
 			out.ExitJSON(kresp)
 		},
 	}
 	cmd.Flags().Int16VarP(&key, "key", "k", -1, "request key")
+	cmd.Flags().IntVarP(&b, "broker", "b", -1, "specific broker to issue this request to, if non-negative")
 	return cmd
 }
 
