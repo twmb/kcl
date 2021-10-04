@@ -218,7 +218,7 @@ func (c *cfger) alterIncremental() {
 	for _, kv := range c.parsedKVs {
 		req.Resources[0].Configs = append(req.Resources[0].Configs, kmsg.IncrementalAlterConfigsRequestResourceConfig{
 			Name:  kv.k,
-			Op:    kv.op,
+			Op:    kmsg.IncrementalAlterConfigOp(kv.op),
 			Value: kv.v,
 		})
 	}
