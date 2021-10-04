@@ -267,16 +267,11 @@ Both --set and --del can be specified many times.
 			tw := out.BeginTabWrite()
 			defer tw.Flush()
 
-			fmt.Fprint(tw, "USER\tERROR\tMESSAGE\n")
+			fmt.Fprint(tw, "USER\tERROR\n")
 			for _, res := range resp.Results {
-				msg := ""
-				if res.ErrorMessage != nil {
-					msg = *res.ErrorMessage
-				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\n",
+				fmt.Fprintf(tw, "%s\t%v\n",
 					res.User,
-					kerr.ErrorForCode(res.ErrorCode),
-					msg)
+					kerr.ErrorForCode(res.ErrorCode))
 			}
 		},
 	}
