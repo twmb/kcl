@@ -406,8 +406,8 @@ type describedGroupMember struct {
 	InstanceID       *string
 	ClientID         string
 	ClientHost       string
-	MemberMetadata   kmsg.GroupMemberMetadata
-	MemberAssignment kmsg.GroupMemberAssignment
+	MemberMetadata   kmsg.ConsumerMemberMetadata
+	MemberAssignment kmsg.ConsumerMemberAssignment
 }
 
 type describedGroup struct {

@@ -255,7 +255,7 @@ func (co *consumeOutput) formatGroupMetadata(dst []byte, r *kgo.Record) ([]byte,
 				continue
 			}
 
-			var m kmsg.GroupMemberMetadata
+			var m kmsg.ConsumerMemberMetadata
 			if err := m.ReadFrom(member.Subscription); err != nil {
 				fmt.Fprintf(tw, "\t\tSubscription\t(could not decode %d bytes)\n", len(member.Subscription))
 			} else {
@@ -290,7 +290,7 @@ func (co *consumeOutput) formatGroupMetadata(dst []byte, r *kgo.Record) ([]byte,
 					fmt.Fprintf(tw, "\t\t      OwnedPartitions\t%s\n", sb.String())
 				}
 			}
-			var a kmsg.GroupMemberAssignment
+			var a kmsg.ConsumerMemberAssignment
 			if err := a.ReadFrom(member.Assignment); err != nil {
 				fmt.Fprintf(tw, "\t\tAssignment\t(could not decode %d bytes)\n", len(member.Assignment))
 			} else {
