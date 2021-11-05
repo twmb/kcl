@@ -168,9 +168,13 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 		Args:  cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
 			var v *kversion.Versions
+			ov := version
 			version = strings.TrimPrefix(version, "v")
 			switch version {
 			default:
+				out.Die("unknown version %q", ov)
+
+			case "":
 				kresp, err := cl.Client().Request(context.Background(), apiVersionsRequest())
 				out.MaybeDie(err, "unable to request API versions: %v", err)
 
