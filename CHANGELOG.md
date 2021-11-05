@@ -1,3 +1,9 @@
+v0.8.0
+===
+
+This release contains a bugfix for franz-go and allows directing raw requests
+to specific brokers.
+
 v0.7.0
 ===
 
