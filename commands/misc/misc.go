@@ -223,6 +223,12 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 				v = kversion.V2_7_0()
 			case "2.8", "2.8.0":
 				v = kversion.V2_8_0()
+			case "3.0", "3.0.0":
+				v = kversion.V3_0_0()
+			case "3.1", "3.1.0":
+				v = kversion.V3_1_0()
+			case "3.2", "3.2.0":
+				v = kversion.V3_2_0()
 			}
 
 			tw := out.BeginTabWrite()
