@@ -39,18 +39,15 @@ func describeClientQuotas(cl *client.Client) *cobra.Command {
 
 As mentioned in KIP-546, "by default, quotas are defined in terms of a user and
 client ID, where the user acts as an opaque principal name, and the client ID
-as a generic group identifier". The values for the user and the client-id can
-be named, defaulted, or omitted entirely.
+as a generic group identifier". KIP-612 added support for ips ("ip").
 
 Describe client quotas takes an input list of named entities, default entities,
 or omitted (any) entities and returns a all matched quotas and their
 keys and values.
 
-Named entities are in the format key=value, where key is either user or
-client-id and value is the name to be matched.
-
-Default entities and omitted (any) entities are in the format key, where key is
-the user or client-id.
+Named entities are in the format key=value, where key is either user,
+client-id, or ip, and value is the name to be matched. Default entities and
+omitted (any) entities just use the key.
 
 This command is a filtering type of command, where anything that passes the
 filter specified by flags is returned.
@@ -65,6 +62,7 @@ filter specified by flags is returned.
 			validType := map[string]bool{
 				"user":      true,
 				"client-id": true,
+				"ip":        true,
 			}
 
 			for _, name := range names {
@@ -75,7 +73,7 @@ filter specified by flags is returned.
 				k, v := split[0], split[1]
 				k = strings.ToLower(k)
 				if !validType[k] {
-					out.Die("name type %q is invalid (allowed: user, client-id)", split[0])
+					out.Die("name type %q is invalid (allowed: user, client-id, ip)", split[0])
 				}
 				req.Components = append(req.Components, kmsg.DescribeClientQuotasRequestComponent{
 					EntityType: k,
@@ -86,7 +84,7 @@ filter specified by flags is returned.
 
 			for _, def := range defaults {
 				if !validType[def] {
-					out.Die("default type %q is invalid (allowed: user, client-id)", def)
+					out.Die("default type %q is invalid (allowed: user, client-id, ip)", def)
 				}
 				req.Components = append(req.Components, kmsg.DescribeClientQuotasRequestComponent{
 					EntityType: def,
@@ -96,7 +94,7 @@ filter specified by flags is returned.
 
 			for _, a := range any {
 				if !validType[a] {
-					out.Die("any type %q is invalid (allowed: user, client-id)", a)
+					out.Die("any type %q is invalid (allowed: user, client-id, ip)", a)
 				}
 				req.Components = append(req.Components, kmsg.DescribeClientQuotasRequestComponent{
 					EntityType: a,
@@ -133,16 +131,16 @@ filter specified by flags is returned.
 				fmt.Println("}")
 
 				for _, value := range entry.Values {
-					fmt.Printf("%s=%v", value.Key, value.Value)
+					fmt.Printf("%s=%v\n", value.Key, value.Value)
 				}
 				fmt.Println()
 			}
 		},
 	}
 
-	cmd.Flags().StringArrayVar(&names, "name", nil, "type=name pair for exact name matching, where type is user or client-id; repeatable")
-	cmd.Flags().StringArrayVar(&defaults, "default", nil, "type for default matching, where type is user or client-id; repeatable")
-	cmd.Flags().StringArrayVar(&any, "any", nil, "type for any matching (names or default), where type is user or client-id; repeatable")
+	cmd.Flags().StringArrayVar(&names, "name", nil, "type=name pair for exact name matching, where type is user, client-id, or ip; repeatable")
+	cmd.Flags().StringArrayVar(&defaults, "default", nil, "type for default matching, where type is user, client-id, or ip; repeatable")
+	cmd.Flags().StringArrayVar(&any, "any", nil, "type for any matching (names or default), where type is user, client-id, or ip; repeatable")
 	cmd.Flags().BoolVar(&strict, "strict", false, "whether matches are strict, if true, entities with unspecified entity types are excluded")
 
 	return cmd
@@ -189,6 +187,7 @@ matches, this runs an alter on anything that matches.
 			validType := map[string]bool{
 				"user":      true,
 				"client-id": true,
+				"ip":        true,
 			}
 
 			for _, name := range names {
@@ -199,7 +198,7 @@ matches, this runs an alter on anything that matches.
 				k, v := split[0], split[1]
 				k = strings.ToLower(k)
 				if !validType[k] {
-					out.Die("name type %q is invalid (allowed: user, client-id)", split[0])
+					out.Die("name type %q is invalid (allowed: user, client-id, ip)", split[0])
 				}
 				ent.Entity = append(ent.Entity, kmsg.AlterClientQuotasRequestEntryEntity{
 					Type: k,
@@ -209,7 +208,7 @@ matches, this runs an alter on anything that matches.
 
 			for _, def := range defaults {
 				if !validType[def] {
-					out.Die("default type %q is invalid (allowed: user, client-id)", def)
+					out.Die("default type %q is invalid (allowed: user, client-id, ip)", def)
 				}
 				ent.Entity = append(ent.Entity, kmsg.AlterClientQuotasRequestEntryEntity{
 					Type: def,
@@ -278,8 +277,8 @@ matches, this runs an alter on anything that matches.
 		},
 	}
 
-	cmd.Flags().StringArrayVar(&names, "name", nil, "type=name pair for exact name matching, where type is user or client-id; repeatable")
-	cmd.Flags().StringArrayVar(&defaults, "default", nil, "type for default matching, where type is user or client-id; repeatable")
+	cmd.Flags().StringArrayVar(&names, "name", nil, "type=name pair for exact name matching, where type is user, client-id, or ip; repeatable")
+	cmd.Flags().StringArrayVar(&defaults, "default", nil, "type for default matching, where type is user, client-id, or ip; repeatable")
 	cmd.Flags().StringArrayVar(&adds, "add", nil, "key=value quota to add, where the value is a float64; repeatable")
 	cmd.Flags().StringArrayVar(&deletes, "delete", nil, "key quota to delete; repeatable")
 	cmd.Flags().BoolVar(&run, "run", false, "whether to actually run the alter vs. the default to validate only")
