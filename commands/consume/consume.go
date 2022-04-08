@@ -15,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	"github.com/twmb/kcl/client"
@@ -44,6 +45,8 @@ type consumption struct {
 
 	start int64 // if exact range
 	end   int64 // if exact range
+
+	untilOffset int32
 }
 
 // Command returns a consume command.
@@ -129,6 +132,8 @@ func (c *consumption) run(topics []string) {
 	}
 
 	cl := c.cl.Client()
+
+	ctx, cancel := context.WithCancel(context.Background())
 	co := &consumeOutput{
 		cl:              cl,
 		numPerPartition: c.numPerPartition,
@@ -137,8 +142,44 @@ func (c *consumption) run(topics []string) {
 		end:             c.end,
 		group:           c.group,
 		done:            make(chan struct{}),
+		ctx:             ctx,
+		cancel:          cancel,
 	}
-	co.ctx, co.cancel = context.WithCancel(context.Background())
+
+	if c.untilOffset > -1 {
+		adm := kadm.NewClient(cl)
+		offsets, err := adm.ListCommittedOffsets(ctx, topics...)
+		out.MaybeDie(err, "%v", err)
+
+		// Remove any partitions that are not being consumed.
+		if len(c.partitions) > 0 {
+			for t, ps := range offsets {
+				for p := range ps {
+					found := false
+					for _, part := range c.partitions {
+						if part == p {
+							found = true
+							break
+						}
+					}
+
+					if !found {
+						delete(offsets[t], p)
+					}
+				}
+			}
+		}
+
+		co.untilOffset = true
+		for t, ps := range offsets {
+			for p, o := range ps {
+				o.Offset -= int64(c.untilOffset)
+				offsets[t][p] = o
+			}
+		}
+		co.untilOffsets = offsets
+	}
+
 	if isConsumerOffsets {
 		co.buildConsumerOffsetsFormatFn()
 	} else if isTransactionState {
@@ -214,6 +255,9 @@ type consumeOutput struct {
 
 	group string // for filtering __consumer_offsets
 
+	untilOffset  bool
+	untilOffsets kadm.ListedOffsets
+
 	ctx    context.Context
 	cancel func()
 	quit   uint32
@@ -231,11 +275,27 @@ func (co *consumeOutput) consume() {
 	}
 	perPartitionSeen := make(map[topicPartition]int)
 
+	offsetsReached := map[string]map[int32]bool{}
+	if co.untilOffset {
+		for t := range co.untilOffsets {
+			offsetsReached[t] = make(map[int32]bool)
+			for p := range co.untilOffsets[t] {
+				offsetsReached[t][p] = false
+			}
+		}
+	}
+
 	for atomic.LoadUint32(&co.quit) == 0 {
 		fetches := co.cl.PollFetches(co.ctx)
 		// TODO Errors(), print to stderr
 		fetches.EachPartition(func(p kgo.FetchTopicPartition) {
 			p.EachRecord(func(r *kgo.Record) {
+				if co.untilOffset {
+					if r.Offset >= co.untilOffsets[r.Topic][r.Partition].Offset {
+						offsetsReached[r.Topic][r.Partition] = true
+					}
+				}
+
 				// This record offset could be before the requested start
 				// following an out of range reset.
 				if co.start > 0 && r.Offset < co.start ||
@@ -258,6 +318,22 @@ func (co *consumeOutput) consume() {
 
 				if co.num == co.max {
 					os.Exit(0)
+				}
+
+				if co.untilOffset {
+					done := true
+				outer:
+					for t := range offsetsReached {
+						for _, partitionDone := range offsetsReached[t] {
+							if !partitionDone {
+								done = false
+								break outer
+							}
+						}
+					}
+					if done {
+						os.Exit(0)
+					}
 				}
 			})
 		})
