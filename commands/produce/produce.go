@@ -24,6 +24,7 @@ func Command(cl *client.Client) *cobra.Command {
 		escapeChar    string
 		acks          int
 		retries       int
+		tombstone     bool
 	)
 
 	cmd := &cobra.Command{
@@ -145,7 +146,7 @@ Unfortunately, with exact sizing, the format string is unavoidably noisy.
 				out.Die("invalid multi character escape character")
 			}
 
-			reader, err := format.NewReader(informat, escape, maxBuf, os.Stdin)
+			reader, err := format.NewReader(informat, escape, maxBuf, os.Stdin, tombstone)
 			out.MaybeDie(err, "unable to parse in format: %v", err)
 			if reader.ParsesTopic() && len(args) == 1 {
 				out.Die("cannot produce to a specific topic; the parse format specifies that it parses a topic")
@@ -227,6 +228,7 @@ Unfortunately, with exact sizing, the format string is unavoidably noisy.
 	cmd.Flags().StringVarP(&escapeChar, "escape-char", "c", "%", "character to use for beginning a record field escape (accepts any utf8, for both format and verbose-format)")
 	cmd.Flags().IntVar(&acks, "acks", -1, "number of acks required, -1 is all in sync replicas, 1 is leader replica only, 0 is no acks required (0 disables idempotency)")
 	cmd.Flags().IntVar(&retries, "retries", -1, "number of times to retry producing if non-negative")
+	cmd.Flags().BoolVar(&tombstone, "tombstone", false, "produce emtpy values as tombstones")
 
 	return cmd
 }

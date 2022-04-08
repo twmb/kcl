@@ -62,6 +62,7 @@ func Command(cl *client.Client) *cobra.Command {
 		compression string
 		txnID       string
 		verbose     bool
+		tombstone   bool
 	)
 
 	cmd := &cobra.Command{
@@ -178,7 +179,7 @@ func Command(cl *client.Client) *cobra.Command {
 			w, err := format.ParseWriteFormat(writeFormat, escape)
 			out.MaybeDie(err, "unable to parse write format: %v", err)
 
-			r, err := format.NewReader(readFormat, escape, maxBuf, nil)
+			r, err := format.NewReader(readFormat, escape, maxBuf, nil, tombstone)
 			out.MaybeDie(err, "unable to parse read format: %v", err)
 			if r.ParsesTopic() && len(destTopic) != 0 {
 				out.Die("cannot produce to a destination topic; the read format specifies that it parses a topic")
@@ -209,6 +210,7 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd.Flags().StringVarP(&destTopic, "destination-topic", "d", "", "if non-empty, the topic to produce to (read-format must not contain %t)")
 	cmd.Flags().StringVarP(&txnID, "txn-id", "x", "", "transactional ID")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "verbose printing of transactions")
+	cmd.Flags().BoolVar(&tombstone, "tombstone", false, "produce emtpy values as tombstones")
 
 	return cmd
 }
