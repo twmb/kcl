@@ -25,11 +25,13 @@ type Reader struct {
 	parseBits
 	delimiter *delimiter
 	scanmax   int
+
+	tombstone bool
 }
 
-func NewReader(infmt string, escape rune, maxBuf int, reader io.Reader) (*Reader, error) {
-	r := &Reader{r: reader, scanmax: maxBuf}
-	if err := r.parseReadFormat(infmt, escape); err != nil {
+func NewReader(infmt string, escape rune, maxBuf int, reader io.Reader, tombstone bool) (*Reader, error) {
+	r := &Reader{r: reader, scanmax: maxBuf, tombstone: tombstone}
+	if err := r.parseReadFormat(infmt, escape, tombstone); err != nil {
 		return nil, err
 	}
 	return r, nil
@@ -66,7 +68,7 @@ func (p parseBits) parsesKey() bool     { return p&2 != 0 }
 func (p parseBits) parsesValue() bool   { return p&4 != 0 }
 func (p parseBits) parsesHeaders() bool { return p&8 != 0 }
 
-func (r *Reader) parseReadFormat(format string, escape rune) error {
+func (r *Reader) parseReadFormat(format string, escape rune, tombstone bool) error {
 	var (
 		// If we see any sized fields, we ensure that the size comes
 		// before the field with sawXyz. Additionally, we ensure that
@@ -205,12 +207,21 @@ func (r *Reader) parseReadFormat(format string, escape rune) error {
 
 			case 'v':
 				r.setParsesValue()
-				delimFns = append(delimFns, func(in []byte, r *kgo.Record) { r.Value = in })
+				delimFns = append(delimFns, func(in []byte, r *kgo.Record) {
+					if tombstone && len(in) == 0 {
+						in = nil
+					}
+					r.Value = in
+				})
 				if sized {
 					if !sawValueSize {
 						return fmt.Errorf("missing value size parsing %[1]sV before value parsing %[1]sv", escstr)
 					}
 					sizeFns = append(sizeFns, func(r *Reader) error {
+						if tombstone && valueSize == 0 {
+							r.on.Value = nil
+							return nil
+						}
 						r.on.Value = make([]byte, valueSize)
 						_, err := io.ReadFull(r.r, r.on.Value)
 						return err
@@ -251,7 +262,7 @@ func (r *Reader) parseReadFormat(format string, escape rune) error {
 				}
 
 				inr := &Reader{r: r.r, on: new(kgo.Record)}
-				if err := inr.parseReadFormat(format[:at-1], escape); err != nil {
+				if err := inr.parseReadFormat(format[:at-1], escape, tombstone); err != nil {
 					return fmt.Errorf("invalid header specification: %v", err)
 				}
 				format = format[at:]
