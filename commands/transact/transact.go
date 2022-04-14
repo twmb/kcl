@@ -210,7 +210,7 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd.Flags().StringVarP(&destTopic, "destination-topic", "d", "", "if non-empty, the topic to produce to (read-format must not contain %t)")
 	cmd.Flags().StringVarP(&txnID, "txn-id", "x", "", "transactional ID")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "verbose printing of transactions")
-	cmd.Flags().BoolVarP(&tombstone, "tombstone", "Z", false, "produce emtpy values as tombstones")
+	cmd.Flags().BoolVarP(&tombstone, "tombstone", "Z", false, "produce empty values as tombstones")
 
 	return cmd
 }
