@@ -176,6 +176,32 @@ func (c *consumption) run(topics []string) {
 			}
 		}
 
+		startOffsets, err := adm.ListStartOffsets(ctx, topics...)
+
+		for t, ps := range startOffsets {
+			for p := range ps {
+				if lsoPartition, ok := offsets[t]; ok {
+					if lsoOffset, ok := lsoPartition[p]; ok {
+						if ps[p].Offset == lsoOffset.Offset {
+							delete(offsets[t], p)
+						}
+					}
+				}
+			}
+		}
+
+		empty := true
+		for _, ps := range offsets {
+			if len(ps) > 0 {
+				empty = false
+				break
+			}
+		}
+
+		if empty {
+			os.Exit(0)
+		}
+
 		co.untilOffset = true
 		for t, ps := range offsets {
 			for p, o := range ps {
