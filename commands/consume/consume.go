@@ -3,6 +3,7 @@ package consume
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/signal"
 	"regexp"
@@ -46,7 +47,8 @@ type consumption struct {
 	start int64 // if exact range
 	end   int64 // if exact range
 
-	untilOffset int32
+	untilOffset         int
+	untilOffsetAddition bool
 }
 
 // Command returns a consume command.
@@ -131,6 +133,10 @@ func (c *consumption) run(topics []string) {
 		c.cl.AddOpt(kgo.ConsumerGroup(c.group))
 	}
 
+	if c.untilOffset > -1 {
+		c.cl.AddOpt(kgo.KeepControlRecords())
+	}
+
 	cl := c.cl.Client()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -173,7 +179,12 @@ func (c *consumption) run(topics []string) {
 		co.untilOffset = true
 		for t, ps := range offsets {
 			for p, o := range ps {
-				o.Offset -= int64(c.untilOffset)
+				// Either increment or decrement the offset depending on what was provided (+/-).
+				if c.untilOffsetAddition {
+					o.Offset += int64(c.untilOffset)
+				} else {
+					o.Offset -= int64(c.untilOffset)
+				}
 				offsets[t][p] = o
 			}
 		}
@@ -213,6 +224,7 @@ func (c *consumption) run(topics []string) {
 
 func (c *consumption) parseOffset() kgo.Offset {
 	c.end = -1
+	c.untilOffset = -1 // Default to -1 to indicate a noop on this option.
 	o := kgo.NewOffset()
 	switch {
 	case c.offset == "start":
@@ -227,6 +239,23 @@ func (c *consumption) parseOffset() kgo.Offset {
 		v, err := strconv.Atoi(c.offset[6:])
 		out.MaybeDie(err, "unable to parse relative start offset number in %q: %v", c.offset, err)
 		o = o.AtStart().Relative(int64(v))
+	case strings.HasPrefix(c.offset, ":end"):
+		// Parse a format like :end-2 - consume until the end of the partition (current LSO) minus 2.
+		// e.g. if the LSO is 6, consume through offset 4.
+		if len(c.offset) < 6 {
+			out.MaybeDie(errors.New("invalid offset provided"), "must be of the form :end[-/+]<num>")
+		}
+		op := string(c.offset[4])
+		if op != "+" && op != "-" {
+			out.MaybeDie(errors.New("invalid offset provided"), "must be of the form :end[-/+]<num>")
+		}
+		v, err := strconv.Atoi(c.offset[5:])
+		out.MaybeDie(err, "unable to parse relative until offset number in %q: %v", c.offset, err)
+		c.untilOffset = v
+		if op == "+" {
+			c.untilOffsetAddition = true
+		}
+		o = o.AtStart()
 	default:
 		match := regexp.MustCompile(`^(\d+)(?:-(\d+))?$`).FindStringSubmatch(c.offset)
 		if len(match) == 0 {
@@ -313,11 +342,14 @@ func (co *consumeOutput) consume() {
 					perPartitionSeen[tp] = seen
 				}
 
-				co.num++
-				co.format(r, &p.FetchPartition)
+				// Only increment the count and write if it is not a control message.
+				if !r.Attrs.IsControl() {
+					co.num++
+					co.format(r, &p.FetchPartition)
 
-				if co.num == co.max {
-					os.Exit(0)
+					if co.num == co.max {
+						os.Exit(0)
+					}
 				}
 
 				if co.untilOffset {

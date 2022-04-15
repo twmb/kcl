@@ -20,7 +20,7 @@ func (c *consumption) command() *cobra.Command {
 	cmd.Flags().StringVarP(&c.groupAlg, "balancer", "b", "cooperative-sticky", "group balancer to use if group consuming (range, roundrobin, sticky, cooperative-sticky)")
 	cmd.Flags().StringVarP(&c.instanceID, "instance-id", "i", "", "group instance ID to use for consuming; empty means none (implies static membership, Kafka 2.3.0+)")
 	cmd.Flags().Int32SliceVarP(&c.partitions, "partitions", "p", nil, "comma delimited list of specific partitions to consume")
-	cmd.Flags().StringVarP(&c.offset, "offset", "o", "start", "offset to start consuming from (start, end, 47, start+2, end-3)")
+	cmd.Flags().StringVarP(&c.offset, "offset", "o", "start", "offset to start consuming from (start, end, 47, start+2, end-3), or offset to consume until (:end-2, :end+4)")
 	cmd.Flags().IntVarP(&c.num, "num", "n", 0, "quit after consuming this number of records; 0 is unbounded")
 	cmd.Flags().IntVar(&c.numPerPartition, "num-per-partition", 0, "stop printing individual partitions after this many records; 0 is unbounded")
 	cmd.Flags().StringVarP(&c.format, "format", "f", `%v\n`, "output format")
@@ -30,7 +30,6 @@ func (c *consumption) command() *cobra.Command {
 	cmd.Flags().DurationVar(&c.fetchMaxWait, "fetch-max-wait", 5*time.Second, "maximum amount of time to wait when fetching from a broker before the broker replies")
 	cmd.Flags().StringVar(&c.rack, "rack", "", "the rack to use for fetch requests; setting this opts in to nearest replica fetching (Kafka 2.2.0+)")
 	cmd.Flags().BoolVar(&c.readUncommitted, "read-uncommitted", false, "opt in to reading uncommitted offsets")
-	cmd.Flags().Int32Var(&c.untilOffset, "until-offset", -1, "consume each partition up to the latest stable offset, decremented by this value.")
 	return cmd
 }
 
@@ -156,9 +155,4 @@ Combined with producing, these two commands allow you to easily mirror a topic.
 
 If you do not like %, you can switch the escape character with a flag.
 Unfortunately, with exact sizing, the format string is unavoidably noisy.
-
-The --until-offset flag allows kcl to terminate consumption after reaching some
-offset, in relation to the latest stable offsets. For example, if the LSO of
-the topic partition is 25 and --until-offset=2 the topic partition will be
-consumed through offset 23.
 `
