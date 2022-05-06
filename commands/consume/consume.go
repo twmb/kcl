@@ -154,8 +154,8 @@ func (c *consumption) run(topics []string) {
 
 	if c.untilOffset > -1 {
 		adm := kadm.NewClient(cl)
-		offsets, err := adm.ListCommittedOffsets(ctx, topics...)
-		out.MaybeDie(err, "%v", err)
+		offsets, err := adm.ListEndOffsets(ctx, topics...)
+		out.MaybeDie(err, "unable to list end offsets: %v", err)
 
 		// Remove any partitions that are not being consumed.
 		if len(c.partitions) > 0 {
@@ -177,12 +177,13 @@ func (c *consumption) run(topics []string) {
 		}
 
 		startOffsets, err := adm.ListStartOffsets(ctx, topics...)
+		out.MaybeDie(err, "unable to list start offsets: %v", err)
 
 		for t, ps := range startOffsets {
 			for p := range ps {
 				if lsoPartition, ok := offsets[t]; ok {
 					if lsoOffset, ok := lsoPartition[p]; ok {
-						if ps[p].Offset == lsoOffset.Offset {
+						if ps[p].Offset >= lsoOffset.Offset {
 							delete(offsets[t], p)
 						}
 					}
@@ -266,6 +267,12 @@ func (c *consumption) parseOffset() kgo.Offset {
 		out.MaybeDie(err, "unable to parse relative start offset number in %q: %v", c.offset, err)
 		o = o.AtStart().Relative(int64(v))
 	case strings.HasPrefix(c.offset, ":end"):
+		o = o.AtStart()
+		// Handle the exact match case.
+		if c.offset == ":end" {
+			c.untilOffset = 0
+			return o
+		}
 		// Parse a format like :end-2 - consume until the end of the partition (current LSO) minus 2.
 		// e.g. if the LSO is 6, consume through offset 4.
 		if len(c.offset) < 6 {
@@ -277,11 +284,14 @@ func (c *consumption) parseOffset() kgo.Offset {
 		}
 		v, err := strconv.Atoi(c.offset[5:])
 		out.MaybeDie(err, "unable to parse relative until offset number in %q: %v", c.offset, err)
-		c.untilOffset = v
 		if op == "+" {
 			c.untilOffsetAddition = true
 		}
-		o = o.AtStart()
+		// Something like :end--2.
+		if v < 0 {
+			v = v * -1
+		}
+		c.untilOffset = v
 	default:
 		match := regexp.MustCompile(`^(\d+)(?:-(\d+))?$`).FindStringSubmatch(c.offset)
 		if len(match) == 0 {
@@ -330,7 +340,7 @@ func (co *consumeOutput) consume() {
 	}
 	perPartitionSeen := make(map[topicPartition]int)
 
-	offsetsReached := map[string]map[int32]bool{}
+	offsetsReached := make(map[string]map[int32]bool)
 	if co.untilOffset {
 		for t := range co.untilOffsets {
 			offsetsReached[t] = make(map[int32]bool)
@@ -344,10 +354,25 @@ func (co *consumeOutput) consume() {
 		fetches := co.cl.PollFetches(co.ctx)
 		// TODO Errors(), print to stderr
 		fetches.EachPartition(func(p kgo.FetchTopicPartition) {
+			var po int64
+			if co.untilOffset {
+				if t, ok := co.untilOffsets[p.Topic]; ok {
+					if p, ok := t[p.Partition]; ok {
+						po = p.Offset
+					} else {
+						return
+					}
+				} else {
+					return
+				}
+			}
 			p.EachRecord(func(r *kgo.Record) {
 				if co.untilOffset {
-					if r.Offset >= co.untilOffsets[r.Topic][r.Partition].Offset {
-						offsetsReached[r.Topic][r.Partition] = true
+					if r.Offset >= po {
+						delete(offsetsReached[r.Topic], r.Partition)
+						if len(offsetsReached[r.Topic]) == 0 {
+							delete(offsetsReached, r.Topic)
+						}
 					}
 				}
 
@@ -379,17 +404,7 @@ func (co *consumeOutput) consume() {
 				}
 
 				if co.untilOffset {
-					done := true
-				outer:
-					for t := range offsetsReached {
-						for _, partitionDone := range offsetsReached[t] {
-							if !partitionDone {
-								done = false
-								break outer
-							}
-						}
-					}
-					if done {
+					if len(offsetsReached) == 0 {
 						os.Exit(0)
 					}
 				}
