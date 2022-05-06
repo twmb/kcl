@@ -239,7 +239,7 @@ Unfortunately, with exact sizing, the format string is unavoidably noisy.
 	cmd.Flags().IntVar(&acks, "acks", -1, "number of acks required, -1 is all in sync replicas, 1 is leader replica only, 0 is no acks required (0 disables idempotency)")
 	cmd.Flags().IntVar(&retries, "retries", -1, "number of times to retry producing if non-negative")
 	cmd.Flags().BoolVarP(&tombstone, "tombstone", "Z", false, "produce empty values as tombstones")
-	cmd.Flags().IntVarP(&partition, "partition", "p", -1, "the partition to produce to. A negative value (the default) indicates that the default partitioner will be used.")
+	cmd.Flags().IntVarP(&partition, "partition", "p", -1, "a specific partition to produce to, if non-negative")
 
 	return cmd
 }
