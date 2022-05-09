@@ -25,7 +25,7 @@ func Command(cl *client.Client) *cobra.Command {
 		acks          int
 		retries       int
 		tombstone     bool
-		partition     int
+		partition     int32
 	)
 
 	cmd := &cobra.Command{
@@ -214,9 +214,8 @@ Unfortunately, with exact sizing, the format string is unavoidably noisy.
 					r.Topic = args[0]
 				}
 
-				if partition > -1 {
-					r.Partition = int32(partition)
-				}
+				// Override the partition in the case when the manual partitioner is used.
+				r.Partition = partition
 
 				cl.Client().Produce(context.Background(), r, func(r *kgo.Record, err error) {
 					out.MaybeDie(err, "unable to produce record: %v", err)
@@ -239,7 +238,7 @@ Unfortunately, with exact sizing, the format string is unavoidably noisy.
 	cmd.Flags().IntVar(&acks, "acks", -1, "number of acks required, -1 is all in sync replicas, 1 is leader replica only, 0 is no acks required (0 disables idempotency)")
 	cmd.Flags().IntVar(&retries, "retries", -1, "number of times to retry producing if non-negative")
 	cmd.Flags().BoolVarP(&tombstone, "tombstone", "Z", false, "produce empty values as tombstones")
-	cmd.Flags().IntVarP(&partition, "partition", "p", -1, "a specific partition to produce to, if non-negative")
+	cmd.Flags().Int32VarP(&partition, "partition", "p", -1, "a specific partition to produce to, if non-negative")
 
 	return cmd
 }
