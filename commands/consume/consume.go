@@ -47,8 +47,8 @@ type consumption struct {
 	start int64 // if exact range
 	end   int64 // if exact range
 
-	untilOffset         int
-	untilOffsetAddition bool
+	untilOffset    int
+	addUntilOffset bool
 }
 
 // Command returns a consume command.
@@ -181,9 +181,9 @@ func (c *consumption) run(topics []string) {
 
 		for t, ps := range startOffsets {
 			for p := range ps {
-				if lsoPartition, ok := offsets[t]; ok {
-					if lsoOffset, ok := lsoPartition[p]; ok {
-						if ps[p].Offset >= lsoOffset.Offset {
+				if hwmPartition, ok := offsets[t]; ok {
+					if hwmOffset, ok := hwmPartition[p]; ok {
+						if ps[p].Offset >= hwmOffset.Offset {
 							delete(offsets[t], p)
 						}
 					}
@@ -192,10 +192,12 @@ func (c *consumption) run(topics []string) {
 		}
 
 		empty := true
-		for _, ps := range offsets {
+		for t, ps := range offsets {
 			if len(ps) > 0 {
 				empty = false
-				break
+			} else {
+				// Remove any topics that have no partitions.
+				delete(offsets, t)
 			}
 		}
 
@@ -207,7 +209,7 @@ func (c *consumption) run(topics []string) {
 		for t, ps := range offsets {
 			for p, o := range ps {
 				// Either increment or decrement the offset depending on what was provided (+/-).
-				if c.untilOffsetAddition {
+				if c.addUntilOffset {
 					o.Offset += int64(c.untilOffset)
 				} else {
 					o.Offset -= int64(c.untilOffset)
@@ -273,7 +275,7 @@ func (c *consumption) parseOffset() kgo.Offset {
 			c.untilOffset = 0
 			return o
 		}
-		// Parse a format like :end-2 - consume until the end of the partition (current LSO) minus 2.
+		// Parse a format like :end-2 - consume until the end of the partition (current HWM) minus 2.
 		// e.g. if the LSO is 6, consume through offset 4.
 		if len(c.offset) < 6 {
 			out.MaybeDie(errors.New("invalid offset provided"), "must be of the form :end[-/+]<num>")
@@ -285,11 +287,11 @@ func (c *consumption) parseOffset() kgo.Offset {
 		v, err := strconv.Atoi(c.offset[5:])
 		out.MaybeDie(err, "unable to parse relative until offset number in %q: %v", c.offset, err)
 		if op == "+" {
-			c.untilOffsetAddition = true
+			c.addUntilOffset = true
 		}
 		// Something like :end--2.
 		if v < 0 {
-			v = v * -1
+			v = -v
 		}
 		c.untilOffset = v
 	default:
@@ -340,13 +342,11 @@ func (co *consumeOutput) consume() {
 	}
 	perPartitionSeen := make(map[topicPartition]int)
 
-	offsetsReached := make(map[string]map[int32]bool)
-	if co.untilOffset {
-		for t := range co.untilOffsets {
-			offsetsReached[t] = make(map[int32]bool)
-			for p := range co.untilOffsets[t] {
-				offsetsReached[t][p] = false
-			}
+	offsetsRemaining := make(map[string]map[int32]struct{})
+	for t := range co.untilOffsets {
+		offsetsRemaining[t] = make(map[int32]struct{})
+		for p := range co.untilOffsets[t] {
+			offsetsRemaining[t][p] = struct{}{}
 		}
 	}
 
@@ -354,26 +354,30 @@ func (co *consumeOutput) consume() {
 		fetches := co.cl.PollFetches(co.ctx)
 		// TODO Errors(), print to stderr
 		fetches.EachPartition(func(p kgo.FetchTopicPartition) {
-			var po int64
+			partEndOffset := int64(-1)
 			if co.untilOffset {
-				if t, ok := co.untilOffsets[p.Topic]; ok {
-					if p, ok := t[p.Partition]; ok {
-						po = p.Offset
-					} else {
-						return
-					}
-				} else {
+				t, ok := co.untilOffsets[p.Topic]
+				if !ok {
+					co.cl.PauseFetchTopics(p.Topic)
 					return
 				}
+
+				p, ok := t[p.Partition]
+				if !ok {
+					co.cl.PauseFetchPartitions(map[string][]int32{p.Topic: []int32{p.Partition}})
+					return
+				}
+
+				partEndOffset = p.Offset
 			}
+
 			p.EachRecord(func(r *kgo.Record) {
-				if co.untilOffset {
-					if r.Offset >= po {
-						delete(offsetsReached[r.Topic], r.Partition)
-						if len(offsetsReached[r.Topic]) == 0 {
-							delete(offsetsReached, r.Topic)
-						}
+				if partEndOffset != -1 && r.Offset >= partEndOffset {
+					delete(offsetsRemaining[r.Topic], r.Partition)
+					if len(offsetsRemaining[r.Topic]) == 0 {
+						delete(offsetsRemaining, r.Topic)
 					}
+					co.cl.PauseFetchPartitions(map[string][]int32{r.Topic: []int32{r.Partition}})
 				}
 
 				// This record offset could be before the requested start
@@ -403,10 +407,8 @@ func (co *consumeOutput) consume() {
 					}
 				}
 
-				if co.untilOffset {
-					if len(offsetsReached) == 0 {
-						os.Exit(0)
-					}
+				if len(co.untilOffsets) != 0 && len(offsetsRemaining) == 0 {
+					os.Exit(0)
 				}
 			})
 		})
