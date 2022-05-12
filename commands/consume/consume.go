@@ -3,6 +3,7 @@ package consume
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/signal"
 	"regexp"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	"github.com/twmb/kcl/client"
@@ -44,6 +46,9 @@ type consumption struct {
 
 	start int64 // if exact range
 	end   int64 // if exact range
+
+	untilOffset    int
+	addUntilOffset bool
 }
 
 // Command returns a consume command.
@@ -128,7 +133,13 @@ func (c *consumption) run(topics []string) {
 		c.cl.AddOpt(kgo.ConsumerGroup(c.group))
 	}
 
+	if c.untilOffset > -1 {
+		c.cl.AddOpt(kgo.KeepControlRecords())
+	}
+
 	cl := c.cl.Client()
+
+	ctx, cancel := context.WithCancel(context.Background())
 	co := &consumeOutput{
 		cl:              cl,
 		numPerPartition: c.numPerPartition,
@@ -137,8 +148,78 @@ func (c *consumption) run(topics []string) {
 		end:             c.end,
 		group:           c.group,
 		done:            make(chan struct{}),
+		ctx:             ctx,
+		cancel:          cancel,
 	}
-	co.ctx, co.cancel = context.WithCancel(context.Background())
+
+	if c.untilOffset > -1 {
+		adm := kadm.NewClient(cl)
+		offsets, err := adm.ListEndOffsets(ctx, topics...)
+		out.MaybeDie(err, "unable to list end offsets: %v", err)
+
+		// Remove any partitions that are not being consumed.
+		if len(c.partitions) > 0 {
+			for t, ps := range offsets {
+				for p := range ps {
+					found := false
+					for _, part := range c.partitions {
+						if part == p {
+							found = true
+							break
+						}
+					}
+
+					if !found {
+						delete(offsets[t], p)
+					}
+				}
+			}
+		}
+
+		startOffsets, err := adm.ListStartOffsets(ctx, topics...)
+		out.MaybeDie(err, "unable to list start offsets: %v", err)
+
+		for t, ps := range startOffsets {
+			for p := range ps {
+				if hwmPartition, ok := offsets[t]; ok {
+					if hwmOffset, ok := hwmPartition[p]; ok {
+						if ps[p].Offset >= hwmOffset.Offset {
+							delete(offsets[t], p)
+						}
+					}
+				}
+			}
+		}
+
+		empty := true
+		for t, ps := range offsets {
+			if len(ps) > 0 {
+				empty = false
+			} else {
+				// Remove any topics that have no partitions.
+				delete(offsets, t)
+			}
+		}
+
+		if empty {
+			os.Exit(0)
+		}
+
+		co.untilOffset = true
+		for t, ps := range offsets {
+			for p, o := range ps {
+				// Either increment or decrement the offset depending on what was provided (+/-).
+				if c.addUntilOffset {
+					o.Offset += int64(c.untilOffset)
+				} else {
+					o.Offset -= int64(c.untilOffset)
+				}
+				offsets[t][p] = o
+			}
+		}
+		co.untilOffsets = offsets
+	}
+
 	if isConsumerOffsets {
 		co.buildConsumerOffsetsFormatFn()
 	} else if isTransactionState {
@@ -172,6 +253,7 @@ func (c *consumption) run(topics []string) {
 
 func (c *consumption) parseOffset() kgo.Offset {
 	c.end = -1
+	c.untilOffset = -1 // Default to -1 to indicate a noop on this option.
 	o := kgo.NewOffset()
 	switch {
 	case c.offset == "start":
@@ -186,6 +268,32 @@ func (c *consumption) parseOffset() kgo.Offset {
 		v, err := strconv.Atoi(c.offset[6:])
 		out.MaybeDie(err, "unable to parse relative start offset number in %q: %v", c.offset, err)
 		o = o.AtStart().Relative(int64(v))
+	case strings.HasPrefix(c.offset, ":end"):
+		o = o.AtStart()
+		// Handle the exact match case.
+		if c.offset == ":end" {
+			c.untilOffset = 0
+			return o
+		}
+		// Parse a format like :end-2 - consume until the end of the partition (current HWM) minus 2.
+		// e.g. if the LSO is 6, consume through offset 4.
+		if len(c.offset) < 6 {
+			out.MaybeDie(errors.New("invalid offset provided"), "must be of the form :end[-/+]<num>")
+		}
+		op := string(c.offset[4])
+		if op != "+" && op != "-" {
+			out.MaybeDie(errors.New("invalid offset provided"), "must be of the form :end[-/+]<num>")
+		}
+		v, err := strconv.Atoi(c.offset[5:])
+		out.MaybeDie(err, "unable to parse relative until offset number in %q: %v", c.offset, err)
+		if op == "+" {
+			c.addUntilOffset = true
+		}
+		// Something like :end--2.
+		if v < 0 {
+			v = -v
+		}
+		c.untilOffset = v
 	default:
 		match := regexp.MustCompile(`^(\d+)(?:-(\d+))?$`).FindStringSubmatch(c.offset)
 		if len(match) == 0 {
@@ -214,6 +322,9 @@ type consumeOutput struct {
 
 	group string // for filtering __consumer_offsets
 
+	untilOffset  bool
+	untilOffsets kadm.ListedOffsets
+
 	ctx    context.Context
 	cancel func()
 	quit   uint32
@@ -231,11 +342,51 @@ func (co *consumeOutput) consume() {
 	}
 	perPartitionSeen := make(map[topicPartition]int)
 
+	offsetsRemaining := make(map[string]map[int32]struct{})
+	for t := range co.untilOffsets {
+		offsetsRemaining[t] = make(map[int32]struct{})
+		for p := range co.untilOffsets[t] {
+			offsetsRemaining[t][p] = struct{}{}
+		}
+	}
+
 	for atomic.LoadUint32(&co.quit) == 0 {
+		if len(co.untilOffsets) != 0 && len(offsetsRemaining) == 0 {
+			os.Exit(0)
+		}
+
 		fetches := co.cl.PollFetches(co.ctx)
 		// TODO Errors(), print to stderr
 		fetches.EachPartition(func(p kgo.FetchTopicPartition) {
+			partEndOffset := int64(-1)
+			if co.untilOffset {
+				t, ok := co.untilOffsets[p.Topic]
+				if !ok {
+					co.cl.PauseFetchTopics(p.Topic)
+					return
+				}
+
+				p, ok := t[p.Partition]
+				if !ok {
+					co.cl.PauseFetchPartitions(map[string][]int32{p.Topic: []int32{p.Partition}})
+					return
+				}
+
+				partEndOffset = p.Offset
+			}
+
 			p.EachRecord(func(r *kgo.Record) {
+				if partEndOffset != -1 && r.Offset >= partEndOffset {
+					delete(offsetsRemaining[r.Topic], r.Partition)
+					if len(offsetsRemaining[r.Topic]) == 0 {
+						delete(offsetsRemaining, r.Topic)
+					}
+					co.cl.PauseFetchPartitions(map[string][]int32{r.Topic: []int32{r.Partition}})
+					if r.Offset > partEndOffset {
+						return
+					}
+				}
+
 				// This record offset could be before the requested start
 				// following an out of range reset.
 				if co.start > 0 && r.Offset < co.start ||
@@ -253,11 +404,14 @@ func (co *consumeOutput) consume() {
 					perPartitionSeen[tp] = seen
 				}
 
-				co.num++
-				co.format(r, &p.FetchPartition)
+				// Only increment the count and write if it is not a control message.
+				if !r.Attrs.IsControl() {
+					co.num++
+					co.format(r, &p.FetchPartition)
 
-				if co.num == co.max {
-					os.Exit(0)
+					if co.num == co.max {
+						os.Exit(0)
+					}
 				}
 			})
 		})
