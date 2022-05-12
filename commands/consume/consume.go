@@ -351,6 +351,10 @@ func (co *consumeOutput) consume() {
 	}
 
 	for atomic.LoadUint32(&co.quit) == 0 {
+		if len(co.untilOffsets) != 0 && len(offsetsRemaining) == 0 {
+			os.Exit(0)
+		}
+
 		fetches := co.cl.PollFetches(co.ctx)
 		// TODO Errors(), print to stderr
 		fetches.EachPartition(func(p kgo.FetchTopicPartition) {
@@ -378,6 +382,9 @@ func (co *consumeOutput) consume() {
 						delete(offsetsRemaining, r.Topic)
 					}
 					co.cl.PauseFetchPartitions(map[string][]int32{r.Topic: []int32{r.Partition}})
+					if r.Offset > partEndOffset {
+						return
+					}
 				}
 
 				// This record offset could be before the requested start
@@ -405,10 +412,6 @@ func (co *consumeOutput) consume() {
 					if co.num == co.max {
 						os.Exit(0)
 					}
-				}
-
-				if len(co.untilOffsets) != 0 && len(offsetsRemaining) == 0 {
-					os.Exit(0)
 				}
 			})
 		})
