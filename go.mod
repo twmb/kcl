@@ -1,14 +1,23 @@
 module github.com/twmb/kcl
 
-go 1.15
+go 1.18
 
 require (
-	github.com/BurntSushi/toml v0.4.1
-	github.com/aws/aws-sdk-go v1.40.55
-	github.com/spf13/cobra v1.2.1
-	github.com/twmb/franz-go v1.2.3
-	github.com/twmb/franz-go/pkg/kadm v0.0.0-20220331035613-01d0c45d69d2
-	github.com/twmb/franz-go/pkg/kmsg v0.0.0-20211104051938-70808186d5f7
+	github.com/BurntSushi/toml v1.1.0
+	github.com/aws/aws-sdk-go v1.44.29
+	github.com/spf13/cobra v1.4.0
+	github.com/twmb/franz-go v1.6.0
+	github.com/twmb/franz-go/pkg/kadm v1.0.0
+	github.com/twmb/franz-go/pkg/kmsg v1.1.0
 	github.com/twmb/go-strftime v0.0.0-20190915101236-e74f7c4fe4fa
-	golang.org/x/crypto v0.0.0-20210921155107-089bfa567519
+	golang.org/x/crypto v0.0.0-20220525230936-793ad666bf5e
+)
+
+require (
+	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/inconshreveable/mousetrap v1.0.0 // indirect
+	github.com/jmespath/go-jmespath v0.4.0 // indirect
+	github.com/klauspost/compress v1.15.6 // indirect
+	github.com/pierrec/lz4/v4 v4.1.14 // indirect
+	github.com/spf13/pflag v1.0.5 // indirect
 )
