@@ -4,7 +4,14 @@ package group
 import (
 	"context"
 	"fmt"
+	"log"
+	"net/http"
+	"sort"
+	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
 
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -13,6 +20,15 @@ import (
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/flagutil"
 	"github.com/twmb/kcl/out"
+)
+
+var (
+	gGroupsLag = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "drio_kafka_group_lag",
+		Help: "Current lag for all kafka consumer groups",
+	}, []string{
+		"cgname",
+	})
 )
 
 func Command(cl *client.Client) *cobra.Command {
@@ -28,9 +44,90 @@ func Command(cl *client.Client) *cobra.Command {
 		describeCommand(cl),
 		deleteCommand(cl),
 		offsetDeleteCommand(cl),
+		serveLags(cl),
 	)
 
 	return cmd
+}
+
+func serveLags(cl *client.Client) *cobra.Command {
+	var readCommitted bool
+
+	return &cobra.Command{
+		Use:   "server-lags",
+		Short: "Expose lags via prometheus metrics",
+		Args:  cobra.ExactArgs(0),
+		Run: func(_ *cobra.Command, groups []string) {
+			if len(groups) == 0 {
+				groups = listGroups(cl)
+			}
+			if len(groups) == 0 {
+				out.Die("no groups to describe")
+			}
+
+			described := describeGroups(cl, groups)
+			fetchedOffsets := fetchOffsets(cl, groups)
+			listedOffsets := listOffsets(cl, described, readCommitted)
+
+			go func() {
+				for {
+					updateLags(described, fetchedOffsets, listedOffsets)
+					fmt.Printf("Sleeping \n")
+					time.Sleep(10 * time.Second)
+				}
+			}()
+
+			http.Handle("/metrics", promhttp.Handler())
+			port := "8787" // TODO
+			log.Printf("Listening on :%s", port)
+			err := http.ListenAndServe(fmt.Sprintf("localhost:%s", port), nil)
+			if err != nil {
+				log.Panicf("Error starting web server: %s", err)
+			}
+
+		},
+	}
+
+}
+
+func updateLags(
+	groups []describedGroup,
+	fetched map[string]map[int32]offset,
+	listed map[string]map[int32]offset,
+) {
+	lookup := func(m map[string]map[int32]offset, topic string, partition int32) offset {
+		p := m[topic]
+		if p == nil {
+			return offset{at: -1}
+		}
+		o, exists := p[partition]
+		if !exists {
+			return offset{at: -1}
+		}
+		return o
+	}
+
+	sort.Slice(groups, func(i, j int) bool {
+		return groups[i].Group < groups[j].Group
+	})
+
+	for _, group := range groups {
+		for _, member := range group.Members {
+			for _, topic := range member.MemberAssignment.Topics {
+				t := topic.Topic
+				for _, p := range topic.Partitions {
+					committed := lookup(fetched, t, p)
+					end := lookup(listed, t, p)
+
+					if committed.err != nil {
+						fmt.Printf("%s", committed.err)
+					} else {
+						gGroupsLag.WithLabelValues(group.Group).Set(float64(end.at - committed.at))
+					}
+				}
+			}
+		}
+	}
 }
 
 func listCommand(cl *client.Client) *cobra.Command {
