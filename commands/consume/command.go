@@ -30,6 +30,8 @@ func (c *consumption) command() *cobra.Command {
 	cmd.Flags().DurationVar(&c.fetchMaxWait, "fetch-max-wait", 5*time.Second, "maximum amount of time to wait when fetching from a broker before the broker replies")
 	cmd.Flags().StringVar(&c.rack, "rack", "", "the rack to use for fetch requests; setting this opts in to nearest replica fetching (Kafka 2.2.0+)")
 	cmd.Flags().BoolVar(&c.readUncommitted, "read-uncommitted", false, "opt in to reading uncommitted offsets")
+	cmd.Flags().StringVar(&c.protoFile, "proto-file", "", "proto file includes the definition of message structure")
+	cmd.Flags().StringVar(&c.protoMessage, "proto-message", "", "name of a protobuf message structure, should in 'package.message' format")
 	return cmd
 }
 
