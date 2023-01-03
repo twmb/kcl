@@ -156,7 +156,7 @@ func (c *consumption) run(topics []string) {
 	}
 	if c.protoFile != "" {
 		var err error
-		co.pbDecoder, err = NewPBDecoder(c.protoFile, c.protoMessage)
+		co.pbd, err = newPBDecoder(c.protoFile, c.protoMessage)
 		out.MaybeDie(err, "unable to unmarshal pb: %v", err)
 	}
 
@@ -333,7 +333,7 @@ type consumeOutput struct {
 	untilOffset  bool
 	untilOffsets kadm.ListedOffsets
 
-	pbDecoder *PBDecoder
+	pbd *pbDecoder
 
 	ctx    context.Context
 	cancel func()
@@ -417,8 +417,8 @@ func (co *consumeOutput) consume() {
 				// Only increment the count and write if it is not a control message.
 				if !r.Attrs.IsControl() {
 					co.num++
-					if co.pbDecoder != nil {
-						r.Value, _ = co.pbDecoder.JsonString(r.Value)
+					if co.pbd != nil {
+						r.Value, _ = co.pbd.jsonString(r.Value)
 					}
 					co.format(r, &p.FetchPartition)
 

@@ -7,7 +7,7 @@ require (
 	github.com/aws/aws-sdk-go v1.44.29
 	github.com/golang/protobuf v1.5.2
 	github.com/jhump/protoreflect v1.14.0
-	github.com/spf13/cobra v1.4.0
+	github.com/spf13/cobra v1.5.0
 	github.com/twmb/franz-go v1.6.0
 	github.com/twmb/franz-go/pkg/kadm v1.0.0
 	github.com/twmb/franz-go/pkg/kmsg v1.1.0

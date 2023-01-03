@@ -10,12 +10,11 @@ import (
 	"github.com/jhump/protoreflect/dynamic"
 )
 
-type PBDecoder struct {
-	message string
-	md      *desc.MessageDescriptor
+type pbDecoder struct {
+	md *desc.MessageDescriptor
 }
 
-func NewPBDecoder(protoFile string, messageName string) (pbs *PBDecoder, err error) {
+func newPBDecoder(protoFile string, messageName string) (pbs *pbDecoder, err error) {
 	if _, err = os.Stat(protoFile); err != nil {
 		return nil, fmt.Errorf("file %s not found", protoFile)
 	}
@@ -30,10 +29,10 @@ func NewPBDecoder(protoFile string, messageName string) (pbs *PBDecoder, err err
 	if md == nil {
 		return nil, fmt.Errorf("proto-message %s not found, make sure it is in 'package.message' format", messageName)
 	}
-	return &PBDecoder{md: md, message: messageName}, nil
+	return &pbDecoder{md: md}, nil
 }
 
-func (c *PBDecoder) JsonString(pbData []byte) (bytes []byte, err error) {
+func (c *pbDecoder) jsonString(pbData []byte) (bytes []byte, err error) {
 	dyMsg := dynamic.NewMessage(c.md)
 	if err = dyMsg.Unmarshal(pbData); err != nil {
 		return nil, err
