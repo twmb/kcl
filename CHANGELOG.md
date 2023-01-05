@@ -3,7 +3,7 @@ v0.10.0
 
 This release adds `--proto-file` and `--proto-message` to `kcl consume`,
 allowing consume to deserialize protobuf encoded values before printing the
-value (thanks [@moming00](https://github.com/moming00)!. This release also
+value (thanks [@moming00](https://github.com/moming00))!. This release also
 recognizes 3.3 in `kcl misc probe-version`.
 
 v0.9.0
