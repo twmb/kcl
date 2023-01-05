@@ -1,3 +1,26 @@
+v0.10.0
+===
+
+This release adds `--proto-file` and `--proto-message` to `kcl consume`,
+allowing consume to deserialize protobuf encoded values before printing the
+value (thanks [@moming00](https://github.com/moming00)!. This release also
+recognizes 3.3 in `kcl misc probe-version`.
+
+v0.9.0
+===
+
+This release contains some nice improvements to `kcl produce` and `kcl consume`
+from [@Zach-Johnson](https://github.com/Zach-Johnson):
+
+* `kcl produce -Z` now produces tombstones
+* `kcl produce -p` can now produce to a specific partition
+* `kcl consume`'s offset flag is now more intelligent and has consume-until semantics
+
+As well, kcl now detects (through `kcl misc probe-versions`) Kafka 3.0, 3.1,
+and 3.2. Lastly, modules have been updated, most significantly bumping franz-go
+from v1.2.3 to v1.6.0, which contains many bug fixes and improvements.
+
+
 v0.8.0
 ===
 
