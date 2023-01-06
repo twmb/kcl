@@ -180,6 +180,23 @@ This command allows you to easily swap kcl configs. It will look for any file
 NAME or NAME.toml (favoring .toml) in the config directory and link it to the
 default config path.
 `,
+		ValidArgsFunction: func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+			defaultCfg := filepath.Base(cl.DefaultCfgPath())
+			dir := filepath.Dir(cl.DefaultCfgPath())
+			dirents, err := ioutil.ReadDir(dir)
+			if err != nil {
+				return nil, cobra.ShellCompDirectiveError
+			}
+			files := []string{}
+			for _, dirent := range dirents {
+				name := dirent.Name()
+				if name == defaultCfg {
+					continue
+				}
+				files = append(files, name)
+			}
+			return files, cobra.ShellCompDirectiveDefault
+		},
 		Args: cobra.ExactArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
 			if cl.DefaultCfgPath() == "" {
