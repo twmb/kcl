@@ -47,7 +47,7 @@ push a 1.x release.
 If you have a go installation, you can simply
 
 ```
-go install github.com/twmb/kcl
+go install github.com/twmb/kcl@latest
 ```
 
 This will install kcl from the latest release. You can optionally suffix the
