@@ -63,7 +63,7 @@ type Cfg struct {
 
 	TimeoutMillis int32 `toml:"timeout_ms,omitempty"`
 
-	TLS  *CfgTLS  `toml:"tls,omitempty"`
+	TLS  *CfgTLS  `toml:"tls,omitzero"`
 	SASL *CfgSASL `toml:"sasl,omitempty"`
 }
 
