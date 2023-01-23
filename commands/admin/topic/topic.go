@@ -246,7 +246,7 @@ add-partitions -t bar -t baz 1, 2, 3`,
 					currentReplicaCount := len(topic.Partitions[0].Replicas)
 					if currentReplicaCount != len(assignments[0].Replicas) {
 						fmt.Fprintf(os.Stderr, "ERR: requested topic %s has partitions with %d replicas; you cannot create a new partition with %d (must match)",
-							topic.Topic, currentReplicaCount, len(assignments[0].Replicas))
+							*topic.Topic, currentReplicaCount, len(assignments[0].Replicas))
 					}
 				}
 
