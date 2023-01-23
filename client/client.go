@@ -8,7 +8,6 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"math"
 	"net"
 	"os"
@@ -487,7 +486,7 @@ func (c *Client) loadTLS() (*tls.Config, error) {
 	}
 
 	if c.cfg.TLS.CACert != "" {
-		ca, err := ioutil.ReadFile(c.cfg.TLS.CACert)
+		ca, err := os.ReadFile(c.cfg.TLS.CACert)
 		if err != nil {
 			return nil, fmt.Errorf("unable to read CA file %q: %v",
 				c.cfg.TLS.CACert, err)
@@ -505,12 +504,12 @@ func (c *Client) loadTLS() (*tls.Config, error) {
 			return nil, errors.New("both client and key cert paths must be specified, but saw only one")
 		}
 
-		cert, err := ioutil.ReadFile(c.cfg.TLS.ClientCertPath)
+		cert, err := os.ReadFile(c.cfg.TLS.ClientCertPath)
 		if err != nil {
 			return nil, fmt.Errorf("unable to read client cert file %q: %v",
 				c.cfg.TLS.ClientCertPath, err)
 		}
-		key, err := ioutil.ReadFile(c.cfg.TLS.ClientKeyPath)
+		key, err := os.ReadFile(c.cfg.TLS.ClientKeyPath)
 		if err != nil {
 			return nil, fmt.Errorf("unable to read client key file %q: %v",
 				c.cfg.TLS.ClientKeyPath, err)

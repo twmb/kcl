@@ -3,7 +3,6 @@ package myconfig
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -183,7 +182,7 @@ default config path.
 		ValidArgsFunction: func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 			defaultCfg := filepath.Base(cl.DefaultCfgPath())
 			dir := filepath.Dir(cl.DefaultCfgPath())
-			dirents, err := ioutil.ReadDir(dir)
+			dirents, err := os.ReadDir(dir)
 			if err != nil {
 				return nil, cobra.ShellCompDirectiveError
 			}
@@ -215,7 +214,7 @@ default config path.
 				}
 			}
 
-			dirents, err := ioutil.ReadDir(dir)
+			dirents, err := os.ReadDir(dir)
 			out.MaybeDie(err, "unable to read config dir %q: %v", dir, err)
 
 			use := args[0]
@@ -332,7 +331,7 @@ func listCommand(cl *client.Client) *cobra.Command {
 			}
 
 			dir := filepath.Dir(cl.DefaultCfgPath())
-			dirents, err := ioutil.ReadDir(dir)
+			dirents, err := os.ReadDir(dir)
 			out.MaybeDie(err, "unable to read config dir %q: %v", dir, err)
 			for _, dirent := range dirents {
 				name := dirent.Name()
