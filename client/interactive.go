@@ -291,7 +291,7 @@ func write(cfg *Cfg, s *scanner, noHelp bool) {
 	quit := func(msg string, args ...interface{}) {
 		fmt.Printf(msg+"\n", args...)
 		fmt.Println()
-		fmt.Println("\n    To use this new configuration, set KCL_CONFIG_PATH to %s.\n\n", cfgPath)
+		fmt.Printf("\n    To use this new configuration, set KCL_CONFIG_PATH to %s.\n\n", cfgPath)
 		os.Exit(0)
 	}
 
