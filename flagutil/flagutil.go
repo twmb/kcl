@@ -36,7 +36,7 @@ func ParseTopicPartitions(list []string) (map[string][]int32, error) {
 
 // ParseTopicPartitionReplicas parses a list of the following, spaces trimmed:
 //
-//     topic: 4->3,2,1 ; 5->3,2,1
+//	topic: 4->3,2,1 ; 5->3,2,1
 func ParseTopicPartitionReplicas(list []string) (map[string]map[int32][]int32, error) {
 	tprs := make(map[string]map[int32][]int32)
 	for _, item := range list {
