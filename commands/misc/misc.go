@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 	"sort"
 	"strconv"
@@ -320,7 +320,7 @@ func rawCommand(cl *client.Client) *cobra.Command {
 			if req == nil {
 				out.Die("request key %d unknown", key)
 			}
-			raw, err := ioutil.ReadAll(os.Stdin)
+			raw, err := io.ReadAll(os.Stdin)
 			out.MaybeDie(err, "unable to read stdin: %v", err)
 			err = json.Unmarshal(raw, req)
 			out.MaybeDie(err, "unable to unmarshal stdin: %v", err)

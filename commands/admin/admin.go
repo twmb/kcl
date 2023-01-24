@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -196,7 +196,7 @@ delete-records --json-file records.json`,
 					Offset    int64  `json:"offset"`
 				}
 				var fileReqs []fileReq
-				raw, err := ioutil.ReadFile(jsonFile)
+				raw, err := os.ReadFile(jsonFile)
 				out.MaybeDie(err, "unable to read json file: %v", err)
 				err = json.Unmarshal(raw, &fileReqs)
 				out.MaybeDie(err, "unable to unmarshal json file: %v", err)
