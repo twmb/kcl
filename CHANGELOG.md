@@ -1,3 +1,16 @@
+v0.11.0
+===
+
+This release fixes one minor issues, one feature improvement, and now can
+detect Kafka 3.4.
+
+Issue: previously, an empty tls struct would be omitted when marshaled, now it
+is not (meaning tls with no custom certs is preserved). Feature: the myconfig
+command now can autocomplete available configuration files (thanks
+[@robsonpeixoto](https://github.com/robsonpeixoto), as well for the bug fix!).
+Kafka 3.4: all deps have been bumped, and the latest franz-go can detect Kafka
+3.4 from `kcl misc probe-version`.
+
 v0.10.0
 ===
 
