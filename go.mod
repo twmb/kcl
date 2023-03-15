@@ -12,7 +12,7 @@ require (
 	github.com/twmb/franz-go/pkg/kmsg v1.4.0
 	github.com/twmb/go-strftime v0.0.0-20190915101236-e74f7c4fe4fa
 	golang.org/x/crypto v0.7.0
-	google.golang.org/protobuf v1.29.0
+	google.golang.org/protobuf v1.29.1
 )
 
 require (
