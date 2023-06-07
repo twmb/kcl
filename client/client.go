@@ -94,7 +94,10 @@ type Client struct {
 func (c *Client) AsJSON() bool { return c.asJSON }
 
 // TimeoutMillis is what requests that have timeouts should use.
-func (c *Client) TimeoutMillis() int32 { return c.cfg.TimeoutMillis }
+func (c *Client) TimeoutMillis() int32 {
+	c.loadClientOnce()
+	return c.cfg.TimeoutMillis
+}
 
 // New returns a new Client with the given config and installs some
 // persistent flags and commands to root.
@@ -191,6 +194,7 @@ func (c *Client) loadClientOnce() {
 		out.MaybeDie(err, "unable to load client: %v", err)
 	})
 }
+
 func (c *Client) loadTxnSessOnce() {
 	c.once.Do(func() {
 		c.fillOpts()
@@ -551,7 +555,7 @@ func (c *Client) parseLogLevel() {
 	case "STDERR":
 		of = os.Stderr
 	default:
-		f, err := os.OpenFile(c.logFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0666)
+		f, err := os.OpenFile(c.logFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
 		out.MaybeDie(err, "unable to open log-file %q: %v", c.logFile, err)
 		of = f
 	}
