@@ -38,11 +38,12 @@ type Requestor interface {
 }
 
 type CfgTLS struct {
-	InsecureSkipVerify bool   `toml:"insecure,omitempty"`
-	CACert             string `toml:"ca_cert_path,omitempty"`
-	ClientCertPath     string `toml:"client_cert_path,omitempty"`
-	ClientKeyPath      string `toml:"client_key_path,omitempty"`
-	ServerName         string `toml:"server_name,omitempty"`
+	CACert         string `toml:"ca_cert_path,omitempty"`
+	ClientCertPath string `toml:"client_cert_path,omitempty"`
+	ClientKeyPath  string `toml:"client_key_path,omitempty"`
+	ServerName     string `toml:"server_name,omitempty"`
+
+	InsecureSkipVerify bool `toml:"insecure,omitempty"`
 
 	MinVersion       string   `toml:"min_version,omitempty"`
 	CipherSuites     []string `toml:"cipher_suites"`
