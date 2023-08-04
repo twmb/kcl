@@ -43,6 +43,8 @@ type CfgTLS struct {
 	ClientKeyPath  string `toml:"client_key_path,omitempty"`
 	ServerName     string `toml:"server_name,omitempty"`
 
+	InsecureSkipVerify bool `toml:"insecure,omitempty"`
+
 	MinVersion       string   `toml:"min_version,omitempty"`
 	CipherSuites     []string `toml:"cipher_suites"`
 	CurvePreferences []string `toml:"curve_preferences"`
@@ -294,6 +296,7 @@ func (c *Client) processOverrides() {
 		"tls_ca_cert_path":      func(c *Cfg, v string) error { mktls(c); c.TLS.CACert = v; return nil },
 		"tls_client_cert_path":  func(c *Cfg, v string) error { mktls(c); c.TLS.ClientCertPath = v; return nil },
 		"tls_client_key_path":   func(c *Cfg, v string) error { mktls(c); c.TLS.ClientKeyPath = v; return nil },
+		"tls_insecure":          func(c *Cfg, _ string) error { mktls(c); c.TLS.InsecureSkipVerify = true; return nil },
 		"tls_server_name":       func(c *Cfg, v string) error { mktls(c); c.TLS.ServerName = v; return nil },
 		"tls_min_version":       func(c *Cfg, v string) error { mktls(c); c.TLS.MinVersion = v; return nil },
 		"tls_cipher_suites":     func(c *Cfg, v string) error { mktls(c); return intoStrSlice(v, &c.TLS.CipherSuites) },
@@ -444,6 +447,7 @@ func (c *Client) loadTLS() (*tls.Config, error) {
 
 	tc := new(tls.Config)
 
+	tc.InsecureSkipVerify = c.cfg.TLS.InsecureSkipVerify
 	switch strings.ToLower(c.cfg.TLS.MinVersion) {
 	case "", "v1.2", "1.2":
 		tc.MinVersion = tls.VersionTLS12 // the default
