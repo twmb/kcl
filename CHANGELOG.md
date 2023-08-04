@@ -1,3 +1,19 @@
+v0.13.0
+===
+
+This release bumps all deps, adds support for detecting Kafka 3.5 and detecting
+KRaft based Kafka, fixes some internal client bugs (mostly unrelated to what is
+used in kcl), and adds the `tls_insecure` config option (thank you
+[@dbudworth](https://github.com/dbudworth)!).
+
+This also fixes a bug from v0.12.0 where `kcl admin topic create` broke in a way
+that did not support `--config-path`.
+
+v0.12.0
+===
+
+This release bumped all deps, built with 1.20, and set `CGO_ENABLED=0`.
+
 v0.11.0
 ===
 

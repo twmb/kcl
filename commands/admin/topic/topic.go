@@ -36,11 +36,12 @@ func Command(cl *client.Client) *cobra.Command {
 }
 
 func topicCreateCommand(cl *client.Client) *cobra.Command {
-	req := kmsg.CreateTopicsRequest{TimeoutMillis: cl.TimeoutMillis()}
-
-	var numPartitions int32
-	var replicationFactor int16
-	var configKVs []string
+	var (
+		numPartitions     int32
+		replicationFactor int16
+		configKVs         []string
+		validateOnly      bool
+	)
 
 	cmd := &cobra.Command{
 		Use:     "create TOPICS",
@@ -55,6 +56,8 @@ replication factor, and key/value configs.
 		Run: func(_ *cobra.Command, args []string) {
 			kvs, err := kv.Parse(configKVs)
 			out.MaybeDie(err, "unable to parse KVs: %v", err)
+			req := kmsg.CreateTopicsRequest{TimeoutMillis: cl.TimeoutMillis()}
+			req.ValidateOnly = validateOnly
 			var configs []kmsg.CreateTopicsRequestTopicConfig
 			for _, kv := range kvs {
 				configs = append(configs, kmsg.CreateTopicsRequestTopicConfig{
@@ -100,7 +103,7 @@ replication factor, and key/value configs.
 		},
 	}
 
-	cmd.Flags().BoolVarP(&req.ValidateOnly, "dry", "d", false, "dry run: validate the topic creation request; do not create topics (Kafka 0.10.2+)")
+	cmd.Flags().BoolVarP(&validateOnly, "dry", "d", false, "dry run: validate the topic creation request; do not create topics (Kafka 0.10.2+)")
 	cmd.Flags().Int32VarP(&numPartitions, "num-partitions", "p", 20, "number of partitions to create")
 	cmd.Flags().Int16VarP(&replicationFactor, "replication-factor", "r", 1, "number of replicas to have of each partition")
 	cmd.Flags().StringArrayVarP(&configKVs, "kv", "k", nil, "list of key=value config parameters (repeatable, e.g. -k cleanup.policy=compact -k preallocate=true)")
