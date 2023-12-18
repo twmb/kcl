@@ -11,7 +11,7 @@ require (
 	github.com/twmb/franz-go/pkg/kadm v1.9.0
 	github.com/twmb/franz-go/pkg/kmsg v1.6.1
 	github.com/twmb/go-strftime v0.0.0-20190915101236-e74f7c4fe4fa
-	golang.org/x/crypto v0.11.0
+	golang.org/x/crypto v0.17.0
 	google.golang.org/protobuf v1.31.0
 )
 
