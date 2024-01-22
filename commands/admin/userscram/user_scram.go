@@ -213,7 +213,7 @@ Both --set and --del can be specified many times.
 						u.Name = v
 					case "mechanism":
 						u.Mechanism = str2mech(v)
-					case "pasword":
+					case "password":
 						password = v
 					case "iterations":
 						i, err := strconv.ParseInt(v, 10, 32)
