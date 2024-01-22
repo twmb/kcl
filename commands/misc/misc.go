@@ -9,7 +9,6 @@ import (
 	"os"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -168,73 +167,19 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 		Args:  cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
 			var v *kversion.Versions
-			ov := version
-			version = strings.TrimPrefix(version, "v")
-			switch version {
-			default:
-				out.Die("unknown version %q", ov)
-
-			case "":
+			if version == "" {
 				kresp, err := cl.Client().Request(context.Background(), apiVersionsRequest())
 				out.MaybeDie(err, "unable to request API versions: %v", err)
-
 				if cl.AsJSON() {
 					out.ExitJSON(kresp)
 				}
-
 				resp := kresp.(*kmsg.ApiVersionsResponse)
 				v = kversion.FromApiVersionsResponse(resp)
-
-			case "0.8.0", "0.8.0.0":
-				v = kversion.V0_8_0()
-			case "0.8.1", "0.8.1.0":
-				v = kversion.V0_8_1()
-			case "0.8.2", "0.8.2.0":
-				v = kversion.V0_8_2()
-			case "0.9.0", "0.9.0.0":
-				v = kversion.V0_9_0()
-			case "0.10.0", "0.10.0.0":
-				v = kversion.V0_10_0()
-			case "0.10.1", "0.10.1.0":
-				v = kversion.V0_10_1()
-			case "0.10.2", "0.10.2.0":
-				v = kversion.V0_10_2()
-			case "0.11.0", "0.11.0.0":
-				v = kversion.V0_11_0()
-			case "1.0", "1.0.0":
-				v = kversion.V1_0_0()
-			case "1.1", "1.1.0":
-				v = kversion.V1_1_0()
-			case "2.0", "2.0.0":
-				v = kversion.V2_0_0()
-			case "2.1", "2.1.0":
-				v = kversion.V2_1_0()
-			case "2.2", "2.2.0":
-				v = kversion.V2_2_0()
-			case "2.3", "2.3.0":
-				v = kversion.V2_3_0()
-			case "2.4", "2.4.0":
-				v = kversion.V2_4_0()
-			case "2.5", "2.5.0":
-				v = kversion.V2_5_0()
-			case "2.6", "2.6.0":
-				v = kversion.V2_6_0()
-			case "2.7", "2.7.0":
-				v = kversion.V2_7_0()
-			case "2.8", "2.8.0":
-				v = kversion.V2_8_0()
-			case "3.0", "3.0.0":
-				v = kversion.V3_0_0()
-			case "3.1", "3.1.0":
-				v = kversion.V3_1_0()
-			case "3.2", "3.2.0":
-				v = kversion.V3_2_0()
-			case "3.3", "3.3.0":
-				v = kversion.V3_3_0()
-			case "3.4", "3.4.0":
-				v = kversion.V3_4_0()
-			case "3.5", "3.5.0":
-				v = kversion.V3_5_0()
+			} else {
+				v = kversion.FromString(version)
+				if v == nil {
+					out.Die("unknown version %q", version)
+				}
 			}
 
 			tw := out.BeginTabWrite()

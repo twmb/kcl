@@ -339,48 +339,8 @@ func (c *Client) processOverrides() {
 
 func (c *Client) maybeAddMaxVersions() {
 	if c.asVersion != "" {
-		v := strings.TrimPrefix(c.asVersion, "v")
-		var versions *kversion.Versions
-		switch v {
-		case "0.8.0":
-			versions = kversion.V0_8_0()
-		case "0.8.1":
-			versions = kversion.V0_8_1()
-		case "0.8.2":
-			versions = kversion.V0_8_2()
-		case "0.9.0":
-			versions = kversion.V0_9_0()
-		case "0.10.0":
-			versions = kversion.V0_10_0()
-		case "0.10.1":
-			versions = kversion.V0_10_1()
-		case "0.10.2":
-			versions = kversion.V0_10_2()
-		case "0.11.0":
-			versions = kversion.V0_11_0()
-		case "1.0.0", "1.0":
-			versions = kversion.V1_0_0()
-		case "1.1.0", "1.1":
-			versions = kversion.V1_1_0()
-		case "2.0.0", "2.0":
-			versions = kversion.V2_0_0()
-		case "2.1.0", "2.1":
-			versions = kversion.V2_1_0()
-		case "2.2.0", "2.2":
-			versions = kversion.V2_2_0()
-		case "2.3.0", "2.3":
-			versions = kversion.V2_3_0()
-		case "2.4.0", "2.4":
-			versions = kversion.V2_4_0()
-		case "2.5.0", "2.5":
-			versions = kversion.V2_5_0()
-		case "2.6.0", "2.6":
-			versions = kversion.V2_6_0()
-		case "2.7.0", "2.7":
-			versions = kversion.V2_7_0()
-		case "2.8.0", "2.8":
-			versions = kversion.V2_8_0()
-		default:
+		versions := kversion.FromString(c.asVersion)
+		if versions == nil {
 			out.Die("unknown Kafka version %s", c.asVersion)
 		}
 		c.AddOpt(kgo.MaxVersions(versions))
