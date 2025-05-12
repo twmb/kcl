@@ -135,7 +135,7 @@ if [ -f /etc/bash_completion ] && ! shopt -oq posix; then
     . <(kcl misc gen-autocomplete -kbash)
 fi
 
-This command supports completion for bash, zsh, and powershell.
+This command supports completion for bash, zsh, fish, and powershell.
 `,
 		Args: cobra.ExactArgs(0),
 		Run: func(cmd *cobra.Command, _ []string) {
@@ -144,6 +144,8 @@ This command supports completion for bash, zsh, and powershell.
 				cmd.Root().GenBashCompletion(os.Stdout)
 			case "zsh":
 				cmd.Root().GenZshCompletion(os.Stdout)
+			case "fish":
+				cmd.Root().GenFishCompletion(os.Stdout, true)
 			case "powershell":
 				cmd.Root().GenPowerShellCompletion(os.Stdout)
 			default:
@@ -152,7 +154,7 @@ This command supports completion for bash, zsh, and powershell.
 		},
 	}
 
-	cmd.Flags().StringVarP(&kind, "kind", "k", "bash", "autocomplete kind (bash, zsh, powershell)")
+	cmd.Flags().StringVarP(&kind, "kind", "k", "bash", "autocomplete kind (bash, zsh, fish, powershell)")
 
 	return cmd
 }
