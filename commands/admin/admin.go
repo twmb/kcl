@@ -273,7 +273,7 @@ type partitionOffset struct {
 }
 
 func parseTopicPartitionOffsets(list []string) (map[string][]partitionOffset, error) {
-	rePo := regexp.MustCompile(`^p(\d+),o(\d+)$`)
+	rePo := regexp.MustCompile(`^p(\d+),o(-?\d+)$`)
 
 	tpos := make(map[string][]partitionOffset)
 	for _, item := range list {
@@ -287,7 +287,7 @@ func parseTopicPartitionOffsets(list []string) (map[string][]partitionOffset, er
 
 		matches := rePo.FindStringSubmatch(split[1])
 		if len(matches) == 0 {
-			return nil, fmt.Errorf("item %q partition offset %q does not match p(\\d+)o(\\d+)", item, split[1])
+			return nil, fmt.Errorf("item %q partition offset %q does not match p(\\d+)o(-?\\d+)", item, split[1])
 		}
 		partition, _ := strconv.Atoi(matches[1])
 		offset, _ := strconv.Atoi(matches[2])
