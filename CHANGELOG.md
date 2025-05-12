@@ -1,3 +1,25 @@
+v0.16.0
+===
+
+* Bumps all deps
+* Builds with go1.24.2
+* Enables fish command completion
+
+v0.15.0
+===
+
+* Bumps all deps
+* Builds with go1.22.0
+* Fixes kcl misc raw-req to obey a version in the input json, if a version is specified
+
+v0.14.0
+===
+
+* Bumps all deps
+* Fixes kadm admin user-scram alter typo
+* Supports --as-version for all Kafka versions, and kcl misc api-versions --version for all Kafka versions -- and makes it so no code changes are needed in kcl when franz-go adds support for newer Kafka versions
+* Builds with go1.21.6
+
 v0.13.0
 ===
 
