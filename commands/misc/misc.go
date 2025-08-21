@@ -265,6 +265,37 @@ type pinReq struct {
 
 func (*pinReq) SetVersion(int16) {}
 
+type pinAdminReq struct {
+	pinReq
+}
+
+func (p *pinAdminReq) IsAdminRequest() {}
+
+type pinGroupCoordinatorReq struct {
+	pinReq
+}
+
+func (p *pinGroupCoordinatorReq) IsGroupCoordinatorRequest() {}
+
+type pinTxnCoordinatorRequestReq struct {
+	pinReq
+}
+
+func (p *pinTxnCoordinatorRequestReq) IsTxnCoordinatorRequest() {}
+
+func wrapPinReq(req kmsg.Request) kmsg.Request {
+	switch t := req.(type) {
+	case kmsg.AdminRequest:
+		return &pinAdminReq{pinReq{Request: t}}
+	case kmsg.GroupCoordinatorRequest:
+		return &pinGroupCoordinatorReq{pinReq{Request: t}}
+	case kmsg.TxnCoordinatorRequest:
+		return &pinTxnCoordinatorRequestReq{pinReq{Request: t}}
+	default:
+		return &pinReq{Request: t}
+	}
+}
+
 func rawCommand(cl *client.Client) *cobra.Command {
 	var key int16
 	var b int
@@ -285,7 +316,7 @@ func rawCommand(cl *client.Client) *cobra.Command {
 			// overwrote our -1. We want to pin the version to
 			// what the user specified.
 			if req.GetVersion() != -1 {
-				req = &pinReq{req}
+				req = wrapPinReq(req)
 			}
 			out.MaybeDie(err, "unable to unmarshal stdin: %v", err)
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

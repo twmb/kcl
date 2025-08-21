@@ -2,6 +2,7 @@ v0.17.0
 ===
 
 * Bumps all deps
+* Fixes kcl misc raw-req to dispatch requests to the correct broker (regressed in v0.15.0)
 
 v0.16.0
 ===
