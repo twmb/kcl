@@ -18,9 +18,8 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/spf13/cobra"
-
-	"github.com/aws/aws-sdk-go/aws/session"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -379,11 +378,11 @@ func (c *Client) maybeAddSASL() error {
 			IsToken: c.cfg.SASL.IsToken,
 		}.AsSha512Mechanism()))
 	case "awsmskiam":
-		sess, err := session.NewSession()
+		awscfg, err := config.LoadDefaultConfig(context.Background())
 		out.MaybeDie(err, "unable to create aws session: %v", err)
 
 		c.AddOpt(kgo.SASL(aws.ManagedStreamingIAM(func(ctx context.Context) (aws.Auth, error) {
-			creds, err := sess.Config.Credentials.GetWithContext(ctx)
+			creds, err := awscfg.Credentials.Retrieve(ctx)
 			if err != nil {
 				return aws.Auth{}, err
 			}
