@@ -259,12 +259,6 @@ func probeVersion(cl *client.Client) {
 	fmt.Println("Kafka " + v.VersionGuess())
 }
 
-type pinReq struct {
-	kmsg.Request
-}
-
-func (*pinReq) SetVersion(int16) {}
-
 func rawCommand(cl *client.Client) *cobra.Command {
 	var key int16
 	var b int
@@ -285,7 +279,10 @@ func rawCommand(cl *client.Client) *cobra.Command {
 			// overwrote our -1. We want to pin the version to
 			// what the user specified.
 			if req.GetVersion() != -1 {
-				req = &pinReq{req}
+				vers := kversion.Stable()
+				vers.SetMaxKeyVersion(req.Key(), req.GetVersion())
+				cl.AddOpt(kgo.MinVersions(vers))
+				cl.AddOpt(kgo.MaxVersions(vers))
 			}
 			out.MaybeDie(err, "unable to unmarshal stdin: %v", err)
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
