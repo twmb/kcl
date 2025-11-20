@@ -11,7 +11,7 @@ require (
 	github.com/twmb/franz-go/pkg/kadm v1.16.1
 	github.com/twmb/franz-go/pkg/kmsg v1.11.2
 	github.com/twmb/go-strftime v0.0.0-20190915101236-e74f7c4fe4fa
-	golang.org/x/crypto v0.41.0
+	golang.org/x/crypto v0.45.0
 	google.golang.org/protobuf v1.36.8
 )
 
@@ -31,7 +31,6 @@ require (
 	github.com/bufbuild/protocompile v0.14.1 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.22 // indirect
 	github.com/spf13/pflag v1.0.7 // indirect
