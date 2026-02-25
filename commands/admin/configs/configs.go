@@ -450,8 +450,8 @@ describe bar --type topic`,
 	}
 
 	cmd.Flags().StringVarP(&q.rawEntity, "type", "t", "topic", "entity type (topic, broker, broker logger; shortcuts t, b, bl)")
-	cmd.Flags().BoolVar(&withDocs, "with-docs", false, "inlcude documentation for config values (Kafka 2.6.0+)")
-	cmd.Flags().BoolVar(&withTypes, "with-types", false, "inlcude types of config values (Kafka 2.6.0+)")
+	cmd.Flags().BoolVar(&withDocs, "with-docs", false, "include documentation for config values (Kafka 2.6.0+)")
+	cmd.Flags().BoolVar(&withTypes, "with-types", false, "include types of config values (Kafka 2.6.0+)")
 
 	return cmd
 }

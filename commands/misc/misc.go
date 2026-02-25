@@ -215,7 +215,7 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 func probeVersionCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "probe-version",
-		Short: "Probe and print the version of Kafka running (incompatable with --as-version)",
+		Short: "Probe and print the version of Kafka running (incompatible with --as-version)",
 		Args:  cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
 			probeVersion(cl)
