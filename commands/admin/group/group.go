@@ -35,6 +35,7 @@ func Command(cl *client.Client) *cobra.Command {
 
 func listCommand(cl *client.Client) *cobra.Command {
 	var statesFilter []string
+	var typesFilter []string
 	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
@@ -64,30 +65,32 @@ the groups listed. This prints all of the information from a ListGroups request.
 			}
 			kresps := cl.Client().RequestSharded(context.Background(), &kmsg.ListGroupsRequest{
 				StatesFilter: statesFilter,
+				TypesFilter:  typesFilter,
 			})
 
 			tw := out.BeginTabWrite()
 			defer tw.Flush()
 
-			fmt.Fprintf(tw, "BROKER\tGROUP ID\tPROTO TYPE\tSTATE\tERROR\n")
+			fmt.Fprintf(tw, "BROKER\tGROUP ID\tPROTO TYPE\tGROUP TYPE\tSTATE\tERROR\n")
 			for _, kresp := range kresps {
 				err := kresp.Err
 				if err == nil {
 					err = kerr.ErrorForCode(kresp.Resp.(*kmsg.ListGroupsResponse).ErrorCode)
 				}
 				if err != nil {
-					fmt.Fprintf(tw, "%d\t\t\t\t%v\n", kresp.Meta.NodeID, err)
+					fmt.Fprintf(tw, "%d\t\t\t\t\t%v\n", kresp.Meta.NodeID, err)
 					continue
 				}
 
 				resp := kresp.Resp.(*kmsg.ListGroupsResponse)
 				for _, group := range resp.Groups {
-					fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t\n", kresp.Meta.NodeID, group.Group, group.ProtocolType, group.GroupState)
+					fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t\n", kresp.Meta.NodeID, group.Group, group.ProtocolType, group.GroupType, group.GroupState)
 				}
 			}
 		},
 	}
 	cmd.Flags().StringArrayVarP(&statesFilter, "filter", "f", nil, "filter groups listed by state (Preparing, PreparingRebalance, CompletingRebalance, Stable, Dead, Empty; Kafka 2.6.0+; repeatable)")
+	cmd.Flags().StringArrayVar(&typesFilter, "type-filter", nil, "filter groups listed by type (Classic, Consumer; Kafka 3.0+; repeatable)")
 	return cmd
 }
 
