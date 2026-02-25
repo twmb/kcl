@@ -3,6 +3,8 @@ package txn
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -21,6 +23,8 @@ func Command(cl *client.Client) *cobra.Command {
 		Short: "Commands related to transaction information.",
 	}
 	cmd.AddCommand(describeProducers(cl))
+	cmd.AddCommand(listCommand(cl))
+	cmd.AddCommand(describeCommand(cl))
 	cmd.AddCommand(unstickLSO(cl))
 	return cmd
 }
@@ -31,7 +35,7 @@ func describeProducers(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "describe-producers",
 		Aliases: []string{"dp"},
-		Short:   "Describe producers quotas.",
+		Short:   "Describe active producers.",
 		Long: `Describe idempotent and transactional producers (Kafka 2.8.0+)
 
 From KIP-664, this command is sent to partition leaders to describe the state
@@ -118,4 +122,102 @@ The information printed:
 	}
 
 	return cmd
+}
+
+func listCommand(cl *client.Client) *cobra.Command {
+	var stateFilter []string
+	var producerIDFilter []int64
+
+	cmd := &cobra.Command{
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List active transactions (Kafka 3.0+).",
+		Long: `List active transactions across all brokers (Kafka 3.0+).
+
+This command lists all ongoing transactions. You can optionally filter by
+transaction state or producer ID.
+`,
+		Args: cobra.ExactArgs(0),
+		Run: func(_ *cobra.Command, _ []string) {
+			kresps := cl.Client().RequestSharded(context.Background(), &kmsg.ListTransactionsRequest{
+				StateFilters:      stateFilter,
+				ProducerIDFilters: producerIDFilter,
+			})
+
+			if cl.AsJSON() {
+				out.ExitJSON(kresps)
+			}
+
+			tw := out.BeginTabWrite()
+			defer tw.Flush()
+
+			fmt.Fprintf(tw, "BROKER\tTRANSACTIONAL-ID\tPRODUCER-ID\tSTATE\tERROR\n")
+			for _, kresp := range kresps {
+				if kresp.Err != nil {
+					fmt.Fprintf(tw, "%d\t\t\t\t%v\n", kresp.Meta.NodeID, kresp.Err)
+					continue
+				}
+				resp := kresp.Resp.(*kmsg.ListTransactionsResponse)
+				if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+					fmt.Fprintf(tw, "%d\t\t\t\t%v\n", kresp.Meta.NodeID, err)
+					continue
+				}
+				for _, txn := range resp.TransactionStates {
+					fmt.Fprintf(tw, "%d\t%s\t%d\t%s\t\n", kresp.Meta.NodeID, txn.TransactionalID, txn.ProducerID, txn.TransactionState)
+				}
+			}
+		},
+	}
+
+	cmd.Flags().StringArrayVar(&stateFilter, "state", nil, "filter by transaction state (repeatable)")
+	cmd.Flags().Int64SliceVar(&producerIDFilter, "producer-id", nil, "filter by producer ID (repeatable)")
+	return cmd
+}
+
+func describeCommand(cl *client.Client) *cobra.Command {
+	return &cobra.Command{
+		Use:   "describe TRANSACTIONAL_IDS...",
+		Short: "Describe transactions (Kafka 3.0+).",
+		Long: `Describe active transactions by transactional ID (Kafka 3.0+).
+
+This command describes the state of one or more transactions, including
+the producer ID, epoch, timeout, and the topics/partitions involved.
+`,
+		Args: cobra.MinimumNArgs(1),
+		Run: func(_ *cobra.Command, args []string) {
+			req := kmsg.NewDescribeTransactionsRequest()
+			req.TransactionalIDs = args
+
+			resp, err := req.RequestWith(context.Background(), cl.Client())
+			out.MaybeDie(err, "unable to describe transactions: %v", err)
+			if cl.AsJSON() {
+				out.ExitJSON(resp)
+			}
+
+			tw := out.BeginTabWrite()
+			defer tw.Flush()
+
+			fmt.Fprintf(tw, "TRANSACTIONAL-ID\tSTATE\tPRODUCER-ID\tPRODUCER-EPOCH\tTIMEOUT-MS\tSTART-TIMESTAMP\tTOPICS\tERROR\n")
+			for _, txn := range resp.TransactionStates {
+				if err := kerr.ErrorForCode(txn.ErrorCode); err != nil {
+					fmt.Fprintf(tw, "%s\t\t\t\t\t\t\t%v\n", txn.TransactionalID, err)
+					continue
+				}
+				var topics []string
+				for _, topic := range txn.Topics {
+					topics = append(topics, fmt.Sprintf("%s%v", topic.Topic, topic.Partitions))
+				}
+				sort.Strings(topics)
+				fmt.Fprintf(tw, "%s\t%s\t%d\t%d\t%d\t%s\t%s\t\n",
+					txn.TransactionalID,
+					txn.State,
+					txn.ProducerID,
+					txn.ProducerEpoch,
+					txn.TimeoutMillis,
+					time.Unix(0, txn.StartTimestamp*1e6).UTC().Format("2006-01-02 15:04:05.999"),
+					strings.Join(topics, ", "),
+				)
+			}
+		},
+	}
 }
