@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/twmb/franz-go/pkg/kbin"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 
@@ -72,47 +71,22 @@ func (co *consumeOutput) formatConsumerOffsets(out []byte, r *kgo.Record) []byte
 }
 
 func formatTransactionalControl(r *kgo.Record) string {
-	// ControlRecordType
-	if len(r.Key) < 4 {
-		return fmt.Sprintf("Transaction Control(Invalid length %d)\n", len(r.Key))
-	}
-
-	reader := kbin.Reader{Src: r.Key}
-	version := reader.Int16()
-	typ := reader.Int16()
-
-	var msg string
-	switch typ {
-	case 0:
-		msg = "ABORT"
-	case 1:
-		msg = "COMMIT"
-	default:
-		msg = "UNKNOWN"
-	}
-
-	if version != 0 {
-		msg += fmt.Sprintf(" (unhandled version %d bytes: %x)", version, reader.Src)
+	var k kmsg.ControlRecordKey
+	if err := k.ReadFrom(r.Key); err != nil {
+		return fmt.Sprintf("Transaction Control(could not decode %d key bytes: %v)\n", len(r.Key), err)
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Transactional Control Record(%d) %s\n", version, msg)
+	fmt.Fprintf(&sb, "Transactional Control Record(%d) %s\n", k.Version, k.Type.String())
 
-	// EndTransactionMarker class
-	if len(r.Value) < 6 {
-		fmt.Fprintf(&sb, "\tInvalid control record value length %d\n", len(r.Value))
+	var v kmsg.EndTxnMarker
+	if err := v.ReadFrom(r.Value); err != nil {
+		fmt.Fprintf(&sb, "\tEndTxnMarker (could not decode %d value bytes)\n", len(r.Value))
+	} else {
+		tw := out.BeginTabWriteTo(&sb)
+		fmt.Fprintf(tw, "\tCoordinator Epoch\t%d\n", v.CoordinatorEpoch)
+		tw.Flush()
 	}
-
-	reader = kbin.Reader{Src: r.Value}
-	version = reader.Int16()
-	epoch := reader.Int32()
-
-	tw := out.BeginTabWriteTo(&sb)
-	fmt.Fprintf(tw, "\tCoordinator Epoch\t%d\n", epoch)
-	if version != 0 {
-		fmt.Fprintf(tw, "\tExtra Bytes (v%d)\t%x\n", version, reader.Src)
-	}
-	tw.Flush()
 	return sb.String()
 }
 
@@ -168,6 +142,9 @@ func (co *consumeOutput) formatOffsetCommit(dst []byte, r *kgo.Record) ([]byte, 
 		fmt.Fprintf(tw, "\tCommitTimestamp\t%d\n", v.CommitTimestamp)
 		if v.Version == 1 {
 			fmt.Fprintf(tw, "\tExpireTimestamp\t%d\n", v.ExpireTimestamp)
+		}
+		if v.Version >= 4 {
+			fmt.Fprintf(tw, "\tTopicID\t%x\n", v.TopicID)
 		}
 		tw.Flush()
 
@@ -280,7 +257,7 @@ func (co *consumeOutput) formatGroupMetadata(dst []byte, r *kgo.Record) ([]byte,
 				} else {
 					fmt.Fprintf(tw, "\t\t b64 UserData\t%s\n", base64.RawStdEncoding.EncodeToString(m.UserData))
 				}
-				if m.Version == 1 {
+				if m.Version >= 1 {
 					var sb strings.Builder
 					sort.Slice(m.OwnedPartitions, func(i, j int) bool { return m.OwnedPartitions[i].Topic < m.OwnedPartitions[j].Topic })
 					for _, topic := range m.OwnedPartitions {
@@ -288,6 +265,16 @@ func (co *consumeOutput) formatGroupMetadata(dst []byte, r *kgo.Record) ([]byte,
 						fmt.Fprintf(&sb, "%s=>%v ", topic.Topic, topic.Partitions)
 					}
 					fmt.Fprintf(tw, "\t\t      OwnedPartitions\t%s\n", sb.String())
+				}
+				if m.Version >= 2 {
+					fmt.Fprintf(tw, "\t\t      Generation\t%d\n", m.Generation)
+				}
+				if m.Version >= 3 {
+					if m.Rack == nil {
+						fmt.Fprintf(tw, "\t\t      Rack\t%s\n", "(null)")
+					} else {
+						fmt.Fprintf(tw, "\t\t      Rack\t%s\n", *m.Rack)
+					}
 				}
 			}
 			var a kmsg.ConsumerMemberAssignment
