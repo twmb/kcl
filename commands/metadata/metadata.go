@@ -221,9 +221,11 @@ func PrintTopics(version int16, topics []kmsg.MetadataResponseTopic, pinternal, 
 			return parts[i].Partition < parts[j].Partition
 		})
 		for _, part := range topic.Partitions {
-			fmt.Fprintf(buf, "  %4d  leader %d replicas %v isr %v",
-				part.Partition,
-				part.Leader,
+			fmt.Fprintf(buf, "  %4d  leader %d", part.Partition, part.Leader)
+			if version >= 7 {
+				fmt.Fprintf(buf, " epoch %d", part.LeaderEpoch)
+			}
+			fmt.Fprintf(buf, " replicas %v isr %v",
 				part.Replicas,
 				part.ISR,
 			)
