@@ -61,49 +61,56 @@ are given (just "foo"), all partitions for that topic are described.
 				})
 			}
 
-			kresp, err := req.RequestWith(context.Background(), cl.Client())
-			out.MaybeDie(err, "unable to describe share group offsets: %v", err)
+			shards := cl.Client().RequestSharded(context.Background(), req)
 			if cl.AsJSON() {
-				out.ExitJSON(kresp)
+				out.ExitJSON(shards)
 			}
 
-			for _, group := range kresp.Groups {
-				fmt.Printf("GROUP: %s\n", group.GroupID)
-				if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
-					msg := err.Error()
-					if group.ErrorMessage != nil {
-						msg += ": " + *group.ErrorMessage
-					}
-					fmt.Printf("  ERROR: %s\n", msg)
+			for _, shard := range shards {
+				if shard.Err != nil {
+					fmt.Printf("unable to issue DescribeShareGroupOffsets to broker %d (%s:%d): %v\n", shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
 					continue
 				}
 
-				tw := out.NewTable("TOPIC", "PARTITION", "START-OFFSET", "LEADER-EPOCH", "LAG", "ERROR")
-				for _, topic := range group.Topics {
-					for _, partition := range topic.Partitions {
-						errMsg := ""
-						if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
-							errMsg = err.Error()
-							if partition.ErrorMessage != nil {
-								errMsg += ": " + *partition.ErrorMessage
-							}
+				resp := shard.Resp.(*kmsg.DescribeShareGroupOffsetsResponse)
+				for _, group := range resp.Groups {
+					fmt.Printf("GROUP: %s\n", group.GroupID)
+					if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
+						msg := err.Error()
+						if group.ErrorMessage != nil {
+							msg += ": " + *group.ErrorMessage
 						}
-						lag := "-"
-						if partition.Lag >= 0 {
-							lag = strconv.FormatInt(partition.Lag, 10)
-						}
-						tw.Print(
-							topic.Topic,
-							partition.Partition,
-							partition.StartOffset,
-							partition.LeaderEpoch,
-							lag,
-							errMsg,
-						)
+						fmt.Printf("  ERROR: %s\n", msg)
+						continue
 					}
+
+					tw := out.NewTable("TOPIC", "PARTITION", "START-OFFSET", "LEADER-EPOCH", "LAG", "ERROR")
+					for _, topic := range group.Topics {
+						for _, partition := range topic.Partitions {
+							errMsg := ""
+							if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
+								errMsg = err.Error()
+								if partition.ErrorMessage != nil {
+									errMsg += ": " + *partition.ErrorMessage
+								}
+							}
+							lag := "-"
+							if partition.Lag >= 0 {
+								lag = strconv.FormatInt(partition.Lag, 10)
+							}
+							tw.Print(
+								topic.Topic,
+								partition.Partition,
+								partition.StartOffset,
+								partition.LeaderEpoch,
+								lag,
+								errMsg,
+							)
+						}
+					}
+					tw.Flush()
+					fmt.Println()
 				}
-				tw.Flush()
-				fmt.Println()
 			}
 		},
 	}
