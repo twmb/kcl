@@ -124,6 +124,11 @@ alter foo --no-confirm --type topic --kv preallocate=true // loses other dynamic
 	cmd.Flags().StringVarP(&cfger.rawEntity, "type", "t", "topic", "entity type (t or topic, b or broker, bl or broker logger)")
 	cmd.Flags().BoolVarP(&cfger.incremental, "inc", "i", false, "perform an incremental alter (Kafka 2.3.0+)")
 	cmd.Flags().StringArrayVarP(&cfger.rawKVs, "kv", "k", nil, "key value config parameters; repeatable; if incremental, keys require prefix in [set:, del:, +:, -:]")
+	cmd.Flags().MarkDeprecated("kv", "use --set, --delete, --append, --subtract instead")
+	cmd.Flags().StringArrayVarP(&cfger.setKVs, "set", "s", nil, "set config key=value (incremental; repeatable)")
+	cmd.Flags().StringArrayVar(&cfger.deleteKeys, "delete", nil, "delete config key (incremental; repeatable)")
+	cmd.Flags().StringArrayVar(&cfger.appendKVs, "append", nil, "append to list config key=value (incremental; repeatable)")
+	cmd.Flags().StringArrayVar(&cfger.subtractKVs, "subtract", nil, "subtract from list config key=value (incremental; repeatable)")
 	cmd.Flags().BoolVarP(&cfger.dryRun, "dry", "d", false, "dry run: validate the config alter request, but do not apply")
 	cmd.Flags().BoolVar(&cfger.noConfirm, "no-confirm", false, "skip confirmation of to-be-lost unspecified existing dynamic config keys")
 
@@ -143,12 +148,36 @@ type cfger struct {
 	rawKVs    []string
 	parsedKVs []kv
 
+	// New clean flags for incremental alter.
+	setKVs      []string
+	deleteKeys  []string
+	appendKVs   []string
+	subtractKVs []string
+
 	incremental bool
 	noConfirm   bool
 	dryRun      bool
 }
 
 func (c *cfger) parseKVs() {
+	// If any clean flags are used, auto-enable incremental mode and
+	// prepend them to rawKVs with the appropriate prefix.
+	if len(c.setKVs) > 0 || len(c.deleteKeys) > 0 || len(c.appendKVs) > 0 || len(c.subtractKVs) > 0 {
+		c.incremental = true
+		for _, kv := range c.setKVs {
+			c.rawKVs = append(c.rawKVs, "set:"+kv)
+		}
+		for _, k := range c.deleteKeys {
+			c.rawKVs = append(c.rawKVs, "del:"+k)
+		}
+		for _, kv := range c.appendKVs {
+			c.rawKVs = append(c.rawKVs, "+:"+kv)
+		}
+		for _, kv := range c.subtractKVs {
+			c.rawKVs = append(c.rawKVs, "-:"+kv)
+		}
+	}
+
 	for _, rawKV := range c.rawKVs {
 		split := strings.SplitN(rawKV, "=", 2)
 		if c.incremental {
