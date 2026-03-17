@@ -156,18 +156,25 @@ func describeCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls", "describe", "d"},
-		Short:   "List ACLs.",
-		Long: `Describe ACLs on a filter basis (Kafka 0.11.0+).
+		Short:   "List ACLs",
+		Long: `List ACLs on a filter basis (Kafka 0.11.0+).
 
-Describing ACLs works on a filter basis: anything matching the requested filter
-is described. Note that for resource names, principals, and hosts, using a
-wildcard matches ACLs with wildcards; to match everything, leave the principal
-and host empty.
+Listing ACLs works on a filter basis: anything matching the requested filter
+is returned. For resource names, principals, and hosts, using a wildcard
+matches ACLs with wildcards; to match everything, leave the filter empty.
 
-For more detailed information about ACLs, read kcl acl --help.
+EXAMPLES:
+  kcl acl list                                           # list all ACLs
+  kcl acl list --topic foo                               # ACLs for topic foo
+  kcl acl list --cluster                                 # cluster-level ACLs
+  kcl acl list --principal User:alice                    # ACLs for a principal
+  kcl acl list --type any --pattern match --op any       # explicit match-all
+
+SEE ALSO:
+  kcl acl create    create ACLs
+  kcl acl delete    delete ACLs
+  kcl acl --help    detailed ACL documentation
 `,
-
-		Example: "describe --type any --pattern match --op any --perm any // matches all",
 		Args:    cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
 			var pname, pprincipal, phost *string
@@ -226,14 +233,16 @@ For more detailed information about ACLs, read kcl acl --help.
 	cmd.Flags().StringVar(&principal, "principal", "", "principal filter; empty matches all")
 	cmd.Flags().StringVar(&host, "host", "", "host filter; empty matches all")
 	cmd.Flags().StringVar(&operation, "op", "any", "operation filter; any matches all")
+	cmd.Flags().StringVar(&operation, "operation", "any", "operation filter; any matches all (alias for --op)")
 	cmd.Flags().StringVar(&permission, "perm", "any", "permission filter; any matches all")
 
 	// Ergonomic resource-specific flags (shortcuts for --type + --name).
-	var topicFlag, groupFlag, txnIDFlag string
-	cmd.Flags().StringVar(&topicFlag, "topic", "", "shorthand for --type topic --name NAME")
-	cmd.Flags().StringVar(&groupFlag, "group", "", "shorthand for --type group --name NAME")
-	cmd.Flags().BoolVar(new(bool), "cluster", false, "shorthand for --type cluster")
-	cmd.Flags().StringVar(&txnIDFlag, "transactional-id", "", "shorthand for --type transactional-id --name NAME")
+	var topicFlag, groupFlag, txnIDFlag, dtokenFlag string
+	cmd.Flags().StringVar(&topicFlag, "topic", "", "topic resource filter")
+	cmd.Flags().StringVar(&groupFlag, "group", "", "group resource filter")
+	cmd.Flags().BoolVar(new(bool), "cluster", false, "cluster resource filter")
+	cmd.Flags().StringVar(&txnIDFlag, "transactional-id", "", "transactional ID resource filter")
+	cmd.Flags().StringVar(&dtokenFlag, "delegation-token", "", "delegation token resource filter")
 	cmd.PreRunE = func(_ *cobra.Command, _ []string) error {
 		switch {
 		case topicFlag != "":
@@ -244,6 +253,8 @@ For more detailed information about ACLs, read kcl acl --help.
 			resourceType = "cluster"
 		case txnIDFlag != "":
 			resourceType, resourceName = "transactional_id", txnIDFlag
+		case dtokenFlag != "":
+			resourceType, resourceName = "delegation_token", dtokenFlag
 		}
 		return nil
 	}
@@ -253,69 +264,170 @@ For more detailed information about ACLs, read kcl acl --help.
 
 func createCommand(cl *client.Client) *cobra.Command {
 	var (
-		types      []string
-		names      []string
-		pattern    string
-		principals []string
-		hosts      []string
-		operations []string
-		permission string
+		allowPrincipals []string
+		denyPrincipals  []string
+		allowHosts      []string
+		denyHosts       []string
+		topics          []string
+		groups          []string
+		txnIDs          []string
+		dtokens         []string
+		cluster         bool
+		operations      []string
+		pattern         string
+		dryRun          bool
+	)
+
+	// Deprecated flags kept for backwards compatibility.
+	var (
+		oldTypes      []string
+		oldNames      []string
+		oldPrincipals []string
+		oldHosts      []string
+		oldPermission string
 	)
 
 	cmd := &cobra.Command{
 		Use:     "create",
 		Aliases: []string{"c"},
-		Short:   "Create ACLs.",
+		Short:   "Create ACLs",
 		Long: `Create ACLs on a combinatorial basis (Kafka 0.11.0+).
 
-In a request to Kafka, creating ACLs works on an individual basis: one ACL
-creation is one ACL entry. This command, however, works on a combinatorial
-basis: everything multiplies with each other to create many ACLs in one go.
+ACL creation is combinatorial: all principals × all hosts × all resources ×
+all operations. Requires at least one principal, one resource, and one
+operation. Hosts default to "*" (all) if not specified.
 
-To create the same ACL for two principals, just pass the principal flag twice.
-To give both of those principals access to multiple resource names, pass the
-name flag multiple times. And so on (minus the pattern, and permission flags,
-which each can only occur once). Note that some combinations do not necessarily
-make sense; those will fail.
+EXAMPLES:
+  kcl acl create --topic foo --allow-principal User:alice --operation read
+  kcl acl create --group '*' --allow-principal User:bob --operation read --operation describe
+  kcl acl create --cluster --allow-principal User:admin --operation all
+  kcl acl create --topic foo --topic bar --deny-principal User:eve --operation write
+  kcl acl create --transactional-id myapp --allow-principal User:producer --operation write --operation describe
+  kcl acl create --topic logs --allow-principal User:alice --allow-host 10.0.0.1 --operation read --pattern literal
 
-This command will not do anything unless all array flags have at least one
-entry. That is, this command will not do anything until at least one ACL
-creation is fully specifiable.
-
-For more detailed information about ACLs, read kcl acl --help.
+SEE ALSO:
+  kcl acl list      list ACLs
+  kcl acl delete    delete ACLs
+  kcl acl --help    detailed ACL documentation
 `,
 
 		Args: cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
-			req := new(kmsg.CreateACLsRequest)
+			// Merge deprecated flags into new ones.
+			for _, p := range oldPrincipals {
+				if client.Strnorm(oldPermission) == "deny" {
+					denyPrincipals = append(denyPrincipals, p)
+				} else {
+					allowPrincipals = append(allowPrincipals, p)
+				}
+			}
+			for _, h := range oldHosts {
+				allowHosts = append(allowHosts, h)
+			}
+			for i, t := range oldTypes {
+				if i < len(oldNames) {
+					switch client.Strnorm(t) {
+					case "topic":
+						topics = append(topics, oldNames[i])
+					case "group":
+						groups = append(groups, oldNames[i])
+					case "transactionalid":
+						txnIDs = append(txnIDs, oldNames[i])
+					case "delegationtoken":
+						dtokens = append(dtokens, oldNames[i])
+					case "cluster":
+						cluster = true
+					}
+				}
+			}
 
-			// I heard you liked loops?
-			for _, typ := range types {
-				for _, name := range names {
-					for _, principal := range principals {
-						for _, host := range hosts {
-							for _, op := range operations {
-								req.Creations = append(req.Creations, kmsg.CreateACLsRequestCreation{
-									ResourceType:        atoiResourceType(typ),
-									ResourceName:        name,
-									ResourcePatternType: atoiResourcePattern(pattern),
-									Principal:           principal,
-									Host:                host,
-									Operation:           atoiOperation(op),
-									PermissionType:      atoiPermission(permission),
-								})
-							}
+			// Build resource list: each (type, name) pair.
+			type resource struct {
+				typ  string
+				name string
+			}
+			var resources []resource
+			for _, t := range topics {
+				resources = append(resources, resource{"topic", t})
+			}
+			for _, g := range groups {
+				resources = append(resources, resource{"group", g})
+			}
+			for _, t := range txnIDs {
+				resources = append(resources, resource{"transactional_id", t})
+			}
+			for _, d := range dtokens {
+				resources = append(resources, resource{"delegation_token", d})
+			}
+			if cluster {
+				resources = append(resources, resource{"cluster", "kafka-cluster"})
+			}
+
+			if len(resources) == 0 {
+				out.Die("at least one resource is required (--topic, --group, --cluster, --transactional-id, or --delegation-token)")
+			}
+			if len(operations) == 0 {
+				out.Die("at least one --operation is required")
+			}
+
+			// Build principal/permission pairs.
+			type principalPerm struct {
+				principal  string
+				permission string
+			}
+			var principals []principalPerm
+			for _, p := range allowPrincipals {
+				principals = append(principals, principalPerm{p, "allow"})
+			}
+			for _, p := range denyPrincipals {
+				principals = append(principals, principalPerm{p, "deny"})
+			}
+			if len(principals) == 0 {
+				out.Die("at least one principal is required (--allow-principal or --deny-principal)")
+			}
+
+			// Default hosts to wildcard.
+			hosts := append(allowHosts, denyHosts...)
+			if len(hosts) == 0 {
+				hosts = []string{"*"}
+			}
+
+			// Build combinatorial request.
+			req := new(kmsg.CreateACLsRequest)
+			for _, res := range resources {
+				for _, pp := range principals {
+					for _, host := range hosts {
+						for _, op := range operations {
+							req.Creations = append(req.Creations, kmsg.CreateACLsRequestCreation{
+								ResourceType:        atoiResourceType(res.typ),
+								ResourceName:        res.name,
+								ResourcePatternType: atoiResourcePattern(pattern),
+								Principal:           pp.principal,
+								Host:                host,
+								Operation:           atoiOperation(op),
+								PermissionType:      atoiPermission(pp.permission),
+							})
 						}
 					}
 				}
 			}
 
-			if len(req.Creations) == 0 {
-				out.Die("no ACL creations requested")
+			if dryRun {
+				fmt.Printf("Dry run: %d ACL(s) would be created:\n", len(req.Creations))
+				tw := out.BeginTabWrite()
+				defer tw.Flush()
+				fmt.Fprintf(tw, "TYPE\tNAME\tPATTERN\tPRINCIPAL\tHOST\tOPERATION\tPERMISSION\n")
+				for _, c := range req.Creations {
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+						c.ResourceType, c.ResourceName, c.ResourcePatternType,
+						c.Principal, c.Host, c.Operation, c.PermissionType,
+					)
+				}
+				return
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to describe acls: %v", err)
+			out.MaybeDie(err, "unable to create acls: %v", err)
 			if cl.AsJSON() {
 				out.ExitJSON(kresp)
 			}
@@ -356,47 +468,33 @@ For more detailed information about ACLs, read kcl acl --help.
 		},
 	}
 
-	cmd.Flags().StringArrayVar(&types, "type", nil, "resource type this ACL will be for; repeatable")
-	cmd.Flags().StringArrayVar(&names, "name", nil, "resource name this ACL will be for; repeatable")
-	cmd.Flags().StringVar(&pattern, "pattern", "prefixed", "how the resource names are understood (Kafka 2.0.0+)")
-	cmd.Flags().StringArrayVar(&principals, "principal", nil, "principal to create the ACL for; repeatable")
-	cmd.Flags().StringArrayVar(&hosts, "host", nil, "host to create the ACL for; repeatable")
-	cmd.Flags().StringArrayVar(&operations, "op", nil, "operation to allow or deny for the principal on this resource")
-	cmd.Flags().StringVar(&permission, "perm", "allow", "permission; either allow or deny")
+	// Primary flags — the ergonomic interface.
+	cmd.Flags().StringArrayVar(&allowPrincipals, "allow-principal", nil, "principal to allow (repeatable)")
+	cmd.Flags().StringArrayVar(&denyPrincipals, "deny-principal", nil, "principal to deny (repeatable)")
+	cmd.Flags().StringArrayVar(&allowHosts, "allow-host", nil, "host to allow from (repeatable; default '*')")
+	cmd.Flags().StringArrayVar(&denyHosts, "deny-host", nil, "host to deny from (repeatable)")
+	cmd.Flags().StringArrayVar(&topics, "topic", nil, "topic resource (repeatable)")
+	cmd.Flags().StringArrayVar(&groups, "group", nil, "group resource (repeatable)")
+	cmd.Flags().StringArrayVar(&txnIDs, "transactional-id", nil, "transactional ID resource (repeatable)")
+	cmd.Flags().StringArrayVar(&dtokens, "delegation-token", nil, "delegation token resource (repeatable)")
+	cmd.Flags().BoolVar(&cluster, "cluster", false, "cluster resource")
+	cmd.Flags().StringArrayVar(&operations, "operation", nil, "operation to allow or deny (repeatable)")
+	cmd.Flags().StringVar(&pattern, "pattern", "literal", "resource pattern type: literal or prefixed (Kafka 2.0.0+)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview ACLs that would be created without creating them")
 
-	// Ergonomic shorthand flags.
-	cmd.Flags().StringArrayVar(new([]string), "allow-principal", nil, "shorthand for --principal P --perm allow")
-	cmd.Flags().StringArrayVar(new([]string), "deny-principal", nil, "shorthand for --principal P --perm deny")
-	cmd.Flags().StringArray("topic", nil, "shorthand for --type topic --name NAME; repeatable")
-	cmd.Flags().StringArray("group", nil, "shorthand for --type group --name NAME; repeatable")
-	cmd.Flags().String("transactional-id", "", "shorthand for --type transactional-id --name NAME")
-	cmd.PreRunE = func(_ *cobra.Command, _ []string) error {
-		if v, _ := cmd.Flags().GetStringArray("allow-principal"); len(v) > 0 {
-			principals = append(principals, v...)
-			permission = "allow"
-		}
-		if v, _ := cmd.Flags().GetStringArray("deny-principal"); len(v) > 0 {
-			principals = append(principals, v...)
-			permission = "deny"
-		}
-		if v, _ := cmd.Flags().GetStringArray("topic"); len(v) > 0 {
-			for _, t := range v {
-				types = append(types, "topic")
-				names = append(names, t)
-			}
-		}
-		if v, _ := cmd.Flags().GetStringArray("group"); len(v) > 0 {
-			for _, g := range v {
-				types = append(types, "group")
-				names = append(names, g)
-			}
-		}
-		if v, _ := cmd.Flags().GetString("transactional-id"); v != "" {
-			types = append(types, "transactional_id")
-			names = append(names, v)
-		}
-		return nil
-	}
+	// Deprecated flags — hidden, still work.
+	cmd.Flags().StringArrayVar(&oldTypes, "type", nil, "")
+	cmd.Flags().StringArrayVar(&oldNames, "name", nil, "")
+	cmd.Flags().StringArrayVar(&oldPrincipals, "principal", nil, "")
+	cmd.Flags().StringArrayVar(&oldHosts, "host", nil, "")
+	cmd.Flags().StringVar(&oldPermission, "perm", "allow", "")
+	cmd.Flags().StringArrayVar(&operations, "op", nil, "")
+	cmd.Flags().MarkDeprecated("type", "use --topic, --group, --cluster, or --transactional-id")
+	cmd.Flags().MarkDeprecated("name", "use --topic, --group, --cluster, or --transactional-id")
+	cmd.Flags().MarkDeprecated("principal", "use --allow-principal or --deny-principal")
+	cmd.Flags().MarkDeprecated("host", "use --allow-host or --deny-host")
+	cmd.Flags().MarkDeprecated("perm", "use --allow-principal or --deny-principal")
+	cmd.Flags().MarkDeprecated("op", "use --operation")
 
 	return cmd
 }
@@ -435,7 +533,9 @@ them. By default, the command prompts for confirmation before deleting; use
 For more detailed information about ACLs, read kcl acl --help.
 `,
 
-		Example: "delete --type any --pattern match --op any --perm any // removes all",
+		Example: `kcl acl delete --type any --pattern match --op any --perm any  # removes all
+  kcl acl delete --topic foo --perm any --op any                       # delete all ACLs for topic foo
+  kcl acl delete --cluster --principal User:old --op any --perm any    # delete all cluster ACLs for a user`,
 		Args:    cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
 			if resourceType == "" {
@@ -606,9 +706,33 @@ For more detailed information about ACLs, read kcl acl --help.
 	cmd.Flags().StringVar(&principal, "principal", "", "principal filter; empty matches all")
 	cmd.Flags().StringVar(&host, "host", "", "host filter; empty matches all")
 	cmd.Flags().StringVar(&operation, "op", "", "operation filter; any matches all")
+	cmd.Flags().StringVar(&operation, "operation", "", "operation filter; any matches all (alias for --op)")
 	cmd.Flags().StringVar(&permission, "perm", "", "permission filter; any matches all")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print ACLs that would be deleted without actually deleting them")
 	cmd.Flags().BoolVar(&noConfirm, "no-confirm", false, "skip confirmation prompt before deleting")
+
+	// Ergonomic resource-specific flags.
+	var topicFlag, groupFlag, txnIDFlag, dtokenFlag string
+	cmd.Flags().StringVar(&topicFlag, "topic", "", "topic resource filter")
+	cmd.Flags().StringVar(&groupFlag, "group", "", "group resource filter")
+	cmd.Flags().BoolVar(new(bool), "cluster", false, "cluster resource filter")
+	cmd.Flags().StringVar(&txnIDFlag, "transactional-id", "", "transactional ID resource filter")
+	cmd.Flags().StringVar(&dtokenFlag, "delegation-token", "", "delegation token resource filter")
+	cmd.PreRunE = func(_ *cobra.Command, _ []string) error {
+		switch {
+		case topicFlag != "":
+			resourceType, resourceName = "topic", topicFlag
+		case groupFlag != "":
+			resourceType, resourceName = "group", groupFlag
+		case cmd.Flags().Changed("cluster"):
+			resourceType = "cluster"
+		case txnIDFlag != "":
+			resourceType, resourceName = "transactional_id", txnIDFlag
+		case dtokenFlag != "":
+			resourceType, resourceName = "delegation_token", dtokenFlag
+		}
+		return nil
+	}
 
 	return cmd
 }
