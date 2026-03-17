@@ -19,6 +19,7 @@ import (
 	"github.com/twmb/kcl/commands/admin/logdirs"
 	"github.com/twmb/kcl/commands/admin/partas"
 	"github.com/twmb/kcl/commands/admin/sharegroup"
+	"github.com/twmb/kcl/commands/admin/streamsgroup"
 	"github.com/twmb/kcl/commands/admin/topic"
 	"github.com/twmb/kcl/commands/admin/txn"
 	"github.com/twmb/kcl/commands/admin/userscram"
@@ -78,6 +79,7 @@ Command completion is available at:
 		topic.Command(cl),
 		group.Command(cl),
 		sharegroup.Command(cl),
+		streamsgroup.Command(cl),
 		cluster.Command(cl),
 		acl.Command(cl),
 		configs.Command(cl),

@@ -22,9 +22,24 @@ func BeginTabWriteTo(w io.Writer) *tabwriter.Writer {
 	return tabwriter.NewWriter(w, 6, 4, 2, ' ', 0)
 }
 
+// Standard exit codes.
+const (
+	ExitOK           = 0 // success
+	ExitError        = 1 // general / Kafka-level error
+	ExitUsage        = 2 // invalid usage (bad flags, args, parse errors)
+	ExitAuth         = 3 // auth / permission error
+	ExitNotFound     = 4 // resource not found
+	ExitTimeout      = 5 // timeout
+)
+
 // Exit calls os.Exit(1).
 func Exit() {
-	os.Exit(1)
+	os.Exit(ExitError)
+}
+
+// ExitCode calls os.Exit with the given code.
+func ExitCode(code int) {
+	os.Exit(code)
 }
 
 // MaybeDie, if err is non-nil, prints the message and exits with 1.
