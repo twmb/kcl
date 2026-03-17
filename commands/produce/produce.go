@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"time"
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
@@ -17,15 +18,18 @@ import (
 
 func Command(cl *client.Client) *cobra.Command {
 	var (
-		informat      string
-		maxBuf        int
-		verboseFormat string
-		compression   string
-		escapeChar    string
-		acks          int
-		retries       int
-		tombstone     bool
-		partition     int32
+		informat              string
+		maxBuf                int
+		verboseFormat         string
+		compression           string
+		escapeChar            string
+		acks                  int
+		retries               int
+		tombstone             bool
+		partition             int32
+		deliveryTimeout       time.Duration
+		maxMessageBytes       int32
+		allowAutoTopicCreate  bool
 	)
 
 	cmd := &cobra.Command{
@@ -157,7 +161,7 @@ Unfortunately, with exact sizing, the format string is unavoidably noisy.
 			var verboseBuf []byte
 			if verboseFormat != "" {
 				verboseFn, err = format.ParseWriteFormat(verboseFormat, escape)
-				out.MaybeDie(err, "unable to parse verbose-format: %v", err)
+				out.MaybeDie(err, "unable to parse output-format: %v", err)
 			}
 
 			if !reader.ParsesTopic() && len(args) == 0 {
@@ -200,6 +204,15 @@ Unfortunately, with exact sizing, the format string is unavoidably noisy.
 			if retries > -1 {
 				cl.AddOpt(kgo.RecordRetries(retries))
 			}
+			if deliveryTimeout > 0 {
+				cl.AddOpt(kgo.RecordDeliveryTimeout(deliveryTimeout))
+			}
+			if maxMessageBytes > 0 {
+				cl.AddOpt(kgo.ProducerBatchMaxBytes(maxMessageBytes))
+			}
+			if allowAutoTopicCreate {
+				cl.AddOpt(kgo.AllowAutoTopicCreation())
+			}
 
 			p := &kgo.FetchPartition{}
 			for {
@@ -231,14 +244,17 @@ Unfortunately, with exact sizing, the format string is unavoidably noisy.
 	}
 
 	cmd.Flags().StringVarP(&informat, "format", "f", "%v\n", "record only delimiter")
-	cmd.Flags().StringVarP(&verboseFormat, "verbose-format", "v", "", "if non-empty, what to write to stdout when a record is successfully produced")
+	cmd.Flags().StringVarP(&verboseFormat, "output-format", "o", "", "format string for produced record output (topic, partition, offset of each record)")
 	cmd.Flags().IntVar(&maxBuf, "max-delim-buf", bufio.MaxScanTokenSize, "maximum input to buffer before a delimiter is required, if using delimiters")
 	cmd.Flags().StringVarP(&compression, "compression", "z", "snappy", "compression to use for producing batches (none, gzip, snappy, lz4, zstd)")
-	cmd.Flags().StringVarP(&escapeChar, "escape-char", "c", "%", "character to use for beginning a record field escape (accepts any utf8, for both format and verbose-format)")
+	cmd.Flags().StringVarP(&escapeChar, "escape-char", "c", "%", "character to use for beginning a record field escape (accepts any utf8, for both format and output-format)")
 	cmd.Flags().IntVar(&acks, "acks", -1, "number of acks required, -1 is all in sync replicas, 1 is leader replica only, 0 is no acks required (0 disables idempotency)")
 	cmd.Flags().IntVar(&retries, "retries", -1, "number of times to retry producing if non-negative")
 	cmd.Flags().BoolVarP(&tombstone, "tombstone", "Z", false, "produce empty values as tombstones")
 	cmd.Flags().Int32VarP(&partition, "partition", "p", -1, "a specific partition to produce to, if non-negative")
+	cmd.Flags().DurationVar(&deliveryTimeout, "delivery-timeout", 0, "per-record delivery timeout (0 is no timeout)")
+	cmd.Flags().Int32Var(&maxMessageBytes, "max-message-bytes", 0, "max record batch size in bytes (0 uses broker default)")
+	cmd.Flags().BoolVar(&allowAutoTopicCreate, "allow-auto-topic-creation", false, "allow auto-creation of topics that don't exist")
 
 	return cmd
 }

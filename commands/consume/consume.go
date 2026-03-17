@@ -36,10 +36,13 @@ type consumption struct {
 	escapeChar      string
 	rack            string
 
-	readUncommitted bool
+	readUncommitted     bool
+	printControlRecords bool
+	timeout             time.Duration
 
-	fetchMaxBytes int32
-	fetchMaxWait  time.Duration
+	fetchMaxBytes          int32
+	fetchMaxPartitionBytes int32
+	fetchMaxWait           time.Duration
 
 	start int64 // if exact range
 	end   int64 // if exact range
@@ -131,13 +134,16 @@ func (c *consumption) run(topics []string) {
 	sigs := make(chan os.Signal, 2)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 
-	if isConsumerOffsets || isTransactionState {
+	if isConsumerOffsets || isTransactionState || c.printControlRecords {
 		c.cl.AddOpt(kgo.KeepControlRecords())
 	} else if !c.readUncommitted {
 		c.cl.AddOpt(kgo.FetchIsolationLevel(kgo.ReadCommitted()))
 	}
 
 	c.cl.AddOpt(kgo.FetchMaxBytes(c.fetchMaxBytes))
+	if c.fetchMaxPartitionBytes > 0 {
+		c.cl.AddOpt(kgo.FetchMaxPartitionBytes(c.fetchMaxPartitionBytes))
+	}
 	c.cl.AddOpt(kgo.FetchMaxWait(c.fetchMaxWait))
 	c.cl.AddOpt(kgo.Rack(c.rack))
 
@@ -180,8 +186,10 @@ func (c *consumption) run(topics []string) {
 		start:           c.start,
 		end:             c.end,
 		group:           c.group,
-		grepFilters:     grepFilters,
-		done:            make(chan struct{}),
+		grepFilters:         grepFilters,
+		printControlRecords: c.printControlRecords,
+		timeout:             c.timeout,
+		done:                make(chan struct{}),
 		ctx:             ctx,
 		cancel:          cancel,
 	}
@@ -420,7 +428,9 @@ type consumeOutput struct {
 	untilOffset  bool
 	untilOffsets kadm.ListedOffsets
 
-	grepFilters []grepFilter
+	grepFilters         []grepFilter
+	printControlRecords bool
+	timeout             time.Duration
 
 	pbd *pbDecoder
 
@@ -449,12 +459,25 @@ func (co *consumeOutput) consume() {
 		}
 	}
 
+	var lastRecordTime time.Time
+	if co.timeout > 0 {
+		lastRecordTime = time.Now()
+	}
+
 	for atomic.LoadUint32(&co.quit) == 0 {
 		if len(co.untilOffsets) != 0 && len(offsetsRemaining) == 0 {
 			os.Exit(0)
 		}
 
+		// Check timeout: exit if no records received within the duration.
+		if co.timeout > 0 && time.Since(lastRecordTime) > co.timeout {
+			os.Exit(0)
+		}
+
 		fetches := co.cl.PollFetches(co.ctx)
+		if co.timeout > 0 && fetches.NumRecords() > 0 {
+			lastRecordTime = time.Now()
+		}
 		// TODO Errors(), print to stderr
 		fetches.EachPartition(func(p kgo.FetchTopicPartition) {
 			partEndOffset := int64(-1)
@@ -508,8 +531,9 @@ func (co *consumeOutput) consume() {
 					return
 				}
 
-				// Only increment the count and write if it is not a control message.
-				if !r.Attrs.IsControl() {
+				// Only increment the count and write if it is not a control message
+				// (unless --print-control-records is set).
+				if co.printControlRecords || !r.Attrs.IsControl() {
 					co.num++
 					if co.pbd != nil {
 						r.Value, _ = co.pbd.jsonString(r.Value)
