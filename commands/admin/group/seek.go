@@ -3,6 +3,7 @@ package group
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -21,10 +22,13 @@ import (
 
 func seekCommand(cl *client.Client) *cobra.Command {
 	var (
-		to      string
-		topics  []string
-		dryRun  bool
-		execute bool
+		to             string
+		toGroup        string
+		toFile         string
+		topics         []string
+		dryRun         bool
+		execute        bool
+		allowNewTopics bool
 	)
 
 	cmd := &cobra.Command{
@@ -35,6 +39,8 @@ func seekCommand(cl *client.Client) *cobra.Command {
 Seek adjusts the committed offsets for a consumer group. The group must
 have no active members (state Empty or Dead).
 
+Exactly one of --to, --to-group, or --to-file must be specified.
+
 The --to flag accepts offset specifications:
   start              earliest offset
   end                latest offset
@@ -43,6 +49,15 @@ The --to flag accepts offset specifications:
   N                  exact offset N
   @TIMESTAMP         seek to a timestamp (unix ms/s/ns, date, RFC3339, -duration)
 
+The --to-group flag copies committed offsets from another group.
+
+The --to-file flag reads target offsets from a JSON file with format:
+  [{"topic": "foo", "partition": 0, "offset": 100}, ...]
+
+By default, seeking will only commit offsets for topics already present
+in the group's committed offsets. Use --allow-new-topics to also commit
+offsets for topics not currently in the group.
+
 EXAMPLES:
   kcl group seek mygroup --to start
   kcl group seek mygroup --to end --topics foo,bar
@@ -50,6 +65,9 @@ EXAMPLES:
   kcl group seek mygroup --to @2024-01-15
   kcl group seek mygroup --to +0 --execute
   kcl group seek mygroup --to -1000 --dry-run
+  kcl group seek mygroup --to-group othergroup
+  kcl group seek mygroup --to-file offsets.json
+  kcl group seek mygroup --to-group othergroup --allow-new-topics
 
 SEE ALSO:
   kcl group describe    describe consumer groups with lag
@@ -59,14 +77,22 @@ SEE ALSO:
 		Run: func(_ *cobra.Command, args []string) {
 			groupName := args[0]
 
-			if to == "" {
-				out.Die("--to is required")
+			// Mutual exclusivity: exactly one of --to, --to-group, --to-file.
+			nSources := 0
+			if to != "" {
+				nSources++
 			}
-
-			spec, err := offsetparse.Parse(to, time.Now())
-			out.MaybeDie(err, "unable to parse --to %q: %v", to, err)
-			if spec.End != nil {
-				out.Die("--to does not accept range offsets; use a single target value")
+			if toGroup != "" {
+				nSources++
+			}
+			if toFile != "" {
+				nSources++
+			}
+			if nSources == 0 {
+				out.Die("one of --to, --to-group, or --to-file is required")
+			}
+			if nSources > 1 {
+				out.Die("--to, --to-group, and --to-file are mutually exclusive")
 			}
 
 			kclClient := cl.Client()
@@ -92,90 +118,19 @@ SEE ALSO:
 			fetched, err := adm.FetchOffsets(ctx, groupName)
 			out.MaybeDie(err, "unable to fetch offsets for group %q: %v", groupName, err)
 
-			// Determine target topics: either from --topics flag or from existing commits.
-			var targetTopics []string
-			if len(topics) > 0 {
-				targetTopics = topics
-			} else {
-				seen := make(map[string]bool)
-				fetched.Each(func(o kadm.OffsetResponse) {
-					if !seen[o.Topic] {
-						seen[o.Topic] = true
-						targetTopics = append(targetTopics, o.Topic)
-					}
-				})
-			}
-			if len(targetTopics) == 0 {
-				out.Die("no topics to seek; the group has no committed offsets and --topics was not specified")
-			}
-
 			// 3. Resolve target offsets.
 			newOffsets := make(kadm.Offsets)
-			switch spec.Start.Kind {
-			case offsetparse.KindStart:
-				listed, err := adm.ListStartOffsets(ctx, targetTopics...)
-				out.MaybeDie(err, "unable to list start offsets: %v", err)
-				listed.Each(func(lo kadm.ListedOffset) {
-					if lo.Err == nil {
-						newOffsets.Add(kadm.Offset{
-							Topic:       lo.Topic,
-							Partition:   lo.Partition,
-							At:          lo.Offset,
-							LeaderEpoch: lo.LeaderEpoch,
-						})
-					}
-				})
 
-			case offsetparse.KindEnd:
-				listed, err := adm.ListEndOffsets(ctx, targetTopics...)
-				out.MaybeDie(err, "unable to list end offsets: %v", err)
-				listed.Each(func(lo kadm.ListedOffset) {
-					if lo.Err == nil {
-						newOffsets.Add(kadm.Offset{
-							Topic:       lo.Topic,
-							Partition:   lo.Partition,
-							At:          lo.Offset,
-							LeaderEpoch: lo.LeaderEpoch,
-						})
-					}
-				})
-
-			case offsetparse.KindExact:
-				// Need to know partitions. List end offsets to discover them.
-				listed, err := adm.ListEndOffsets(ctx, targetTopics...)
-				out.MaybeDie(err, "unable to list offsets: %v", err)
-				listed.Each(func(lo kadm.ListedOffset) {
-					if lo.Err == nil {
-						newOffsets.Add(kadm.Offset{
-							Topic:       lo.Topic,
-							Partition:   lo.Partition,
-							At:          spec.Start.Value,
-							LeaderEpoch: -1,
-						})
-					}
-				})
-
-			case offsetparse.KindTimestamp:
-				listed, err := adm.ListOffsetsAfterMilli(ctx, spec.Start.Value, targetTopics...)
-				out.MaybeDie(err, "unable to resolve timestamp to offsets: %v", err)
-				listed.Each(func(lo kadm.ListedOffset) {
-					if lo.Err == nil {
-						newOffsets.Add(kadm.Offset{
-							Topic:       lo.Topic,
-							Partition:   lo.Partition,
-							At:          lo.Offset,
-							LeaderEpoch: lo.LeaderEpoch,
-						})
-					}
-				})
-
-			case offsetparse.KindRelative:
-				// +N/-N relative to current committed offsets.
-				fetched.Each(func(o kadm.OffsetResponse) {
+			switch {
+			case toGroup != "":
+				// --to-group: fetch offsets from the source group.
+				srcFetched, err := adm.FetchOffsets(ctx, toGroup)
+				out.MaybeDie(err, "unable to fetch offsets for source group %q: %v", toGroup, err)
+				srcFetched.Each(func(o kadm.OffsetResponse) {
 					if o.Err != nil {
 						return
 					}
-					// Filter to target topics.
+					// Filter to target topics if --topics is specified.
 					if len(topics) > 0 {
 						found := false
 						for _, t := range topics {
@@ -188,20 +143,184 @@ SEE ALSO:
 							return
 						}
 					}
-					newAt := o.Offset.At + spec.Start.Value
-					if newAt < 0 {
-						newAt = 0
-					}
 					newOffsets.Add(kadm.Offset{
 						Topic:       o.Topic,
 						Partition:   o.Partition,
-						At:          newAt,
-						LeaderEpoch: -1,
+						At:          o.Offset.At,
+						LeaderEpoch: o.Offset.LeaderEpoch,
 					})
 				})
 
+			case toFile != "":
+				// --to-file: read offsets from a JSON file.
+				type fileEntry struct {
+					Topic     string `json:"topic"`
+					Partition int32  `json:"partition"`
+					Offset    int64  `json:"offset"`
+				}
+				data, err := os.ReadFile(toFile)
+				out.MaybeDie(err, "unable to read --to-file %q: %v", toFile, err)
+				var entries []fileEntry
+				err = json.Unmarshal(data, &entries)
+				out.MaybeDie(err, "unable to parse --to-file %q: %v", toFile, err)
+				for _, e := range entries {
+					// Filter to target topics if --topics is specified.
+					if len(topics) > 0 {
+						found := false
+						for _, t := range topics {
+							if t == e.Topic {
+								found = true
+								break
+							}
+						}
+						if !found {
+							continue
+						}
+					}
+					newOffsets.Add(kadm.Offset{
+						Topic:       e.Topic,
+						Partition:   e.Partition,
+						At:          e.Offset,
+						LeaderEpoch: -1,
+					})
+				}
+
 			default:
-				out.Die("unsupported seek target kind: %v", spec.Start.Kind)
+				// --to: parse offset specification.
+				spec, err := offsetparse.Parse(to, time.Now())
+				out.MaybeDie(err, "unable to parse --to %q: %v", to, err)
+				if spec.End != nil {
+					out.Die("--to does not accept range offsets; use a single target value")
+				}
+
+				// Determine target topics: either from --topics flag or from existing commits.
+				var targetTopics []string
+				if len(topics) > 0 {
+					targetTopics = topics
+				} else {
+					seen := make(map[string]bool)
+					fetched.Each(func(o kadm.OffsetResponse) {
+						if !seen[o.Topic] {
+							seen[o.Topic] = true
+							targetTopics = append(targetTopics, o.Topic)
+						}
+					})
+				}
+				if len(targetTopics) == 0 {
+					out.Die("no topics to seek; the group has no committed offsets and --topics was not specified")
+				}
+
+				switch spec.Start.Kind {
+				case offsetparse.KindStart:
+					listed, err := adm.ListStartOffsets(ctx, targetTopics...)
+					out.MaybeDie(err, "unable to list start offsets: %v", err)
+					listed.Each(func(lo kadm.ListedOffset) {
+						if lo.Err == nil {
+							newOffsets.Add(kadm.Offset{
+								Topic:       lo.Topic,
+								Partition:   lo.Partition,
+								At:          lo.Offset,
+								LeaderEpoch: lo.LeaderEpoch,
+							})
+						}
+					})
+
+				case offsetparse.KindEnd:
+					listed, err := adm.ListEndOffsets(ctx, targetTopics...)
+					out.MaybeDie(err, "unable to list end offsets: %v", err)
+					listed.Each(func(lo kadm.ListedOffset) {
+						if lo.Err == nil {
+							newOffsets.Add(kadm.Offset{
+								Topic:       lo.Topic,
+								Partition:   lo.Partition,
+								At:          lo.Offset,
+								LeaderEpoch: lo.LeaderEpoch,
+							})
+						}
+					})
+
+				case offsetparse.KindExact:
+					// Need to know partitions. List end offsets to discover them.
+					listed, err := adm.ListEndOffsets(ctx, targetTopics...)
+					out.MaybeDie(err, "unable to list offsets: %v", err)
+					listed.Each(func(lo kadm.ListedOffset) {
+						if lo.Err == nil {
+							newOffsets.Add(kadm.Offset{
+								Topic:       lo.Topic,
+								Partition:   lo.Partition,
+								At:          spec.Start.Value,
+								LeaderEpoch: -1,
+							})
+						}
+					})
+
+				case offsetparse.KindTimestamp:
+					listed, err := adm.ListOffsetsAfterMilli(ctx, spec.Start.Value, targetTopics...)
+					out.MaybeDie(err, "unable to resolve timestamp to offsets: %v", err)
+					listed.Each(func(lo kadm.ListedOffset) {
+						if lo.Err == nil {
+							newOffsets.Add(kadm.Offset{
+								Topic:       lo.Topic,
+								Partition:   lo.Partition,
+								At:          lo.Offset,
+								LeaderEpoch: lo.LeaderEpoch,
+							})
+						}
+					})
+
+				case offsetparse.KindRelative:
+					// +N/-N relative to current committed offsets.
+					fetched.Each(func(o kadm.OffsetResponse) {
+						if o.Err != nil {
+							return
+						}
+						// Filter to target topics.
+						if len(topics) > 0 {
+							found := false
+							for _, t := range topics {
+								if t == o.Topic {
+									found = true
+									break
+								}
+							}
+							if !found {
+								return
+							}
+						}
+						newAt := o.Offset.At + spec.Start.Value
+						if newAt < 0 {
+							newAt = 0
+						}
+						newOffsets.Add(kadm.Offset{
+							Topic:       o.Topic,
+							Partition:   o.Partition,
+							At:          newAt,
+							LeaderEpoch: -1,
+						})
+					})
+
+				default:
+					out.Die("unsupported seek target kind: %v", spec.Start.Kind)
+				}
+			}
+
+			// Filter out topics not in current commits unless --allow-new-topics.
+			if !allowNewTopics {
+				existingTopics := make(map[string]bool)
+				fetched.Each(func(o kadm.OffsetResponse) {
+					existingTopics[o.Topic] = true
+				})
+				filtered := make(kadm.Offsets)
+				skippedTopics := make(map[string]bool)
+				newOffsets.Each(func(o kadm.Offset) {
+					if existingTopics[o.Topic] {
+						filtered.Add(o)
+					} else if !skippedTopics[o.Topic] {
+						skippedTopics[o.Topic] = true
+						fmt.Fprintf(os.Stderr, "WARNING: skipping topic %q: not in group's current committed offsets (use --allow-new-topics to include)\n", o.Topic)
+					}
+				})
+				newOffsets = filtered
 			}
 
 			if len(newOffsets) == 0 {
@@ -290,10 +409,12 @@ SEE ALSO:
 	}
 
 	cmd.Flags().StringVar(&to, "to", "", "target offset (start, end, +N, -N, N, @timestamp)")
+	cmd.Flags().StringVar(&toGroup, "to-group", "", "seek to another group's committed offsets (mutually exclusive with --to and --to-file)")
+	cmd.Flags().StringVar(&toFile, "to-file", "", "seek to offsets from a JSON file (mutually exclusive with --to and --to-group)")
 	cmd.Flags().StringSliceVar(&topics, "topics", nil, "filter to specific topics (comma-separated, repeatable)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview offset changes without applying")
 	cmd.Flags().BoolVar(&execute, "execute", false, "apply changes without interactive confirmation")
-	cmd.MarkFlagRequired("to")
+	cmd.Flags().BoolVar(&allowNewTopics, "allow-new-topics", false, "allow committing offsets for topics not in the group's current commits")
 
 	return cmd
 }
