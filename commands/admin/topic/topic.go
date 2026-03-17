@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -42,6 +43,7 @@ func topicCreateCommand(cl *client.Client) *cobra.Command {
 		replicationFactor int16
 		configKVs         []string
 		validateOnly      bool
+		ifNotExists       bool
 	)
 
 	cmd := &cobra.Command{
@@ -93,7 +95,11 @@ replication factor, and key/value configs.
 			for _, topic := range resp.Topics {
 				msg := "OK"
 				if err := kerr.ErrorForCode(topic.ErrorCode); err != nil {
-					msg = err.Error()
+					if ifNotExists && err == kerr.TopicAlreadyExists {
+						msg = "OK (already exists)"
+					} else {
+						msg = err.Error()
+					}
 				}
 				if resp.Version >= 7 {
 					fmt.Fprintf(tw, "%s\t%x\t%s\n", topic.Topic, topic.TopicID, msg)
@@ -108,31 +114,64 @@ replication factor, and key/value configs.
 	cmd.Flags().Int32VarP(&numPartitions, "num-partitions", "p", 20, "number of partitions to create")
 	cmd.Flags().Int16VarP(&replicationFactor, "replication-factor", "r", 1, "number of replicas to have of each partition")
 	cmd.Flags().StringArrayVarP(&configKVs, "kv", "k", nil, "list of key=value config parameters (repeatable, e.g. -k cleanup.policy=compact -k preallocate=true)")
+	cmd.Flags().BoolVar(&ifNotExists, "if-not-exists", false, "suppress error if topic already exists")
 
 	return cmd
 }
 
 func topicListCommand(cl *client.Client) *cobra.Command {
-	var detailed bool
+	var (
+		detailed     bool
+		showInternal bool
+		regexFilter  string
+	)
 
 	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List all topics",
-		Long:    "List all topics (alias for metadata -t)",
+		Long: `List all topics.
+
+EXAMPLES:
+  kcl topic list                    # all non-internal topics
+  kcl topic list -i                 # include internal topics
+  kcl topic list --regex 'logs\.'   # filter by regex
+`,
 		Run: func(_ *cobra.Command, _ []string) {
 			req := kmsg.NewPtrMetadataRequest()
 			resp, err := req.RequestWith(context.Background(), cl.Client())
 			out.MaybeDie(err, "unable to list topics: %v", err)
-			metadata.PrintTopics(resp.Version, resp.Topics, false, detailed)
+
+			var topics []kmsg.MetadataResponseTopic
+			for _, t := range resp.Topics {
+				if !showInternal && t.IsInternal {
+					continue
+				}
+				if regexFilter != "" {
+					re, err := regexp.Compile(regexFilter)
+					out.MaybeDie(err, "invalid --regex: %v", err)
+					name := ""
+					if t.Topic != nil {
+						name = *t.Topic
+					}
+					if !re.MatchString(name) {
+						continue
+					}
+				}
+				topics = append(topics, t)
+			}
+			metadata.PrintTopics(resp.Version, topics, false, detailed)
 		},
 	}
 	cmd.Flags().BoolVarP(&detailed, "detailed", "d", false, "include detailed information about all topic partitions")
+	cmd.Flags().BoolVarP(&showInternal, "internal", "i", false, "include internal topics")
+	cmd.Flags().StringVar(&regexFilter, "regex", "", "filter topics by regex pattern")
 	return cmd
 }
 
 func topicDeleteCommand(cl *client.Client) *cobra.Command {
 	var ids bool
+	var ifExists bool
 	cmd := &cobra.Command{
 		Use:   "delete TOPICS...",
 		Short: "Delete all listed topics (Kafka 0.10.1+).",
@@ -167,7 +206,11 @@ func topicDeleteCommand(cl *client.Client) *cobra.Command {
 			for _, topicResp := range resps {
 				msg := "OK"
 				if err := kerr.ErrorForCode(topicResp.ErrorCode); err != nil {
-					msg = err.Error()
+					if ifExists && err == kerr.UnknownTopicOrPartition {
+						msg = "OK (did not exist)"
+					} else {
+						msg = err.Error()
+					}
 				}
 				topic := ""
 				if topicResp.Topic != nil {
@@ -180,6 +223,7 @@ func topicDeleteCommand(cl *client.Client) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&ids, "ids", false, "whether the input topics should be parsed as topic IDs")
+	cmd.Flags().BoolVar(&ifExists, "if-exists", false, "suppress error if topic does not exist")
 	return cmd
 }
 
