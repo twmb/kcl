@@ -582,7 +582,11 @@ func printDescribed(
 				fmt.Fprintf(tw, "TOTAL LAG\t%d\n", totalLag)
 			}
 			if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
-				fmt.Fprintf(tw, "ERROR\t%s\n", err)
+				msg := err.Error()
+				if group.ErrorMessage != nil {
+					msg += ": " + *group.ErrorMessage
+				}
+				fmt.Fprintf(tw, "ERROR\t%s\n", msg)
 			}
 			tw.Flush()
 		}
@@ -654,6 +658,7 @@ type describedGroupMember struct {
 type describedGroup struct {
 	Broker               kgo.BrokerMetadata
 	ErrorCode            int16
+	ErrorMessage         *string
 	Group                string
 	State                string
 	ProtocolType         string
@@ -677,6 +682,7 @@ func unmarshalGroupDescribeMembers(
 		dgroup := describedGroup{
 			Broker:               meta,
 			ErrorCode:            group.ErrorCode,
+			ErrorMessage:         group.ErrorMessage,
 			Group:                group.Group,
 			State:                group.State,
 			ProtocolType:         group.ProtocolType,

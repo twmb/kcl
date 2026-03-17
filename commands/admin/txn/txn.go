@@ -101,7 +101,11 @@ The information printed:
 			for _, topic := range resp.Topics {
 				for _, partition := range topic.Partitions {
 					if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
-						fmt.Fprintf(tw, "%s\t%d\t%s\t\t\t\t\t\t\n", topic.Topic, partition.Partition, err)
+						msg := err.Error()
+						if partition.ErrorMessage != nil {
+							msg += ": " + *partition.ErrorMessage
+						}
+						fmt.Fprintf(tw, "%s\t%d\t%s\t\t\t\t\t\t\n", topic.Topic, partition.Partition, msg)
 						continue
 					}
 					for _, producer := range partition.ActiveProducers {
