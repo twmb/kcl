@@ -90,6 +90,7 @@ by issuing a ListGroups request with a type filter of "share".
 }
 
 func describeCommand(cl *client.Client) *cobra.Command {
+	var verbose bool
 	cmd := &cobra.Command{
 		Use:     "describe GROUPS...",
 		Aliases: []string{"d"},
@@ -97,6 +98,7 @@ func describeCommand(cl *client.Client) *cobra.Command {
 		Long: `Describe share groups (KIP-932, Kafka 4.0+).
 
 If no groups are provided, all share groups are listed and then described.
+Use -v to also show start offsets and lag from DescribeShareGroupOffsets.
 `,
 		Run: func(_ *cobra.Command, groups []string) {
 			if len(groups) == 0 {
@@ -114,6 +116,12 @@ If no groups are provided, all share groups are listed and then described.
 				out.ExitJSON(shards)
 			}
 
+			// If verbose, also fetch offsets.
+			var offsetsByGroup map[string]*kmsg.DescribeShareGroupOffsetsResponseGroup
+			if verbose {
+				offsetsByGroup = fetchShareGroupOffsets(cl, groups)
+			}
+
 			for _, shard := range shards {
 				if shard.Err != nil {
 					fmt.Printf("unable to issue ShareGroupDescribe to broker %d (%s:%d): %v\n", shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
@@ -123,12 +131,53 @@ If no groups are provided, all share groups are listed and then described.
 				resp := shard.Resp.(*kmsg.ShareGroupDescribeResponse)
 				for _, group := range resp.Groups {
 					printShareGroup(shard.Meta.NodeID, group)
+					if verbose {
+						if offsets, ok := offsetsByGroup[group.GroupID]; ok {
+							fmt.Println()
+							tw := out.NewTable("TOPIC", "PARTITION", "START-OFFSET", "LEADER-EPOCH", "LAG", "ERROR")
+							for _, topic := range offsets.Topics {
+								for _, p := range topic.Partitions {
+									errMsg := ""
+									if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
+										errMsg = err.Error()
+									}
+									lagStr := "-"
+									if p.Lag >= 0 {
+										lagStr = fmt.Sprintf("%d", p.Lag)
+									}
+									tw.Print(topic.Topic, p.Partition, p.StartOffset, p.LeaderEpoch, lagStr, errMsg)
+								}
+							}
+							tw.Flush()
+						}
+					}
 					fmt.Println()
 				}
 			}
 		},
 	}
+	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "also show start offsets and lag per partition")
 	return cmd
+}
+
+func fetchShareGroupOffsets(cl *client.Client, groups []string) map[string]*kmsg.DescribeShareGroupOffsetsResponseGroup {
+	req := kmsg.NewPtrDescribeShareGroupOffsetsRequest()
+	for _, g := range groups {
+		req.Groups = append(req.Groups, kmsg.DescribeShareGroupOffsetsRequestGroup{GroupID: g})
+	}
+
+	shards := cl.Client().RequestSharded(context.Background(), req)
+	result := make(map[string]*kmsg.DescribeShareGroupOffsetsResponseGroup)
+	for _, shard := range shards {
+		if shard.Err != nil {
+			continue
+		}
+		resp := shard.Resp.(*kmsg.DescribeShareGroupOffsetsResponse)
+		for i := range resp.Groups {
+			result[resp.Groups[i].GroupID] = &resp.Groups[i]
+		}
+	}
+	return result
 }
 
 func printShareGroup(broker int32, group kmsg.ShareGroupDescribeResponseGroup) {
