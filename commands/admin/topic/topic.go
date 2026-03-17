@@ -32,6 +32,7 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd.AddCommand(topicListCommand(cl))
 	cmd.AddCommand(topicDeleteCommand(cl))
 	cmd.AddCommand(topicAddPartitionsCommand(cl))
+	cmd.AddCommand(topicDescribeCommand(cl))
 	return cmd
 }
 
