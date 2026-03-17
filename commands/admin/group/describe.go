@@ -253,7 +253,6 @@ func describeClassicGroups(cl *client.Client, groups []string) []describedGroup 
 	for _, shard := range shards {
 		if shard.Err != nil {
 			shardFail("DescribeGroups", shard, &failures)
-			failures++
 			continue
 		}
 
