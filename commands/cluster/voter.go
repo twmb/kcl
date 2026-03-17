@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"strconv"
@@ -136,8 +137,9 @@ func parseDirectoryID(s string) [16]byte {
 	if len(s) != 32 {
 		out.Die("directory-id must be a 32-char hex string (UUID), got %d chars", len(s))
 	}
-	for i := 0; i < 16; i++ {
-		fmt.Sscanf(s[i*2:i*2+2], "%02x", &id[i])
+	_, err := hex.Decode(id[:], []byte(s))
+	if err != nil {
+		out.Die("directory-id is not valid hex: %v", err)
 	}
 	return id
 }

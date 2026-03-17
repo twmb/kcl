@@ -352,7 +352,7 @@ in the cluster.
 						brokers[i].Rack = *b.Rack
 					}
 				}
-				fields := map[string]interface{}{
+				fields := map[string]any{
 					"cluster_id":    resp.ClusterID,
 					"controller_id": resp.ControllerID,
 					"brokers":       brokers,

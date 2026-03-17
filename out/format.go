@@ -3,6 +3,7 @@ package out
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -23,7 +24,7 @@ type FormattedTable struct {
 	jsonKey  string
 	headers  []string
 	jsonKeys []string
-	rows     [][]interface{}
+	rows     [][]any
 }
 
 // NewFormattedTable creates a table that outputs in the specified format.
@@ -50,7 +51,7 @@ func NewFormattedTable(format, command string, version int, jsonKey string, head
 }
 
 // Row adds a row of values to the table.
-func (t *FormattedTable) Row(values ...interface{}) {
+func (t *FormattedTable) Row(values ...any) {
 	t.rows = append(t.rows, values)
 }
 
@@ -80,9 +81,9 @@ func (t *FormattedTable) flushText() {
 }
 
 func (t *FormattedTable) flushJSON() {
-	data := make([]map[string]interface{}, 0, len(t.rows))
+	data := make([]map[string]any, 0, len(t.rows))
 	for _, row := range t.rows {
-		m := make(map[string]interface{}, len(t.jsonKeys))
+		m := make(map[string]any, len(t.jsonKeys))
 		for j, key := range t.jsonKeys {
 			if j < len(row) {
 				m[key] = row[j]
@@ -90,13 +91,11 @@ func (t *FormattedTable) flushJSON() {
 		}
 		data = append(data, m)
 	}
-
-	output := map[string]interface{}{
+	writeJSON(map[string]any{
 		"_command": t.command,
 		"_version": t.version,
 		t.jsonKey:  data,
-	}
-	writeJSON(output)
+	})
 }
 
 func (t *FormattedTable) flushAWK() {
@@ -112,19 +111,17 @@ func (t *FormattedTable) flushAWK() {
 // MarshalJSON outputs structured JSON with _command and _version metadata
 // alongside arbitrary additional fields. Use this for commands with
 // non-tabular or mixed output.
-func MarshalJSON(command string, version int, fields map[string]interface{}) {
-	output := make(map[string]interface{}, len(fields)+2)
+func MarshalJSON(command string, version int, fields map[string]any) {
+	output := make(map[string]any, len(fields)+2)
 	output["_command"] = command
 	output["_version"] = version
-	for k, v := range fields {
-		output[k] = v
-	}
+	maps.Copy(output, fields)
 	writeJSON(output)
 }
 
 // DieJSON outputs a JSON error to stdout and exits with code 1.
 func DieJSON(command string, errCode string, message string) {
-	writeJSON(map[string]interface{}{
+	writeJSON(map[string]any{
 		"_command": command,
 		"error":    errCode,
 		"message":  message,
@@ -132,11 +129,10 @@ func DieJSON(command string, errCode string, message string) {
 	os.Exit(1)
 }
 
-func writeJSON(v interface{}) {
+func writeJSON(v any) {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(v); err != nil {
-		fmt.Fprintf(os.Stderr, "unable to marshal JSON: %v\n", err)
-		os.Exit(1)
+		Die("unable to marshal JSON: %v", err)
 	}
 }

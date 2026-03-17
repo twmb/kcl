@@ -102,7 +102,7 @@ Command completion is available at:
 
 		if cmd.HasParent() {
 			name := strings.Split(cmd.Use, " ")[0]
-			cmd.Example = strings.Replace(cmd.Example, name, cmd.Parent().CommandPath()+" "+name, -1)
+			cmd.Example = strings.ReplaceAll(cmd.Example, name, cmd.Parent().CommandPath()+" "+name)
 		}
 	})
 

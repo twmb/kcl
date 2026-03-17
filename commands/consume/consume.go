@@ -331,10 +331,10 @@ func (c *consumption) run(topics []string) {
 	} else {
 		fn, err := format.ParseWriteFormat(c.format, escape)
 		out.MaybeDie(err, "%v", err)
-		var out []byte
+		var buf []byte
 		co.format = func(r *kgo.Record, p *kgo.FetchPartition) {
-			out = fn(out[:0], r, p)
-			os.Stdout.Write(out)
+			buf = fn(buf[:0], r, p)
+			os.Stdout.Write(buf)
 		}
 	}
 

@@ -89,13 +89,11 @@ func parseOneGrep(pattern string) (grepFilter, error) {
 
 	case strings.HasPrefix(s, "h:"):
 		// h:NAME=REGEX — match a specific header's value.
-		rest := s[2:]
-		eqIdx := strings.IndexByte(rest, '=')
-		if eqIdx < 0 {
+		name, pattern, ok := strings.Cut(s[2:], "=")
+		if !ok {
 			return f, fmt.Errorf("h: prefix requires NAME=REGEX format")
 		}
-		name := rest[:eqIdx]
-		re, err := regexp.Compile(rest[eqIdx+1:])
+		re, err := regexp.Compile(pattern)
 		if err != nil {
 			return f, err
 		}

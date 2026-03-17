@@ -24,12 +24,12 @@ func BeginTabWriteTo(w io.Writer) *tabwriter.Writer {
 
 // Standard exit codes.
 const (
-	ExitOK           = 0 // success
-	ExitError        = 1 // general / Kafka-level error
-	ExitUsage        = 2 // invalid usage (bad flags, args, parse errors)
-	ExitAuth         = 3 // auth / permission error
-	ExitNotFound     = 4 // resource not found
-	ExitTimeout      = 5 // timeout
+	ExitOK       = 0 // success
+	ExitError    = 1 // general / Kafka-level error
+	ExitUsage    = 2 // invalid usage (bad flags, args, parse errors)
+	ExitAuth     = 3 // auth / permission error
+	ExitNotFound = 4 // resource not found
+	ExitTimeout  = 5 // timeout
 )
 
 // Exit calls os.Exit(1).
@@ -43,36 +43,36 @@ func ExitCode(code int) {
 }
 
 // MaybeDie, if err is non-nil, prints the message and exits with 1.
-func MaybeDie(err error, msg string, args ...interface{}) {
+func MaybeDie(err error, msg string, args ...any) {
 	if err != nil {
 		Die(msg, args...)
 	}
 }
 
 // Die prints a message to stderr and exits with 1.
-func Die(msg string, args ...interface{}) {
+func Die(msg string, args ...any) {
 	fmt.Fprintf(os.Stderr, msg+"\n", args...)
 	os.Exit(1)
 }
 
 // ExitErrJSON prints a message to stderr, dumps json to stdout, and exits with 1.
-func ExitErrJSON(j interface{}, msg string, args ...interface{}) {
+func ExitErrJSON(j any, msg string, args ...any) {
 	fmt.Fprintf(os.Stderr, msg+"\n", args...)
 	DumpJSON(j)
 	os.Exit(1)
 }
 
 // ExitJSON dumps json to stdout and exits with 0.
-func ExitJSON(j interface{}) {
+func ExitJSON(j any) {
 	DumpJSON(j)
 	os.Exit(0)
 }
 
-// DumpJSON prints json to stderr. This exits with 1 if the input is unmarshalable.
-func DumpJSON(j interface{}) {
-	out, err := json.MarshalIndent(j, "", "  ")
+// DumpJSON prints json to stdout. This exits with 1 if the input is unmarshalable.
+func DumpJSON(j any) {
+	raw, err := json.MarshalIndent(j, "", "  ")
 	MaybeDie(err, "unable to json marshal response: %v", err)
-	fmt.Printf("%s\n", out)
+	fmt.Printf("%s\n", raw)
 }
 
 // ErrAndMsg prints OK to stdout if code is 0, otherwise the error name to
@@ -102,7 +102,7 @@ func MaybeExitErrMsg(code int16, msg *string) {
 	}
 }
 
-func args2strings(args []interface{}) []string {
+func args2strings(args []any) []string {
 	sargs := make([]string, len(args))
 	for i, arg := range args {
 		sargs[i] = fmt.Sprint(arg)
@@ -135,7 +135,7 @@ func NewTabWriter() *TabWriter {
 }
 
 // Print stringifies the arguments and calls PrintStrings.
-func (t *TabWriter) Print(args ...interface{}) {
+func (t *TabWriter) Print(args ...any) {
 	t.PrintStrings(args2strings(args)...)
 }
 
@@ -146,6 +146,6 @@ func (t *TabWriter) PrintStrings(args ...string) {
 }
 
 // Line prints a newline in our tab writer. This will reset tab spacing.
-func (t *TabWriter) Line(sprint ...interface{}) {
+func (t *TabWriter) Line(sprint ...any) {
 	fmt.Fprint(t.Writer, append(sprint, "\n")...)
 }

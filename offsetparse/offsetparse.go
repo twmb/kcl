@@ -147,9 +147,7 @@ func parseOffsetSpec(s string) (Spec, error) {
 	}
 
 	// N:M, N:end, N:, or plain N
-	if colonIdx := strings.IndexByte(s, ':'); colonIdx >= 0 {
-		startStr := s[:colonIdx]
-		endStr := s[colonIdx+1:]
+	if startStr, endStr, ok := strings.Cut(s, ":"); ok {
 
 		startN, err := strconv.ParseInt(startStr, 10, 64)
 		if err != nil {
@@ -376,10 +374,7 @@ func ParseDuration(s string) (time.Duration, error) {
 		return time.ParseDuration(s)
 	}
 
-	dIdx := strings.IndexByte(s, 'd')
-	dayStr := s[:dIdx]
-	rest := s[dIdx+1:]
-
+	dayStr, rest, _ := strings.Cut(s, "d")
 	if dayStr == "" {
 		return 0, fmt.Errorf("invalid duration %q: no number before 'd'", s)
 	}
@@ -404,8 +399,8 @@ func isAllDigits(s string) bool {
 	if len(s) == 0 {
 		return false
 	}
-	for i := 0; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
+	for _, b := range []byte(s) {
+		if b < '0' || b > '9' {
 			return false
 		}
 	}

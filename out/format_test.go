@@ -57,7 +57,7 @@ func TestFormattedTableJSON(t *testing.T) {
 		table.Flush()
 	})
 
-	var result map[string]interface{}
+	var result map[string]any
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatalf("JSON output should be valid JSON: %v\noutput: %s", err, output)
 	}
@@ -69,7 +69,7 @@ func TestFormattedTableJSON(t *testing.T) {
 		t.Errorf("_version = %v, want 1", result["_version"])
 	}
 
-	groups, ok := result["groups"].([]interface{})
+	groups, ok := result["groups"].([]any)
 	if !ok {
 		t.Fatalf("groups field missing or wrong type")
 	}
@@ -77,7 +77,7 @@ func TestFormattedTableJSON(t *testing.T) {
 		t.Fatalf("expected 2 groups, got %d", len(groups))
 	}
 
-	first := groups[0].(map[string]interface{})
+	first := groups[0].(map[string]any)
 	if first["broker"] != float64(1) {
 		t.Errorf("first group broker = %v, want 1", first["broker"])
 	}
@@ -128,9 +128,9 @@ func TestFormattedTableEmpty(t *testing.T) {
 		table := NewFormattedTable("json", "test.cmd", 1, "items", "A", "B")
 		table.Flush()
 	})
-	var result map[string]interface{}
+	var result map[string]any
 	json.Unmarshal([]byte(output), &result)
-	items := result["items"].([]interface{})
+	items := result["items"].([]any)
 	if len(items) != 0 {
 		t.Errorf("expected empty array, got %d items", len(items))
 	}
@@ -153,10 +153,10 @@ func TestFormattedTableJSONKeyConversion(t *testing.T) {
 		table.Flush()
 	})
 
-	var result map[string]interface{}
+	var result map[string]any
 	json.Unmarshal([]byte(output), &result)
-	data := result["data"].([]interface{})
-	row := data[0].(map[string]interface{})
+	data := result["data"].([]any)
+	row := data[0].(map[string]any)
 
 	// Hyphens and spaces in headers become underscores in JSON keys.
 	if _, ok := row["current_offset"]; !ok {
@@ -172,14 +172,14 @@ func TestFormattedTableJSONKeyConversion(t *testing.T) {
 
 func TestMarshalJSON(t *testing.T) {
 	output := captureStdout(func() {
-		MarshalJSON("cluster.describe", 1, map[string]interface{}{
+		MarshalJSON("cluster.describe", 1, map[string]any{
 			"cluster_id":    "abc-123",
 			"controller_id": 1,
 			"brokers":       []string{"kafka-1", "kafka-2"},
 		})
 	})
 
-	var result map[string]interface{}
+	var result map[string]any
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
@@ -203,11 +203,11 @@ func TestFormattedTableJSONTypesPreserved(t *testing.T) {
 		table.Flush()
 	})
 
-	var result map[string]interface{}
+	var result map[string]any
 	json.Unmarshal([]byte(output), &result)
-	data := result["data"].([]interface{})
+	data := result["data"].([]any)
 
-	first := data[0].(map[string]interface{})
+	first := data[0].(map[string]any)
 	// JSON encoding preserves Go types: int→float64, bool→bool, string→string.
 	if first["name"] != "alpha" {
 		t.Errorf("name = %v", first["name"])
@@ -219,7 +219,7 @@ func TestFormattedTableJSONTypesPreserved(t *testing.T) {
 		t.Errorf("active = %v", first["active"])
 	}
 
-	second := data[1].(map[string]interface{})
+	second := data[1].(map[string]any)
 	if second["active"] != false {
 		t.Errorf("second active = %v", second["active"])
 	}
@@ -262,14 +262,14 @@ func TestDieJSON(t *testing.T) {
 	// DieJSON calls os.Exit, so we can't test it directly.
 	// But we can test the JSON output it would produce via writeJSON.
 	output := captureStdout(func() {
-		writeJSON(map[string]interface{}{
+		writeJSON(map[string]any{
 			"_command": "test.cmd",
 			"error":    "NOT_FOUND",
 			"message":  "resource not found",
 		})
 	})
 
-	var result map[string]interface{}
+	var result map[string]any
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}

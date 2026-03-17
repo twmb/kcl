@@ -323,13 +323,13 @@ func fetchOffsets(cl *client.Client, groups []string) map[string]map[int32]offse
 		}
 
 		for _, topic := range resp.Topics {
-			fetchedt := fetched[topic.Topic]
-			if fetchedt == nil {
-				fetchedt = make(map[int32]offset)
-				fetched[topic.Topic] = fetchedt
+			topicOffsets := fetched[topic.Topic]
+			if topicOffsets == nil {
+				topicOffsets = make(map[int32]offset)
+				fetched[topic.Topic] = topicOffsets
 			}
 			for _, partition := range topic.Partitions {
-				fetchedt[partition.Partition] = offset{
+				topicOffsets[partition.Partition] = offset{
 					at:  partition.Offset,
 					err: kerr.ErrorForCode(partition.ErrorCode),
 				}
@@ -403,13 +403,13 @@ func listOffsets(cl *client.Client, described []describedGroup, fetched map[stri
 
 		resp := shard.Resp.(*kmsg.ListOffsetsResponse)
 		for _, topic := range resp.Topics {
-			listedt := listed[topic.Topic]
-			if listedt == nil {
-				listedt = make(map[int32]offset)
-				listed[topic.Topic] = listedt
+			partOffsets := listed[topic.Topic]
+			if partOffsets == nil {
+				partOffsets = make(map[int32]offset)
+				listed[topic.Topic] = partOffsets
 			}
 			for _, partition := range topic.Partitions {
-				listedt[partition.Partition] = offset{
+				partOffsets[partition.Partition] = offset{
 					at:  partition.Offset,
 					err: kerr.ErrorForCode(partition.ErrorCode),
 				}
