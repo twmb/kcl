@@ -25,8 +25,13 @@ func Command(cl *client.Client) *cobra.Command {
 		Aliases: []string{"user-scram"},
 		Short:   "Alter or describe user scram configs (2.7.0+).",
 	}
+	list := describeUserSCRAM(cl)
+	list.Use = "list"
+	list.Aliases = []string{"ls", "describe", "d"}
+	list.Short = "List user SCRAM credentials."
+
 	cmd.AddCommand(alterUserSCRAM(cl))
-	cmd.AddCommand(describeUserSCRAM(cl))
+	cmd.AddCommand(list)
 	return cmd
 }
 
