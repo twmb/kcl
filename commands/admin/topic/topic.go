@@ -39,6 +39,36 @@ func Command(cl *client.Client) *cobra.Command {
 	return cmd
 }
 
+func parseReplicaAssignment(s string) ([]kmsg.CreateTopicsRequestTopicReplicaAssignment, error) {
+	var assignments []kmsg.CreateTopicsRequestTopicReplicaAssignment
+	for i, group := range strings.Split(s, ",") {
+		group = strings.TrimSpace(group)
+		if len(group) == 0 {
+			continue
+		}
+		var replicas []int32
+		for _, idStr := range strings.Split(group, ":") {
+			idStr = strings.TrimSpace(idStr)
+			if len(idStr) == 0 {
+				continue
+			}
+			id, err := strconv.Atoi(idStr)
+			if err != nil {
+				return nil, fmt.Errorf("unable to parse broker ID %q: %v", idStr, err)
+			}
+			replicas = append(replicas, int32(id))
+		}
+		if len(replicas) == 0 {
+			continue
+		}
+		assignments = append(assignments, kmsg.CreateTopicsRequestTopicReplicaAssignment{
+			Partition: int32(i),
+			Replicas:  replicas,
+		})
+	}
+	return assignments, nil
+}
+
 func topicCreateCommand(cl *client.Client) *cobra.Command {
 	var (
 		numPartitions     int32
@@ -46,6 +76,7 @@ func topicCreateCommand(cl *client.Client) *cobra.Command {
 		configKVs         []string
 		validateOnly      bool
 		ifNotExists       bool
+		replicaAssignment string
 	)
 
 	cmd := &cobra.Command{
@@ -56,6 +87,12 @@ func topicCreateCommand(cl *client.Client) *cobra.Command {
 
 All topics created with this command will have the same number of partitions,
 replication factor, and key/value configs.
+
+To manually assign replicas, use --replica-assignment with a comma-separated
+list of colon-separated broker IDs. Each comma-separated group is a partition's
+replica list. For example, "0:1:2,1:2:3,2:3:0" creates 3 partitions with 3
+replicas each. When using --replica-assignment, do not use --num-partitions or
+--replication-factor.
 `,
 		Args: cobra.MinimumNArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
@@ -71,11 +108,23 @@ replication factor, and key/value configs.
 				})
 			}
 
+			var assignments []kmsg.CreateTopicsRequestTopicReplicaAssignment
+			if replicaAssignment != "" {
+				assignments, err = parseReplicaAssignment(replicaAssignment)
+				out.MaybeDie(err, "unable to parse replica assignment: %v", err)
+				if len(assignments) == 0 {
+					out.Die("--replica-assignment specified but no partitions parsed")
+				}
+				numPartitions = -1
+				replicationFactor = -1
+			}
+
 			for _, topic := range args {
 				req.Topics = append(req.Topics, kmsg.CreateTopicsRequestTopic{
 					Topic:             topic,
 					ReplicationFactor: replicationFactor,
 					NumPartitions:     numPartitions,
+					ReplicaAssignment: assignments,
 					Configs:           configs,
 				})
 			}
@@ -117,6 +166,7 @@ replication factor, and key/value configs.
 	cmd.Flags().Int16VarP(&replicationFactor, "replication-factor", "r", 1, "number of replicas to have of each partition")
 	cmd.Flags().StringArrayVarP(&configKVs, "kv", "k", nil, "list of key=value config parameters (repeatable, e.g. -k cleanup.policy=compact -k preallocate=true)")
 	cmd.Flags().BoolVar(&ifNotExists, "if-not-exists", false, "suppress error if topic already exists")
+	cmd.Flags().StringVar(&replicaAssignment, "replica-assignment", "", "manual replica assignment as comma-separated partition groups of colon-separated broker IDs (e.g. 0:1:2,1:2:3,2:3:0)")
 
 	return cmd
 }
@@ -174,10 +224,62 @@ EXAMPLES:
 func topicDeleteCommand(cl *client.Client) *cobra.Command {
 	var ids bool
 	var ifExists bool
+	var dryRun bool
+	var useRegex bool
 	cmd := &cobra.Command{
 		Use:   "delete TOPICS...",
 		Short: "Delete all listed topics (Kafka 0.10.1+).",
+		Long: `Delete all listed topics (Kafka 0.10.1+).
+
+Use --regex to treat arguments as regex patterns: all topics matching any
+pattern will be deleted. Use --dry-run to see which topics would be deleted
+without actually deleting them.
+`,
 		Run: func(_ *cobra.Command, topics []string) {
+			if useRegex {
+				if ids {
+					out.Die("--regex and --ids cannot be used together")
+				}
+				// Compile all patterns first.
+				var patterns []*regexp.Regexp
+				for _, pat := range topics {
+					re, err := regexp.Compile(pat)
+					out.MaybeDie(err, "invalid regex %q: %v", pat, err)
+					patterns = append(patterns, re)
+				}
+
+				// Fetch all topic names via metadata.
+				metaReq := kmsg.NewPtrMetadataRequest()
+				metaResp, err := metaReq.RequestWith(context.Background(), cl.Client())
+				out.MaybeDie(err, "unable to list topics: %v", err)
+
+				topics = nil
+				for _, t := range metaResp.Topics {
+					name := ""
+					if t.Topic != nil {
+						name = *t.Topic
+					}
+					for _, re := range patterns {
+						if re.MatchString(name) {
+							topics = append(topics, name)
+							break
+						}
+					}
+				}
+				if len(topics) == 0 {
+					fmt.Println("No topics matched the provided regex patterns.")
+					return
+				}
+			}
+
+			if dryRun {
+				fmt.Println("Dry run: the following topics would be deleted:")
+				for _, topic := range topics {
+					fmt.Printf("  %s\n", topic)
+				}
+				return
+			}
+
 			req := &kmsg.DeleteTopicsRequest{
 				TimeoutMillis: cl.TimeoutMillis(),
 				TopicNames:    topics,
@@ -226,11 +328,14 @@ func topicDeleteCommand(cl *client.Client) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&ids, "ids", false, "whether the input topics should be parsed as topic IDs")
 	cmd.Flags().BoolVar(&ifExists, "if-exists", false, "suppress error if topic does not exist")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print topics that would be deleted without actually deleting them")
+	cmd.Flags().BoolVar(&useRegex, "regex", false, "treat topic arguments as regex patterns; match against all existing topics")
 	return cmd
 }
 
 func topicAddPartitionsCommand(cl *client.Client) *cobra.Command {
 	var topics []string
+	var force bool
 
 	cmd := &cobra.Command{
 		Use:   "add-partitions -t TOPIC ASSIGNMENTS",
@@ -266,6 +371,15 @@ add-partitions -t bar -t baz 1, 2, 3`,
 		Run: func(_ *cobra.Command, args []string) {
 			if len(topics) == 0 {
 				out.Die("missing topics to add partitions to")
+			}
+
+			for _, topic := range topics {
+				if strings.HasPrefix(topic, "__") && !force {
+					out.Die("topic %q is an internal topic (starts with \"__\"); use --force to modify internal topics", topic)
+				}
+				if strings.HasPrefix(topic, "__") && force {
+					fmt.Fprintf(os.Stderr, "WARNING: modifying internal topic %q; this can cause system instability\n", topic)
+				}
 			}
 
 			assignments, err := parseAssignments(strings.Join(args, ""))
@@ -332,6 +446,7 @@ add-partitions -t bar -t baz 1, 2, 3`,
 	}
 
 	cmd.Flags().StringArrayVarP(&topics, "topic", "t", nil, "topic to add partitions to; repeatable")
+	cmd.Flags().BoolVar(&force, "force", false, "allow modifying internal topics (those starting with \"__\")")
 
 	return cmd
 }

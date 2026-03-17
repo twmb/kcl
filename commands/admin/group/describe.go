@@ -3,6 +3,7 @@ package group
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,6 +27,7 @@ func describeCommand(cl *client.Client) *cobra.Command {
 		showLag            bool
 		lagPerTopic        bool
 		lagFilter          string
+		regex              bool
 	)
 
 	cmd := &cobra.Command{
@@ -56,6 +58,10 @@ SEE ALSO:
   kcl consume -g       consume as a group member
 `,
 		Run: func(_ *cobra.Command, groups []string) {
+			if regex {
+				groups = filterGroupsByRegex(cl, groups, listGroups)
+			}
+
 			if useConsumerDescribe {
 				describeConsumerGroups(cl, groups, readCommitted, showSummary, showMembers, showLag, lagPerTopic, lagFilter)
 				return
@@ -82,6 +88,7 @@ SEE ALSO:
 	cmd.Flags().BoolVarP(&showLag, "lag", "l", false, "show only the lag section")
 	cmd.Flags().BoolVar(&lagPerTopic, "lag-per-topic", false, "aggregate and print lag summed per topic")
 	cmd.Flags().StringVar(&lagFilter, "lag-filter", "", "filter partitions by lag (>N, >=N, <N, <=N, =N)")
+	cmd.Flags().BoolVar(&regex, "regex", false, "treat group arguments as regular expressions")
 
 	return cmd
 }
@@ -692,4 +699,32 @@ func unmarshalGroupDescribeMembers(
 	}
 
 	return dresp
+}
+
+// filterGroupsByRegex lists all groups using listFn, compiles each pattern
+// argument as a regex, and returns only groups matching at least one pattern.
+func filterGroupsByRegex(cl *client.Client, patterns []string, listFn func(*client.Client) []string) []string {
+	if len(patterns) == 0 {
+		out.Die("--regex requires at least one pattern argument")
+	}
+	var compiled []*regexp.Regexp
+	for _, p := range patterns {
+		re, err := regexp.Compile(p)
+		if err != nil {
+			out.Die("invalid regex %q: %v", p, err)
+		}
+		compiled = append(compiled, re)
+	}
+
+	all := listFn(cl)
+	var matched []string
+	for _, g := range all {
+		for _, re := range compiled {
+			if re.MatchString(g) {
+				matched = append(matched, g)
+				break
+			}
+		}
+	}
+	return matched
 }

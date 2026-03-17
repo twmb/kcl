@@ -97,11 +97,29 @@ the groups listed. This prints all of the information from a ListGroups request.
 }
 
 func deleteCommand(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
+	var dryRun bool
+	var regex bool
+	cmd := &cobra.Command{
 		Use:   "delete GROUPS...",
 		Short: "Delete all listed Kafka groups (Kafka 1.1.0+).",
 		Args:  cobra.MinimumNArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
+			if regex {
+				args = filterGroupsByRegex(cl, args, listGroups)
+			}
+
+			if dryRun {
+				fmt.Println("Dry run: the following groups would be deleted:")
+				for _, group := range args {
+					fmt.Printf("  %s\n", group)
+				}
+				return
+			}
+
+			if len(args) == 0 {
+				out.Die("no groups matched")
+			}
+
 			brokerResps := cl.Client().RequestSharded(context.Background(), &kmsg.DeleteGroupsRequest{
 				Groups: args,
 			})
@@ -125,6 +143,9 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 			}
 		},
 	}
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print groups that would be deleted without actually deleting them")
+	cmd.Flags().BoolVar(&regex, "regex", false, "treat group arguments as regular expressions")
+	return cmd
 }
 
 func offsetDeleteCommand(cl *client.Client) *cobra.Command {

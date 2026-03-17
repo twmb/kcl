@@ -4,6 +4,7 @@ package sharegroup
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -91,6 +92,7 @@ by issuing a ListGroups request with a type filter of "share".
 
 func describeCommand(cl *client.Client) *cobra.Command {
 	var verbose bool
+	var regex bool
 	cmd := &cobra.Command{
 		Use:     "describe GROUPS...",
 		Aliases: []string{"d"},
@@ -101,6 +103,9 @@ If no groups are provided, all share groups are listed and then described.
 Use -v to also show start offsets and lag from DescribeShareGroupOffsets.
 `,
 		Run: func(_ *cobra.Command, groups []string) {
+			if regex {
+				groups = filterShareGroupsByRegex(cl, groups)
+			}
 			if len(groups) == 0 {
 				groups = listShareGroups(cl)
 			}
@@ -157,6 +162,7 @@ Use -v to also show start offsets and lag from DescribeShareGroupOffsets.
 		},
 	}
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "also show start offsets and lag per partition")
+	cmd.Flags().BoolVar(&regex, "regex", false, "treat group arguments as regular expressions")
 	return cmd
 }
 
@@ -304,4 +310,32 @@ func listShareGroups(cl *client.Client) []string {
 		out.Die("all %d ListGroups requests failed", failures)
 	}
 	return groups
+}
+
+// filterShareGroupsByRegex lists all share groups, compiles each pattern
+// argument as a regex, and returns only groups matching at least one pattern.
+func filterShareGroupsByRegex(cl *client.Client, patterns []string) []string {
+	if len(patterns) == 0 {
+		out.Die("--regex requires at least one pattern argument")
+	}
+	var compiled []*regexp.Regexp
+	for _, p := range patterns {
+		re, err := regexp.Compile(p)
+		if err != nil {
+			out.Die("invalid regex %q: %v", p, err)
+		}
+		compiled = append(compiled, re)
+	}
+
+	all := listShareGroups(cl)
+	var matched []string
+	for _, g := range all {
+		for _, re := range compiled {
+			if re.MatchString(g) {
+				matched = append(matched, g)
+				break
+			}
+		}
+	}
+	return matched
 }

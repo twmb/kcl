@@ -228,6 +228,26 @@ For more detailed information about ACLs, read kcl acl --help.
 	cmd.Flags().StringVar(&operation, "op", "any", "operation filter; any matches all")
 	cmd.Flags().StringVar(&permission, "perm", "any", "permission filter; any matches all")
 
+	// Ergonomic resource-specific flags (shortcuts for --type + --name).
+	var topicFlag, groupFlag, txnIDFlag string
+	cmd.Flags().StringVar(&topicFlag, "topic", "", "shorthand for --type topic --name NAME")
+	cmd.Flags().StringVar(&groupFlag, "group", "", "shorthand for --type group --name NAME")
+	cmd.Flags().BoolVar(new(bool), "cluster", false, "shorthand for --type cluster")
+	cmd.Flags().StringVar(&txnIDFlag, "transactional-id", "", "shorthand for --type transactional-id --name NAME")
+	cmd.PreRunE = func(_ *cobra.Command, _ []string) error {
+		switch {
+		case topicFlag != "":
+			resourceType, resourceName = "topic", topicFlag
+		case groupFlag != "":
+			resourceType, resourceName = "group", groupFlag
+		case cmd.Flags().Changed("cluster"):
+			resourceType = "cluster"
+		case txnIDFlag != "":
+			resourceType, resourceName = "transactional_id", txnIDFlag
+		}
+		return nil
+	}
+
 	return cmd
 }
 
@@ -344,6 +364,40 @@ For more detailed information about ACLs, read kcl acl --help.
 	cmd.Flags().StringArrayVar(&operations, "op", nil, "operation to allow or deny for the principal on this resource")
 	cmd.Flags().StringVar(&permission, "perm", "allow", "permission; either allow or deny")
 
+	// Ergonomic shorthand flags.
+	cmd.Flags().StringArrayVar(new([]string), "allow-principal", nil, "shorthand for --principal P --perm allow")
+	cmd.Flags().StringArrayVar(new([]string), "deny-principal", nil, "shorthand for --principal P --perm deny")
+	cmd.Flags().StringArray("topic", nil, "shorthand for --type topic --name NAME; repeatable")
+	cmd.Flags().StringArray("group", nil, "shorthand for --type group --name NAME; repeatable")
+	cmd.Flags().String("transactional-id", "", "shorthand for --type transactional-id --name NAME")
+	cmd.PreRunE = func(_ *cobra.Command, _ []string) error {
+		if v, _ := cmd.Flags().GetStringArray("allow-principal"); len(v) > 0 {
+			principals = append(principals, v...)
+			permission = "allow"
+		}
+		if v, _ := cmd.Flags().GetStringArray("deny-principal"); len(v) > 0 {
+			principals = append(principals, v...)
+			permission = "deny"
+		}
+		if v, _ := cmd.Flags().GetStringArray("topic"); len(v) > 0 {
+			for _, t := range v {
+				types = append(types, "topic")
+				names = append(names, t)
+			}
+		}
+		if v, _ := cmd.Flags().GetStringArray("group"); len(v) > 0 {
+			for _, g := range v {
+				types = append(types, "group")
+				names = append(names, g)
+			}
+		}
+		if v, _ := cmd.Flags().GetString("transactional-id"); v != "" {
+			types = append(types, "transactional_id")
+			names = append(names, v)
+		}
+		return nil
+	}
+
 	return cmd
 }
 
@@ -356,6 +410,8 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 		host            string
 		operation       string
 		permission      string
+		dryRun          bool
+		noConfirm       bool
 	)
 
 	cmd := &cobra.Command{
@@ -371,6 +427,10 @@ the principal and host empty.
 The delete request actually allows many filters to be passed at once, but it is
 a bit difficult to express that from a CLI. So, kcl only allows one filter at a
 time.
+
+Use --dry-run to see which ACLs would be deleted without actually deleting
+them. By default, the command prompts for confirmation before deleting; use
+--no-confirm to skip the confirmation prompt.
 
 For more detailed information about ACLs, read kcl acl --help.
 `,
@@ -399,6 +459,90 @@ For more detailed information about ACLs, read kcl acl --help.
 			}
 			if host != "" {
 				phost = &host
+			}
+
+			if dryRun {
+				// Use a describe request to show what would match.
+				descReq := &kmsg.DescribeACLsRequest{
+					ResourceType:        atoiResourceType(resourceType),
+					ResourceName:        pname,
+					ResourcePatternType: atoiResourcePattern(resourcePattern),
+					Principal:           pprincipal,
+					Host:                phost,
+					Operation:           atoiOperation(operation),
+					PermissionType:      atoiPermission(permission),
+				}
+
+				kresp, err := cl.Client().Request(context.Background(), descReq)
+				out.MaybeDie(err, "unable to describe acls: %v", err)
+				if cl.AsJSON() {
+					out.ExitJSON(kresp)
+				}
+				resp := kresp.(*kmsg.DescribeACLsResponse)
+				out.MaybeExitErrMsg(resp.ErrorCode, resp.ErrorMessage)
+
+				fmt.Println("Dry run: the following ACLs would be deleted:")
+				tw := out.BeginTabWrite()
+				defer tw.Flush()
+				fmt.Fprintf(tw, "TYPE\tNAME\tPATTERN\tPRINCIPAL\tHOST\tOPERATION\tPERMISSION\n")
+				for _, resource := range resp.Resources {
+					for _, acl := range resource.ACLs {
+						fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+							resource.ResourceType,
+							resource.ResourceName,
+							resource.ResourcePatternType,
+							acl.Principal,
+							acl.Host,
+							acl.Operation,
+							acl.PermissionType,
+						)
+					}
+				}
+				return
+			}
+
+			if !noConfirm {
+				// Describe first to show what will be deleted, then prompt.
+				descReq := &kmsg.DescribeACLsRequest{
+					ResourceType:        atoiResourceType(resourceType),
+					ResourceName:        pname,
+					ResourcePatternType: atoiResourcePattern(resourcePattern),
+					Principal:           pprincipal,
+					Host:                phost,
+					Operation:           atoiOperation(operation),
+					PermissionType:      atoiPermission(permission),
+				}
+
+				kresp, err := cl.Client().Request(context.Background(), descReq)
+				out.MaybeDie(err, "unable to describe acls: %v", err)
+				resp := kresp.(*kmsg.DescribeACLsResponse)
+				out.MaybeExitErrMsg(resp.ErrorCode, resp.ErrorMessage)
+
+				fmt.Println("The following ACLs will be deleted:")
+				tw := out.BeginTabWrite()
+				fmt.Fprintf(tw, "TYPE\tNAME\tPATTERN\tPRINCIPAL\tHOST\tOPERATION\tPERMISSION\n")
+				for _, resource := range resp.Resources {
+					for _, acl := range resource.ACLs {
+						fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+							resource.ResourceType,
+							resource.ResourceName,
+							resource.ResourcePatternType,
+							acl.Principal,
+							acl.Host,
+							acl.Operation,
+							acl.PermissionType,
+						)
+					}
+				}
+				tw.Flush()
+
+				fmt.Print("\nProceed with deletion? [y/N] ")
+				var answer string
+				fmt.Scanln(&answer)
+				if answer != "y" && answer != "Y" {
+					fmt.Println("Aborting.")
+					return
+				}
 			}
 
 			req := &kmsg.DeleteACLsRequest{
@@ -463,6 +607,8 @@ For more detailed information about ACLs, read kcl acl --help.
 	cmd.Flags().StringVar(&host, "host", "", "host filter; empty matches all")
 	cmd.Flags().StringVar(&operation, "op", "", "operation filter; any matches all")
 	cmd.Flags().StringVar(&permission, "perm", "", "permission filter; any matches all")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print ACLs that would be deleted without actually deleting them")
+	cmd.Flags().BoolVar(&noConfirm, "no-confirm", false, "skip confirmation prompt before deleting")
 
 	return cmd
 }
