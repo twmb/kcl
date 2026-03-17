@@ -249,14 +249,13 @@ func printShareGroup(broker int32, group kmsg.ShareGroupDescribeResponseGroup) {
 }
 
 func deleteCommand(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
+	var ifExists bool
+	cmd := &cobra.Command{
 		Use:   "delete GROUPS...",
 		Short: "Delete share groups (Kafka 4.0+).",
 		Long: `Delete share groups (KIP-932, Kafka 4.0+).
 
-This is equivalent to "group delete". The DeleteGroups API is group-type
-agnostic; this command is provided as a convenience. The groups must be
-empty (no active consumers) to be deleted.
+The groups must be empty (no active consumers) to be deleted.
 `,
 		Args: cobra.MinimumNArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
@@ -273,16 +272,22 @@ empty (no active consumers) to be deleted.
 					continue
 				}
 				resp := kresp.(*kmsg.DeleteGroupsResponse)
-				for _, resp := range resp.Groups {
+				for _, r := range resp.Groups {
 					msg := "OK"
-					if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-						msg = err.Error()
+					if err := kerr.ErrorForCode(r.ErrorCode); err != nil {
+						if ifExists && err == kerr.GroupIDNotFound {
+							msg = "OK (did not exist)"
+						} else {
+							msg = err.Error()
+						}
 					}
-					fmt.Fprintf(tw, "%d\t%s\t%s\n", brokerResp.Meta.NodeID, resp.Group, msg)
+					fmt.Fprintf(tw, "%d\t%s\t%s\n", brokerResp.Meta.NodeID, r.Group, msg)
 				}
 			}
 		},
 	}
+	cmd.Flags().BoolVar(&ifExists, "if-exists", false, "suppress error if group does not exist")
+	return cmd
 }
 
 func listShareGroups(cl *client.Client) []string {

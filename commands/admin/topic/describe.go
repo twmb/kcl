@@ -18,12 +18,14 @@ import (
 
 func topicDescribeCommand(cl *client.Client) *cobra.Command {
 	var (
-		showConfigs         bool
-		showAll             bool
-		underReplicated     bool
-		unavailable         bool
-		underMinISR         bool
-		atMinISR            bool
+		showConfigs     bool
+		showAll         bool
+		stable          bool
+		withOverrides   bool
+		underReplicated bool
+		unavailable     bool
+		underMinISR     bool
+		atMinISR        bool
 	)
 
 	cmd := &cobra.Command{
@@ -67,8 +69,69 @@ SEE ALSO:
 
 			// Optionally fetch configs.
 			var configsByTopic map[string][]kmsg.DescribeConfigsResponseResourceConfig
-			if showConfigs || showAll {
+			if showConfigs || showAll || withOverrides {
 				configsByTopic = fetchTopicConfigs(ctx, kclClient, topics)
+			}
+
+			// --with-overrides: filter to topics that have non-default config values.
+			if withOverrides && configsByTopic != nil {
+				overridden := make(map[string]bool)
+				for t, cfgs := range configsByTopic {
+					for _, c := range cfgs {
+						if c.Source == 1 { // DYNAMIC_TOPIC
+							overridden[t] = true
+							break
+						}
+					}
+				}
+				var filtered []kmsg.MetadataResponseTopic
+				for _, t := range metaResp.Topics {
+					if overridden[strval(t.Topic)] {
+						filtered = append(filtered, t)
+					}
+				}
+				metaResp.Topics = filtered
+			}
+
+			// --stable: resolve committed (read_committed) offsets per partition.
+			var stableOffsets map[string]map[int32]int64
+			if stable {
+				stableOffsets = make(map[string]map[int32]int64)
+				for _, t := range topics {
+					req := kmsg.NewPtrListOffsetsRequest()
+					req.IsolationLevel = 1 // read_committed
+					rt := kmsg.NewListOffsetsRequestTopic()
+					rt.Topic = t
+					// We need partition IDs — get them from metadata.
+					for _, mt := range metaResp.Topics {
+						if strval(mt.Topic) == t {
+							for _, p := range mt.Partitions {
+								rp := kmsg.NewListOffsetsRequestTopicPartition()
+								rp.Partition = p.Partition
+								rp.Timestamp = -1 // latest
+								rt.Partitions = append(rt.Partitions, rp)
+							}
+						}
+					}
+					req.Topics = append(req.Topics, rt)
+					shards := kclClient.RequestSharded(ctx, req)
+					for _, shard := range shards {
+						if shard.Err != nil {
+							continue
+						}
+						resp := shard.Resp.(*kmsg.ListOffsetsResponse)
+						for _, rt := range resp.Topics {
+							if stableOffsets[rt.Topic] == nil {
+								stableOffsets[rt.Topic] = make(map[int32]int64)
+							}
+							for _, rp := range rt.Partitions {
+								if kerr.ErrorForCode(rp.ErrorCode) == nil {
+									stableOffsets[rt.Topic][rp.Partition] = rp.Offset
+								}
+							}
+						}
+					}
+				}
 			}
 
 			for ti, topic := range metaResp.Topics {
@@ -119,20 +182,34 @@ SEE ALSO:
 						return partitions[i].Partition < partitions[j].Partition
 					})
 
-					table := out.NewTable("PARTITION", "LEADER", "EPOCH", "REPLICAS", "ISR", "OFFLINE-REPLICAS")
+					headers := []string{"PARTITION", "LEADER", "EPOCH", "REPLICAS", "ISR", "OFFLINE-REPLICAS"}
+					if stable {
+						headers = append(headers, "STABLE-OFFSET")
+					}
+					table := out.NewTable(headers...)
 					for _, p := range partitions {
 						errSuffix := ""
 						if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
 							errSuffix = " (" + err.Error() + ")"
 						}
-						table.Print(
+						row := []any{
 							p.Partition,
 							p.Leader,
 							p.LeaderEpoch,
 							int32sToString(p.Replicas),
 							int32sToString(p.ISR),
-							int32sToString(p.OfflineReplicas)+errSuffix,
-						)
+							int32sToString(p.OfflineReplicas) + errSuffix,
+						}
+						if stable {
+							so := "-"
+							if m, ok := stableOffsets[topicName]; ok {
+								if v, ok := m[p.Partition]; ok {
+									so = fmt.Sprintf("%d", v)
+								}
+							}
+							row = append(row, so)
+						}
+						table.Print(row...)
 					}
 					table.Flush()
 				}
@@ -164,6 +241,8 @@ SEE ALSO:
 
 	cmd.Flags().BoolVarP(&showConfigs, "configs", "c", false, "also show topic configs")
 	cmd.Flags().BoolVarP(&showAll, "all", "a", false, "show all sections (summary, partitions, configs)")
+	cmd.Flags().BoolVar(&stable, "stable", false, "include stable (read_committed) offset column for transactional topics")
+	cmd.Flags().BoolVar(&withOverrides, "with-overrides", false, "only show topics with non-default config overrides (implies config fetching)")
 	cmd.Flags().BoolVar(&underReplicated, "under-replicated", false, "only show partitions where ISR < replicas")
 	cmd.Flags().BoolVar(&unavailable, "unavailable", false, "only show partitions with no leader")
 	cmd.Flags().BoolVar(&underMinISR, "under-min-isr", false, "only show partitions where ISR < min.insync.replicas")
