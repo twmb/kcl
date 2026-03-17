@@ -20,7 +20,7 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "share-group",
 		Aliases: []string{"sg"},
-		Short:   "Perform share group related actions (list, describe, delete, describe-offsets, alter-offsets, delete-offsets).",
+		Short:   "Share group operations (list, describe, seek, offsets).",
 		Args:    cobra.ExactArgs(0),
 	}
 

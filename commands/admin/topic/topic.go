@@ -26,7 +26,7 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "topic",
 		Aliases: []string{"t"},
-		Short:   "Perform topic relation actions (create, list, delete, add-partitions).",
+		Short:   "Topic operations (list, describe, create, delete, alter-config, trim-prefix).",
 	}
 
 	cmd.AddCommand(topicCreateCommand(cl))
@@ -150,6 +150,9 @@ replicas each. When using --replica-assignment, do not use --num-partitions or
 						msg = "OK (already exists)"
 					} else {
 						msg = err.Error()
+						if topic.ErrorMessage != nil {
+							msg += ": " + *topic.ErrorMessage
+						}
 					}
 				}
 				if resp.Version >= 7 {
@@ -314,6 +317,9 @@ without actually deleting them.
 						msg = "OK (did not exist)"
 					} else {
 						msg = err.Error()
+						if topicResp.ErrorMessage != nil {
+							msg += ": " + *topicResp.ErrorMessage
+						}
 					}
 				}
 				topic := ""
