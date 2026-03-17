@@ -28,6 +28,7 @@ func Command(cl *client.Client) *cobra.Command {
 		describeCommand(cl),
 		deleteCommand(cl),
 		offsetDeleteCommand(cl),
+		seekCommand(cl),
 	)
 
 	return cmd
