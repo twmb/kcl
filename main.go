@@ -46,10 +46,10 @@ message producing, and message consuming. If Kafka supports it, kcl aims
 to provide it.
 
 For help about configuration, run:
-  kcl myconfig -h
+  kcl profile -h
 
 If this is your first time running kcl, you can create a configuration with:
-  kcl myconfig create
+  kcl profile create
 
 Command completion is available at:
   kcl misc gen-autocomplete
@@ -74,7 +74,8 @@ Command completion is available at:
 		transact.Command(cl),
 		misc.Command(cl),
 		admin.Command(cl),
-		myconfig.Command(cl),
+		myconfig.Command(cl),            // "profile" (primary)
+		myconfig.DeprecatedCommand(cl),   // "myconfig" (deprecated alias)
 
 		// Resource commands (promoted from admin).
 		topic.Command(cl),
