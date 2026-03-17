@@ -3,7 +3,9 @@ package group
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 
@@ -127,6 +129,7 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 
 func offsetDeleteCommand(cl *client.Client) *cobra.Command {
 	var topicParts []string
+	var fromFile string
 
 	cmd := &cobra.Command{
 		Use:   "offset-delete GROUP",
@@ -141,7 +144,10 @@ commits can hang around in some edge cases. See the motivation in KIP-496 for
 more detals.
 
 The format for deleting offsets per topic partition is "foo:1,2,3", where foo
-is a topic and 1,2,3 are partition numbers.
+is a topic and 1,2,3 are partition numbers. Alternatively, use --from-file
+with a JSON file:
+
+  [{"topic": "foo", "partition": 1}, {"topic": "bar", "partition": 0}]
 `,
 		Example: "offset-delete mygroup -t foo:1,2,3 -t bar:9",
 		Args:    cobra.ExactArgs(1),
@@ -149,6 +155,21 @@ is a topic and 1,2,3 are partition numbers.
 		Run: func(_ *cobra.Command, args []string) {
 			tps, err := flagutil.ParseTopicPartitions(topicParts)
 			out.MaybeDie(err, "unable to parse topic partitions: %v", err)
+
+			if fromFile != "" {
+				type fileEntry struct {
+					Topic     string `json:"topic"`
+					Partition int32  `json:"partition"`
+				}
+				var entries []fileEntry
+				raw, err := os.ReadFile(fromFile)
+				out.MaybeDie(err, "unable to read --from-file: %v", err)
+				err = json.Unmarshal(raw, &entries)
+				out.MaybeDie(err, "unable to parse --from-file JSON: %v", err)
+				for _, e := range entries {
+					tps[e.Topic] = append(tps[e.Topic], e.Partition)
+				}
+			}
 
 			req := &kmsg.OffsetDeleteRequest{
 				Group: args[0],
@@ -189,5 +210,6 @@ is a topic and 1,2,3 are partition numbers.
 	}
 
 	cmd.Flags().StringArrayVarP(&topicParts, "topic", "t", nil, "topic and partitions to delete offsets for; repeatable")
+	cmd.Flags().StringVar(&fromFile, "from-file", "", "JSON file of [{topic, partition}, ...] to delete offsets for")
 	return cmd
 }
