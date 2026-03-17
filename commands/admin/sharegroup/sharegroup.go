@@ -30,6 +30,7 @@ func Command(cl *client.Client) *cobra.Command {
 		describeOffsetsCommand(cl),
 		alterOffsetsCommand(cl),
 		deleteOffsetsCommand(cl),
+		seekCommand(cl),
 	)
 
 	return cmd
