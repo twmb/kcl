@@ -26,6 +26,7 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd.AddCommand(helpCommand(cl))
 	cmd.AddCommand(listCommand(cl))
 	cmd.AddCommand(createCommand(cl))
+	cmd.AddCommand(profileCommand(cl))
 
 	return cmd
 }

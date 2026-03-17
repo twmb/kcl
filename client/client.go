@@ -57,7 +57,7 @@ type CfgSASL struct {
 	IsToken bool   `toml:"is_token,omitempty"`
 }
 
-// cfg contains kcl options that can be defined in a file.
+// Cfg contains kcl options that can be defined in a file.
 type Cfg struct {
 	SeedBrokers []string `toml:"seed_brokers,omitempty"`
 
@@ -65,6 +65,16 @@ type Cfg struct {
 
 	TLS  *CfgTLS  `toml:"tls,omitzero"`
 	SASL *CfgSASL `toml:"sasl,omitempty"`
+}
+
+// CfgFile represents the full config file, which may contain named profiles.
+type CfgFile struct {
+	// CurrentProfile is the active profile name.
+	CurrentProfile string         `toml:"current_profile,omitempty"`
+	Profiles       map[string]Cfg `toml:"profiles,omitempty"`
+
+	// Flat fields for backward compat (single-profile config).
+	Cfg
 }
 
 // Client contains kgo client options and a kgo client.
@@ -88,6 +98,8 @@ type Client struct {
 	envNoCfgFile   bool
 	envPfx         string
 	flagOverrides  []string
+	profileName    string // --context/-C override
+	cfgFile        CfgFile
 	cfg            Cfg
 }
 
@@ -156,6 +168,7 @@ func New(root *cobra.Command) *Client {
 	root.PersistentFlags().StringArrayVarP(&c.flagOverrides, "config-opt", "X", nil, "flag provided config option (highest priority)")
 	root.PersistentFlags().StringVar(&c.asVersion, "as-version", "", "if nonempty, which version of Kafka versions to use (e.g. '0.8.0', '2.3.0')")
 	root.PersistentFlags().StringVar(&c.format, "format", "text", "output format (text, json, awk)")
+	root.PersistentFlags().StringVarP(&c.profileName, "profile", "C", "", "use a specific config profile")
 	root.PersistentFlags().BoolVarP(&c.asJSON, "dump-json", "j", false, "dump response as json if supported")
 	root.PersistentFlags().MarkDeprecated("dump-json", "use --format json instead")
 
@@ -254,20 +267,50 @@ func (c *Client) fillOpts() {
 }
 
 func (c *Client) parseCfgFile() {
-	if !(c.noCfgFile || c.envNoCfgFile) {
-		md, err := toml.DecodeFile(c.cfgPath, &c.cfg)
-		if !os.IsNotExist(err) {
-			if err != nil {
-				out.Die("unable to decode config file %q: %v", c.cfgPath, err)
-			}
-			if len(md.Undecoded()) > 0 {
-				out.Die("unknown keys in toml cfg: %v", md.Undecoded())
-			}
-		} else {
-			Wizard(false)
-			os.Exit(0)
-		}
+	if c.noCfgFile || c.envNoCfgFile {
+		return
 	}
+
+	// First try decoding as a context-aware config file.
+	_, err := toml.DecodeFile(c.cfgPath, &c.cfgFile)
+	if os.IsNotExist(err) {
+		Wizard(false)
+		os.Exit(0)
+	}
+	if err != nil {
+		out.Die("unable to decode config file %q: %v", c.cfgPath, err)
+	}
+
+	// If the file has named profiles, select the appropriate one.
+	if len(c.cfgFile.Profiles) > 0 {
+		name := c.cfgFile.CurrentProfile
+		if c.profileName != "" {
+			name = c.profileName
+		}
+		if name == "" {
+			out.Die("config has profiles but no current_profile set; use --profile or set current_profile in config")
+		}
+		p, ok := c.cfgFile.Profiles[name]
+		if !ok {
+			out.Die("profile %q not found in config file", name)
+		}
+		c.cfg = p
+		return
+	}
+
+	// No profiles: use the flat config (backward compatible).
+	c.cfg = c.cfgFile.Cfg
+}
+
+// CfgFilePath returns the path to the config file.
+func (c *Client) CfgFilePath() string {
+	return c.cfgPath
+}
+
+// LoadedCfgFile returns the full loaded config file (may include contexts).
+func (c *Client) LoadedCfgFile() CfgFile {
+	c.loadClientOnce()
+	return c.cfgFile
 }
 
 func (c *Client) processOverrides() {
