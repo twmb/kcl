@@ -3,12 +3,8 @@ package consume
 
 import (
 	"context"
-	"errors"
 	"os"
 	"os/signal"
-	"regexp"
-	"strconv"
-	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -21,6 +17,7 @@ import (
 
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/format"
+	"github.com/twmb/kcl/offsetparse"
 	"github.com/twmb/kcl/out"
 )
 
@@ -49,6 +46,9 @@ type consumption struct {
 
 	untilOffset    int
 	addUntilOffset bool
+
+	startTimestampMillis int64 // >=0 if start is timestamp-based
+	endTimestampMillis   int64 // >=0 if end is timestamp-based
 
 	protoFile    string
 	protoMessage string
@@ -143,6 +143,26 @@ func (c *consumption) run(topics []string) {
 	cl := c.cl.Client()
 
 	ctx, cancel := context.WithCancel(context.Background())
+
+	// Resolve timestamp-based start offsets via ListOffsetsAfterMilli.
+	if c.startTimestampMillis >= 0 {
+		adm := kadm.NewClient(cl)
+		tsOffsets, err := adm.ListOffsetsAfterMilli(ctx, c.startTimestampMillis, topics...)
+		out.MaybeDie(err, "unable to resolve timestamp to offsets: %v", err)
+
+		setMap := make(map[string]map[int32]kgo.EpochOffset)
+		for topic, parts := range tsOffsets {
+			setMap[topic] = make(map[int32]kgo.EpochOffset)
+			for partition, lo := range parts {
+				setMap[topic][partition] = kgo.EpochOffset{
+					Epoch:  lo.LeaderEpoch,
+					Offset: lo.Offset,
+				}
+			}
+		}
+		cl.SetOffsets(setMap)
+	}
+
 	co := &consumeOutput{
 		cl:              cl,
 		numPerPartition: c.numPerPartition,
@@ -158,6 +178,63 @@ func (c *consumption) run(topics []string) {
 		var err error
 		co.pbd, err = newPBDecoder(c.protoFile, c.protoMessage)
 		out.MaybeDie(err, "unable to unmarshal pb: %v", err)
+	}
+
+	// Resolve timestamp-based end offsets.
+	if c.endTimestampMillis >= 0 {
+		adm := kadm.NewClient(cl)
+		endTsOffsets, err := adm.ListOffsetsAfterMilli(ctx, c.endTimestampMillis, topics...)
+		out.MaybeDie(err, "unable to resolve end timestamp to offsets: %v", err)
+
+		// Filter to requested partitions if specified.
+		if len(c.partitions) > 0 {
+			for t, ps := range endTsOffsets {
+				for p := range ps {
+					found := false
+					for _, part := range c.partitions {
+						if part == p {
+							found = true
+							break
+						}
+					}
+					if !found {
+						delete(endTsOffsets[t], p)
+					}
+				}
+			}
+		}
+
+		// Remove empty partitions where start >= end.
+		if c.startTimestampMillis >= 0 {
+			startAdm := kadm.NewClient(cl)
+			startOffsets, err := startAdm.ListOffsetsAfterMilli(ctx, c.startTimestampMillis, topics...)
+			out.MaybeDie(err, "unable to resolve start timestamp for filtering: %v", err)
+			for t, ps := range startOffsets {
+				for p, so := range ps {
+					if eo, ok := endTsOffsets[t][p]; ok {
+						if so.Offset >= eo.Offset {
+							delete(endTsOffsets[t], p)
+						}
+					}
+				}
+			}
+		}
+
+		// Remove topics with no remaining partitions.
+		empty := true
+		for t, ps := range endTsOffsets {
+			if len(ps) > 0 {
+				empty = false
+			} else {
+				delete(endTsOffsets, t)
+			}
+		}
+		if empty {
+			os.Exit(0)
+		}
+
+		co.untilOffset = true
+		co.untilOffsets = endTsOffsets
 	}
 
 	if c.untilOffset > -1 {
@@ -260,60 +337,59 @@ func (c *consumption) run(topics []string) {
 }
 
 func (c *consumption) parseOffset() kgo.Offset {
+	spec, err := offsetparse.Parse(c.offset, time.Now())
+	out.MaybeDie(err, "unable to parse offset %q: %v", c.offset, err)
+
 	c.end = -1
-	c.untilOffset = -1 // Default to -1 to indicate a noop on this option.
+	c.untilOffset = -1
+	c.startTimestampMillis = -1
+	c.endTimestampMillis = -1
+
 	o := kgo.NewOffset()
-	switch {
-	case c.offset == "start":
+
+	switch spec.Start.Kind {
+	case offsetparse.KindStart:
 		o = o.AtStart()
-	case c.offset == "end":
+		if spec.Start.Delta != 0 {
+			o = o.Relative(spec.Start.Delta)
+		}
+	case offsetparse.KindEnd:
 		o = o.AtEnd()
-	case strings.HasPrefix(c.offset, "end-"):
-		v, err := strconv.Atoi(c.offset[4:])
-		out.MaybeDie(err, "unable to parse relative end offset number in %q: %v", c.offset, err)
-		o = o.AtEnd().Relative(int64(-v))
-	case strings.HasPrefix(c.offset, "start+"):
-		v, err := strconv.Atoi(c.offset[6:])
-		out.MaybeDie(err, "unable to parse relative start offset number in %q: %v", c.offset, err)
-		o = o.AtStart().Relative(int64(v))
-	case strings.HasPrefix(c.offset, ":end"):
-		o = o.AtStart()
-		// Handle the exact match case.
-		if c.offset == ":end" {
-			c.untilOffset = 0
-			return o
+		if spec.Start.Delta != 0 {
+			o = o.Relative(spec.Start.Delta)
 		}
-		// Parse a format like :end-2 - consume until the end of the partition (current HWM) minus 2.
-		// e.g. if the LSO is 6, consume through offset 4.
-		if len(c.offset) < 6 {
-			out.MaybeDie(errors.New("invalid offset provided"), "must be of the form :end[-/+]<num>")
+	case offsetparse.KindExact:
+		o = o.At(spec.Start.Value)
+		c.start = spec.Start.Value
+	case offsetparse.KindRelative:
+		// For consume: +N means N after start, -N means N before end.
+		if spec.Start.Value >= 0 {
+			o = o.AtStart().Relative(spec.Start.Value)
+		} else {
+			o = o.AtEnd().Relative(spec.Start.Value)
 		}
-		op := string(c.offset[4])
-		if op != "+" && op != "-" {
-			out.MaybeDie(errors.New("invalid offset provided"), "must be of the form :end[-/+]<num>")
-		}
-		v, err := strconv.Atoi(c.offset[5:])
-		out.MaybeDie(err, "unable to parse relative until offset number in %q: %v", c.offset, err)
-		if op == "+" {
-			c.addUntilOffset = true
-		}
-		// Something like :end--2.
-		if v < 0 {
-			v = -v
-		}
-		c.untilOffset = v
-	default:
-		match := regexp.MustCompile(`^(\d+)(?:-(\d+))?$`).FindStringSubmatch(c.offset)
-		if len(match) == 0 {
-			out.Die("unable to parse exact or range offset in %q", c.offset)
-		}
-		at, _ := strconv.ParseInt(match[1], 10, 64)
-		c.start = at
-		if match[2] != "" {
-			c.end, _ = strconv.ParseInt(match[2], 10, 64)
-		}
-		o = o.At(at)
+	case offsetparse.KindTimestamp:
+		c.startTimestampMillis = spec.Start.Value
+		o = o.AtStart() // placeholder; resolved via SetOffsets after client creation
 	}
+
+	if spec.End != nil {
+		switch spec.End.Kind {
+		case offsetparse.KindEnd:
+			c.untilOffset = 0
+			if spec.End.Delta > 0 {
+				c.addUntilOffset = true
+				c.untilOffset = int(spec.End.Delta)
+			} else if spec.End.Delta < 0 {
+				c.untilOffset = int(-spec.End.Delta)
+			}
+		case offsetparse.KindExact:
+			c.end = spec.End.Value
+		case offsetparse.KindTimestamp:
+			c.endTimestampMillis = spec.End.Value
+		}
+	}
+
 	return o
 }
 
