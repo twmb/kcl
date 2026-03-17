@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -19,13 +20,25 @@ import (
 func describeCommand(cl *client.Client) *cobra.Command {
 	var verbose bool
 	var readCommitted bool
+	var useConsumerDescribe bool
 
-	// TODO include authorized options (Kafka 2.3.0+)?
 	cmd := &cobra.Command{
 		Use:     "describe GROUPS...",
 		Aliases: []string{"d"},
 		Short:   "Describe Kafka groups (Kafka 0.9.0+)",
+		Long: `Describe Kafka consumer groups.
+
+If no groups are provided, all non-share groups are listed and then described.
+Use --consumer-protocol to describe groups using the new consumer group protocol
+(KIP-848, Kafka 4.0+), which provides member epochs, target assignments, and
+subscribed topic details.
+`,
 		Run: func(_ *cobra.Command, groups []string) {
+			if useConsumerDescribe {
+				describeConsumerGroups(cl, groups)
+				return
+			}
+
 			if len(groups) == 0 {
 				groups = listGroups(cl)
 			}
@@ -34,7 +47,7 @@ func describeCommand(cl *client.Client) *cobra.Command {
 			}
 
 			if verbose {
-				described := describeGroups(cl, groups)
+				described := describeClassicGroups(cl, groups)
 				fetchedOffsets := fetchOffsets(cl, groups)
 				listedOffsets := listOffsets(cl, described, readCommitted)
 				printDescribed(
@@ -81,21 +94,118 @@ func describeCommand(cl *client.Client) *cobra.Command {
 
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "verbose printing including client id, host, committed offset, lag, and user data")
 	cmd.Flags().BoolVar(&readCommitted, "committed", false, "if describing verbosely, whether to list only committed offsets as opposed to latest (Kafka 0.11.0+)")
+	cmd.Flags().BoolVar(&useConsumerDescribe, "consumer-protocol", false, "use ConsumerGroupDescribe API for new consumer group protocol (KIP-848, Kafka 4.0+)")
 
 	return cmd
 }
 
-func shardFail(name string, shard kgo.ResponseShard, failures *int) {
-	fmt.Printf("unable to issue %s to broker %d (%s:%d): %v\n", name, shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
-	*failures++
+func describeConsumerGroups(cl *client.Client, groups []string) {
+	if len(groups) == 0 {
+		groups = listGroupsByType(cl, []string{"consumer"})
+	}
+	if len(groups) == 0 {
+		out.Die("no consumer groups to describe")
+	}
+
+	req := kmsg.NewPtrConsumerGroupDescribeRequest()
+	req.Groups = groups
+
+	shards := cl.Client().RequestSharded(context.Background(), req)
+	if cl.AsJSON() {
+		out.ExitJSON(shards)
+	}
+
+	for _, shard := range shards {
+		if shard.Err != nil {
+			fmt.Printf("unable to issue ConsumerGroupDescribe to broker %d (%s:%d): %v\n", shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
+			continue
+		}
+
+		resp := shard.Resp.(*kmsg.ConsumerGroupDescribeResponse)
+		for _, group := range resp.Groups {
+			printConsumerGroup(shard.Meta.NodeID, group)
+			fmt.Println()
+		}
+	}
 }
 
-func shardErr(name string, shard kgo.ResponseShard, err error) {
-	fmt.Printf("%s request error to broker %d (%s:%d): %v\n", name, shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, err)
+func printConsumerGroup(broker int32, group kmsg.ConsumerGroupDescribeResponseGroup) {
+	tw := out.NewTabWriter()
+	fmt.Fprintf(tw, "GROUP\t%s\n", group.Group)
+	fmt.Fprintf(tw, "COORDINATOR\t%d\n", broker)
+	fmt.Fprintf(tw, "STATE\t%s\n", group.State)
+	fmt.Fprintf(tw, "EPOCH\t%d\n", group.Epoch)
+	fmt.Fprintf(tw, "ASSIGNMENT EPOCH\t%d\n", group.AssignmentEpoch)
+	fmt.Fprintf(tw, "ASSIGNOR\t%s\n", group.AssignorName)
+	fmt.Fprintf(tw, "MEMBERS\t%d\n", len(group.Members))
+	if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
+		msg := err.Error()
+		if group.ErrorMessage != nil {
+			msg += ": " + *group.ErrorMessage
+		}
+		fmt.Fprintf(tw, "ERROR\t%s\n", msg)
+	}
+	tw.Flush()
+
+	if len(group.Members) == 0 {
+		return
+	}
+
+	headers := []string{
+		"MEMBER-ID",
+		"CLIENT-ID",
+		"HOST",
+		"MEMBER-EPOCH",
+		"SUBSCRIBED-TOPICS",
+		"ASSIGNMENT",
+		"TARGET-ASSIGNMENT",
+	}
+	table := out.NewTable(headers...)
+	defer table.Flush()
+	for _, member := range group.Members {
+		var extras []string
+		if member.InstanceID != nil {
+			extras = append(extras, "instance="+*member.InstanceID)
+		}
+		if member.RackID != nil {
+			extras = append(extras, "rack="+*member.RackID)
+		}
+		host := member.ClientHost
+		if len(extras) > 0 {
+			host += " (" + strings.Join(extras, ",") + ")"
+		}
+
+		table.Print(
+			member.MemberID,
+			member.ClientID,
+			host,
+			member.MemberEpoch,
+			strings.Join(member.SubscribedTopics, ","),
+			formatAssignment(member.Assignment),
+			formatAssignment(member.TargetAssignment),
+		)
+	}
 }
 
-func listGroups(cl *client.Client) []string {
+func formatAssignment(a kmsg.Assignment) string {
+	var parts []string
+	for _, tp := range a.TopicPartitions {
+		name := tp.Topic
+		if name == "" {
+			name = fmt.Sprintf("%x", tp.TopicID)
+		}
+		ps := make([]string, len(tp.Partitions))
+		for i, p := range tp.Partitions {
+			ps[i] = fmt.Sprintf("%d", p)
+		}
+		parts = append(parts, name+":"+strings.Join(ps, ","))
+	}
+	return strings.Join(parts, " ")
+}
+
+func listGroupsByType(cl *client.Client, types []string) []string {
 	req := kmsg.NewPtrListGroupsRequest()
+	req.TypesFilter = types
 
 	shards := cl.Client().RequestSharded(context.Background(), req)
 	var groups []string
@@ -120,7 +230,20 @@ func listGroups(cl *client.Client) []string {
 	return groups
 }
 
-func describeGroups(cl *client.Client, groups []string) []describedGroup {
+func shardFail(name string, shard kgo.ResponseShard, failures *int) {
+	fmt.Printf("unable to issue %s to broker %d (%s:%d): %v\n", name, shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
+	*failures++
+}
+
+func shardErr(name string, shard kgo.ResponseShard, err error) {
+	fmt.Printf("%s request error to broker %d (%s:%d): %v\n", name, shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, err)
+}
+
+func listGroups(cl *client.Client) []string {
+	return listGroupsByType(cl, []string{"classic", "consumer"})
+}
+
+func describeClassicGroups(cl *client.Client, groups []string) []describedGroup {
 	req := kmsg.NewPtrDescribeGroupsRequest()
 	req.Groups = groups
 
