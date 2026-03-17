@@ -50,6 +50,8 @@ type consumption struct {
 	startTimestampMillis int64 // >=0 if start is timestamp-based
 	endTimestampMillis   int64 // >=0 if end is timestamp-based
 
+	grepPatterns []string
+
 	protoFile    string
 	protoMessage string
 }
@@ -66,6 +68,14 @@ func (c *consumption) run(topics []string) {
 	escape, size := utf8.DecodeRuneInString(c.escapeChar)
 	if size != len(c.escapeChar) {
 		out.Die("invalid multi character escape character")
+	}
+
+	// Compile grep filters.
+	var grepFilters []grepFilter
+	if len(c.grepPatterns) > 0 {
+		var err error
+		grepFilters, err = parseGrepFilters(c.grepPatterns)
+		out.MaybeDie(err, "%v", err)
 	}
 
 	var isConsumerOffsets, isTransactionState bool
@@ -170,6 +180,7 @@ func (c *consumption) run(topics []string) {
 		start:           c.start,
 		end:             c.end,
 		group:           c.group,
+		grepFilters:     grepFilters,
 		done:            make(chan struct{}),
 		ctx:             ctx,
 		cancel:          cancel,
@@ -409,6 +420,8 @@ type consumeOutput struct {
 	untilOffset  bool
 	untilOffsets kadm.ListedOffsets
 
+	grepFilters []grepFilter
+
 	pbd *pbDecoder
 
 	ctx    context.Context
@@ -488,6 +501,11 @@ func (co *consumeOutput) consume() {
 					}
 					seen++
 					perPartitionSeen[tp] = seen
+				}
+
+				// Apply grep filters.
+				if len(co.grepFilters) > 0 && !matchAll(co.grepFilters, r) {
+					return
 				}
 
 				// Only increment the count and write if it is not a control message.
