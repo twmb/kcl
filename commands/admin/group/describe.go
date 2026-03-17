@@ -18,24 +18,46 @@ import (
 )
 
 func describeCommand(cl *client.Client) *cobra.Command {
-	var verbose bool
-	var readCommitted bool
-	var useConsumerDescribe bool
+	var (
+		readCommitted      bool
+		useConsumerDescribe bool
+		showSummary        bool
+		showMembers        bool
+		showLag            bool
+		lagPerTopic        bool
+		lagFilter          string
+	)
 
 	cmd := &cobra.Command{
 		Use:     "describe GROUPS...",
 		Aliases: []string{"d"},
-		Short:   "Describe Kafka groups (Kafka 0.9.0+)",
-		Long: `Describe Kafka consumer groups.
+		Short:   "Describe consumer groups with lag",
+		Long: `Describe consumer groups with per-partition lag.
 
-If no groups are provided, all non-share groups are listed and then described.
-Use --consumer-protocol to describe groups using the new consumer group protocol
-(KIP-848, Kafka 4.0+), which provides member epochs, target assignments, and
-subscribed topic details.
+By default, shows a summary section followed by a per-partition lag table
+with committed offsets, log-end offsets, lag, and member assignments. If no
+groups are provided, all non-share groups are listed and described.
+
+Use section flags to show only specific parts:
+  -s  summary only (group, state, balancer, members count)
+  -m  members/assignments only
+  -l  lag/offsets only
+
+EXAMPLES:
+  kcl group describe                       # all groups
+  kcl group describe mygroup               # specific group
+  kcl group describe -l --lag-filter '>0'  # only partitions with lag
+  kcl group describe --lag-per-topic       # lag aggregated per topic
+  kcl group describe --consumer-protocol   # KIP-848 groups
+
+SEE ALSO:
+  kcl group list       list all groups
+  kcl group seek       reset group offsets
+  kcl consume -g       consume as a group member
 `,
 		Run: func(_ *cobra.Command, groups []string) {
 			if useConsumerDescribe {
-				describeConsumerGroups(cl, groups)
+				describeConsumerGroups(cl, groups, readCommitted, showSummary, showMembers, showLag, lagPerTopic, lagFilter)
 				return
 			}
 
@@ -46,60 +68,70 @@ subscribed topic details.
 				out.Die("no groups to describe")
 			}
 
-			if verbose {
-				described := describeClassicGroups(cl, groups)
-				fetchedOffsets := fetchOffsets(cl, groups)
-				listedOffsets := listOffsets(cl, described, readCommitted)
-				printDescribed(
-					described,
-					fetchedOffsets,
-					listedOffsets,
-				)
-				return
-			}
-
-			req := kmsg.NewPtrDescribeGroupsRequest()
-			req.Groups = groups
-
-			shards := cl.Client().RequestSharded(context.Background(), req)
-
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-			fmt.Fprintf(tw, "BROKER\tGROUP ID\tSTATE\tPROTO TYPE\tPROTO\tERROR\n")
-
-			var failures int
-			for _, shard := range shards {
-				if shard.Err != nil {
-					shardFail("DescribeGroups", shard, &failures)
-					continue
-				}
-
-				for _, group := range shard.Resp.(*kmsg.DescribeGroupsResponse).Groups {
-					errMsg := ""
-					if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
-						errMsg = err.Error()
-					}
-					fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\n",
-						shard.Meta.NodeID,
-						group.Group,
-						group.State,
-						group.ProtocolType,
-						group.Protocol,
-						errMsg,
-					)
-				}
-			}
+			described := describeClassicGroups(cl, groups)
+			fetchedOffsets := fetchOffsets(cl, groups)
+			listedOffsets := listOffsets(cl, described, fetchedOffsets, readCommitted)
+			printDescribed(described, fetchedOffsets, listedOffsets, showSummary, showMembers, showLag, lagPerTopic, lagFilter)
 		},
 	}
 
-	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "verbose printing including client id, host, committed offset, lag, and user data")
-	cmd.Flags().BoolVar(&readCommitted, "committed", false, "if describing verbosely, whether to list only committed offsets as opposed to latest (Kafka 0.11.0+)")
+	cmd.Flags().BoolVar(&readCommitted, "committed", false, "use committed (read_committed) offsets for lag computation instead of latest")
 	cmd.Flags().BoolVar(&useConsumerDescribe, "consumer-protocol", false, "use ConsumerGroupDescribe API for new consumer group protocol (KIP-848, Kafka 4.0+)")
+	cmd.Flags().BoolVarP(&showSummary, "summary", "s", false, "show only the summary section")
+	cmd.Flags().BoolVarP(&showMembers, "members", "m", false, "show only the members section")
+	cmd.Flags().BoolVarP(&showLag, "lag", "l", false, "show only the lag section")
+	cmd.Flags().BoolVar(&lagPerTopic, "lag-per-topic", false, "aggregate and print lag summed per topic")
+	cmd.Flags().StringVar(&lagFilter, "lag-filter", "", "filter partitions by lag (>N, >=N, <N, <=N, =N)")
 
 	return cmd
 }
 
-func describeConsumerGroups(cl *client.Client, groups []string) {
+// parseLagFilter parses a lag filter expression like ">0", ">=1000", "=0", "<100".
+func parseLagFilter(expr string) (func(lag int64) bool, error) {
+	if expr == "" {
+		return nil, nil
+	}
+	expr = strings.TrimSpace(expr)
+	var op string
+	var valStr string
+	switch {
+	case strings.HasPrefix(expr, ">="):
+		op, valStr = ">=", expr[2:]
+	case strings.HasPrefix(expr, "<="):
+		op, valStr = "<=", expr[2:]
+	case strings.HasPrefix(expr, ">"):
+		op, valStr = ">", expr[1:]
+	case strings.HasPrefix(expr, "<"):
+		op, valStr = "<", expr[1:]
+	case strings.HasPrefix(expr, "="):
+		op, valStr = "=", expr[1:]
+	default:
+		// Bare number treated as >=N.
+		op, valStr = ">=", expr
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(valStr), 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid lag filter %q: %w", expr, err)
+	}
+	switch op {
+	case ">":
+		return func(lag int64) bool { return lag > n }, nil
+	case ">=":
+		return func(lag int64) bool { return lag >= n }, nil
+	case "<":
+		return func(lag int64) bool { return lag < n }, nil
+	case "<=":
+		return func(lag int64) bool { return lag <= n }, nil
+	case "=":
+		return func(lag int64) bool { return lag == n }, nil
+	}
+	return nil, fmt.Errorf("unknown lag filter operator in %q", expr)
+}
+
+// anySection returns true if any section flag is set; false means show all.
+func anySection(s, m, l bool) bool { return s || m || l }
+
+func describeConsumerGroups(cl *client.Client, groups []string, readCommitted, showSummary, showMembers, showLag bool, lagPerTopic bool, lagFilter string) {
 	if len(groups) == 0 {
 		groups = listGroupsByType(cl, []string{"consumer"})
 	}
@@ -303,8 +335,12 @@ func fetchOffsets(cl *client.Client, groups []string) map[string]map[int32]offse
 	return fetched
 }
 
-func listOffsets(cl *client.Client, described []describedGroup, readCommitted bool) map[string]map[int32]offset {
+// listOffsets lists end offsets for all topic-partitions that have committed
+// offsets or member assignments.
+func listOffsets(cl *client.Client, described []describedGroup, fetched map[string]map[int32]offset, readCommitted bool) map[string]map[int32]offset {
 	tps := make(map[string]map[int32]struct{})
+
+	// Include partitions from member assignments.
 	for _, group := range described {
 		for _, member := range group.Members {
 			for _, topic := range member.MemberAssignment.Topics {
@@ -316,6 +352,21 @@ func listOffsets(cl *client.Client, described []describedGroup, readCommitted bo
 				}
 			}
 		}
+	}
+
+	// Also include partitions from committed offsets (may include
+	// partitions no longer assigned to any member).
+	for topic, parts := range fetched {
+		if tps[topic] == nil {
+			tps[topic] = make(map[int32]struct{})
+		}
+		for p := range parts {
+			tps[topic][p] = struct{}{}
+		}
+	}
+
+	if len(tps) == 0 {
+		return nil
 	}
 
 	req := kmsg.NewPtrListOffsetsRequest()
@@ -367,9 +418,10 @@ func listOffsets(cl *client.Client, described []describedGroup, readCommitted bo
 type describeRow struct {
 	topic         string
 	partition     int32
-	currentOffset string
+	currentOffset int64
 	logEndOffset  int64
-	lag           string
+	lag           int64
+	lagValid      bool
 	memberID      string
 	instanceID    *string
 	clientID      string
@@ -381,7 +433,17 @@ func printDescribed(
 	groups []describedGroup,
 	fetched map[string]map[int32]offset,
 	listed map[string]map[int32]offset,
+	showSummary, showMembers, showLag bool,
+	lagPerTopic bool,
+	lagFilterExpr string,
 ) {
+	lagFn, err := parseLagFilter(lagFilterExpr)
+	if err != nil {
+		out.Die("%v", err)
+	}
+
+	showAll := !anySection(showSummary, showMembers, showLag)
+
 	lookup := func(m map[string]map[int32]offset, topic string, partition int32) offset {
 		p := m[topic]
 		if p == nil {
@@ -398,9 +460,9 @@ func printDescribed(
 		return groups[i].Group < groups[j].Group
 	})
 
-	for _, group := range groups {
-		var rows []describeRow
-		var useInstanceID, useErr bool
+	for gi, group := range groups {
+		// Build rows from member assignments.
+		assigned := make(map[string]map[int32]*describeRow) // topic -> partition -> row
 		for _, member := range group.Members {
 			for _, topic := range member.MemberAssignment.Topics {
 				t := topic.Topic
@@ -408,118 +470,168 @@ func printDescribed(
 					committed := lookup(fetched, t, p)
 					end := lookup(listed, t, p)
 
-					row := describeRow{
-						topic:     t,
-						partition: p,
-
-						logEndOffset: end.at,
-
-						memberID:   member.MemberID,
-						instanceID: member.InstanceID,
-						clientID:   member.ClientID,
-						host:       member.ClientHost,
-						err:        committed.err,
+					row := &describeRow{
+						topic:         t,
+						partition:     p,
+						currentOffset: committed.at,
+						logEndOffset:  end.at,
+						memberID:      member.MemberID,
+						instanceID:    member.InstanceID,
+						clientID:      member.ClientID,
+						host:          member.ClientHost,
+						err:           committed.err,
 					}
 					if row.err == nil {
 						row.err = end.err
 					}
 
-					useErr = row.err != nil
-					useInstanceID = row.instanceID != nil
-
-					row.currentOffset = strconv.FormatInt(committed.at, 10)
-					if committed.at == -1 {
-						row.currentOffset = "-"
+					if end.at >= 0 && committed.at >= 0 {
+						row.lag = end.at - committed.at
+						row.lagValid = true
+					} else if end.at > 0 && committed.at == -1 {
+						row.lag = end.at
+						row.lagValid = true
 					}
 
-					row.lag = strconv.FormatInt(end.at-committed.at, 10)
-					if end.at == 0 {
-						row.lag = "-"
-					} else if committed.at == -1 {
-						row.lag = strconv.FormatInt(end.at, 10)
+					if assigned[t] == nil {
+						assigned[t] = make(map[int32]*describeRow)
 					}
-
-					rows = append(rows, row)
-
+					assigned[t][p] = row
 				}
 			}
 		}
 
-		printDescribedGroup(group, rows, useInstanceID, useErr)
-		fmt.Println()
-	}
-}
-
-func printDescribedGroup(group describedGroup, rows []describeRow, useInstanceID bool, useErr bool) {
-	tw := out.NewTabWriter()
-	fmt.Fprintf(tw, "GROUP\t%s\n", group.Group)
-	fmt.Fprintf(tw, "COORDINATOR\t%d\n", group.Broker.NodeID)
-	fmt.Fprintf(tw, "STATE\t%s\n", group.State)
-	fmt.Fprintf(tw, "BALANCER\t%s\n", group.Protocol)
-	fmt.Fprintf(tw, "MEMBERS\t%d\n", len(group.Members))
-	if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
-		fmt.Fprintf(tw, "ERROR\t%s\n", err)
-	}
-	tw.Flush()
-
-	if len(rows) == 0 {
-		return
-	}
-
-	sort.Slice(rows, func(i, j int) bool {
-		return rows[i].topic < rows[j].topic ||
-			rows[i].topic == rows[j].topic &&
-				rows[i].partition < rows[j].partition
-	})
-
-	headers := []string{
-		"TOPIC",
-		"PARTITION",
-		"CURRENT-OFFSET",
-		"LOG-END-OFFSET",
-		"LAG",
-		"MEMBER-ID",
-	}
-	args := func(r *describeRow) []interface{} {
-		return []interface{}{
-			r.topic,
-			r.partition,
-			r.currentOffset,
-			r.logEndOffset,
-			r.lag,
-			r.memberID,
-		}
-	}
-
-	if useInstanceID {
-		headers = append(headers, "INSTANCE-ID")
-		orig := args
-		args = func(r *describeRow) []interface{} {
-			return append(orig(r), r.instanceID)
-		}
-	}
-
-	{
-		headers = append(headers, "CLIENT-ID", "HOST")
-		orig := args
-		args = func(r *describeRow) []interface{} {
-			return append(orig(r), r.clientID, r.host)
+		// Add committed-but-unassigned partitions.
+		for topic, parts := range fetched {
+			for p, committed := range parts {
+				if assigned[topic] != nil {
+					if _, ok := assigned[topic][p]; ok {
+						continue
+					}
+				}
+				end := lookup(listed, topic, p)
+				row := &describeRow{
+					topic:         topic,
+					partition:     p,
+					currentOffset: committed.at,
+					logEndOffset:  end.at,
+					err:           committed.err,
+				}
+				if row.err == nil {
+					row.err = end.err
+				}
+				if end.at >= 0 && committed.at >= 0 {
+					row.lag = end.at - committed.at
+					row.lagValid = true
+				} else if end.at > 0 && committed.at == -1 {
+					row.lag = end.at
+					row.lagValid = true
+				}
+				if assigned[topic] == nil {
+					assigned[topic] = make(map[int32]*describeRow)
+				}
+				assigned[topic][p] = row
+			}
 		}
 
-	}
-
-	if useErr {
-		headers = append(headers, "ERROR")
-		orig := args
-		args = func(r *describeRow) []interface{} {
-			return append(orig(r), r.err)
+		// Flatten to slice.
+		var rows []describeRow
+		for _, parts := range assigned {
+			for _, row := range parts {
+				rows = append(rows, *row)
+			}
 		}
-	}
 
-	tw = out.NewTable(headers...)
-	defer tw.Flush()
-	for _, row := range rows {
-		tw.Print(args(&row)...)
+		// Apply lag filter.
+		if lagFn != nil {
+			var filtered []describeRow
+			for _, r := range rows {
+				if r.lagValid && lagFn(r.lag) {
+					filtered = append(filtered, r)
+				}
+			}
+			rows = filtered
+		}
+
+		// Compute total lag for the summary.
+		var totalLag int64
+		var totalLagValid bool
+		for _, r := range rows {
+			if r.lagValid {
+				totalLag += r.lag
+				totalLagValid = true
+			}
+		}
+
+		// Summary section.
+		if showAll || showSummary {
+			tw := out.NewTabWriter()
+			fmt.Fprintf(tw, "GROUP\t%s\n", group.Group)
+			fmt.Fprintf(tw, "COORDINATOR\t%d\n", group.Broker.NodeID)
+			fmt.Fprintf(tw, "STATE\t%s\n", group.State)
+			fmt.Fprintf(tw, "BALANCER\t%s\n", group.Protocol)
+			fmt.Fprintf(tw, "MEMBERS\t%d\n", len(group.Members))
+			if totalLagValid {
+				fmt.Fprintf(tw, "TOTAL LAG\t%d\n", totalLag)
+			}
+			if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
+				fmt.Fprintf(tw, "ERROR\t%s\n", err)
+			}
+			tw.Flush()
+		}
+
+		// Lag section.
+		if (showAll || showLag) && !lagPerTopic && len(rows) > 0 {
+			sort.Slice(rows, func(i, j int) bool {
+				if rows[i].topic != rows[j].topic {
+					return rows[i].topic < rows[j].topic
+				}
+				return rows[i].partition < rows[j].partition
+			})
+
+			table := out.NewTable("TOPIC", "PARTITION", "CURRENT-OFFSET", "LOG-END-OFFSET", "LAG", "MEMBER-ID", "CLIENT-ID", "HOST")
+			for _, r := range rows {
+				curStr := strconv.FormatInt(r.currentOffset, 10)
+				if r.currentOffset < 0 {
+					curStr = "-"
+				}
+				lagStr := strconv.FormatInt(r.lag, 10)
+				if !r.lagValid {
+					lagStr = "-"
+				}
+				table.Print(r.topic, r.partition, curStr, r.logEndOffset, lagStr, r.memberID, r.clientID, r.host)
+			}
+			table.Flush()
+		}
+
+		// Lag-per-topic section.
+		if (showAll || showLag) && lagPerTopic && len(rows) > 0 {
+			type topicLag struct {
+				topic string
+				lag   int64
+			}
+			lagMap := make(map[string]int64)
+			for _, r := range rows {
+				if r.lagValid {
+					lagMap[r.topic] += r.lag
+				}
+			}
+			var tls []topicLag
+			for t, l := range lagMap {
+				tls = append(tls, topicLag{t, l})
+			}
+			sort.Slice(tls, func(i, j int) bool { return tls[i].topic < tls[j].topic })
+
+			table := out.NewTable("TOPIC", "LAG")
+			for _, tl := range tls {
+				table.Print(tl.topic, tl.lag)
+			}
+			table.Flush()
+		}
+
+		if gi < len(groups)-1 {
+			fmt.Println()
+		}
 	}
 }
 
