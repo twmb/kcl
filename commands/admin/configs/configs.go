@@ -18,8 +18,9 @@ import (
 
 func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "configs",
-		Short: "Alter or describe topic, broker, or broker logger configs.",
+		Use:     "config",
+		Aliases: []string{"configs"},
+		Short:   "Alter or describe topic, broker, or broker logger configs.",
 	}
 	cmd.AddCommand(alterCommand(cl))
 	cmd.AddCommand(describeCommand(cl))

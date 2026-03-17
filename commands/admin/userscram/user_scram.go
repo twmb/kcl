@@ -21,8 +21,9 @@ import (
 
 func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "user-scram",
-		Short: "Alter or describe user scram configs (2.7.0+).",
+		Use:     "user",
+		Aliases: []string{"user-scram"},
+		Short:   "Alter or describe user scram configs (2.7.0+).",
 	}
 	cmd.AddCommand(alterUserSCRAM(cl))
 	cmd.AddCommand(describeUserSCRAM(cl))

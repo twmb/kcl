@@ -9,9 +9,18 @@ import (
 
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/commands/admin"
+	"github.com/twmb/kcl/commands/admin/acl"
+	"github.com/twmb/kcl/commands/admin/clientquotas"
+	"github.com/twmb/kcl/commands/admin/configs"
+	"github.com/twmb/kcl/commands/admin/dtoken"
 	"github.com/twmb/kcl/commands/admin/group"
+	"github.com/twmb/kcl/commands/admin/logdirs"
+	"github.com/twmb/kcl/commands/admin/partas"
 	"github.com/twmb/kcl/commands/admin/sharegroup"
 	"github.com/twmb/kcl/commands/admin/topic"
+	"github.com/twmb/kcl/commands/admin/txn"
+	"github.com/twmb/kcl/commands/admin/userscram"
+	"github.com/twmb/kcl/commands/cluster"
 	"github.com/twmb/kcl/commands/consume"
 	"github.com/twmb/kcl/commands/metadata"
 	"github.com/twmb/kcl/commands/misc"
@@ -49,18 +58,33 @@ Command completion is available at:
 
 	cl := client.New(root)
 
+	// Keep metadata as hidden deprecated alias for cluster info.
+	metadataCmd := metadata.Command(cl)
+	metadataCmd.Deprecated = "use 'kcl cluster info' instead"
+	metadataCmd.Hidden = true
+
 	root.AddCommand(
 		consume.Command(cl),
 		produce.Command(cl),
-		metadata.Command(cl),
+		metadataCmd,
 		transact.Command(cl),
 		misc.Command(cl),
 		admin.Command(cl),
 		myconfig.Command(cl),
 
+		// Resource commands (promoted from admin).
 		topic.Command(cl),
 		group.Command(cl),
 		sharegroup.Command(cl),
+		cluster.Command(cl),
+		acl.Command(cl),
+		configs.Command(cl),
+		clientquotas.Command(cl),
+		dtoken.Command(cl),
+		logdirs.Command(cl),
+		partas.Command(cl),
+		userscram.Command(cl),
+		txn.Command(cl),
 	)
 
 	allCommands(root, func(cmd *cobra.Command) {

@@ -15,8 +15,9 @@ import (
 
 func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "client-quotas",
-		Short: "Alter, describe, or resolve client quotas.",
+		Use:     "quota",
+		Aliases: []string{"client-quotas"},
+		Short:   "Alter, describe, or resolve client quotas.",
 	}
 	cmd.AddCommand(describeClientQuotas(cl))
 	cmd.AddCommand(alterClientQuotas(cl))

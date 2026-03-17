@@ -154,9 +154,9 @@ func describeCommand(cl *client.Client) *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:     "describe",
-		Aliases: []string{"d"},
-		Short:   "Describe ACLs.",
+		Use:     "list",
+		Aliases: []string{"ls", "describe", "d"},
+		Short:   "List ACLs.",
 		Long: `Describe ACLs on a filter basis (Kafka 0.11.0+).
 
 Describing ACLs works on a filter basis: anything matching the requested filter

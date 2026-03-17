@@ -34,16 +34,18 @@ import (
 
 func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "admin",
-		Aliases: []string{"adm", "a"},
-		Short:   "Admin utility commands.",
+		Use:        "admin",
+		Aliases:    []string{"adm", "a"},
+		Short:      "Admin utility commands.",
+		Deprecated: "use top-level commands instead (e.g., 'kcl group list' instead of 'kcl admin group list')",
+		Hidden:     true,
 	}
 
 	cmd.AddCommand(
 		deleteRecordsCommand(cl),
-		electLeaderCommand(cl),
-		describeClusterCommand(cl),
-		describeQuorumCommand(cl),
+		ElectLeadersCommand(cl),
+		DescribeClusterCommand(cl),
+		DescribeQuorumCommand(cl),
 
 		acl.Command(cl),
 		clientquotas.Command(cl),
@@ -62,7 +64,7 @@ func Command(cl *client.Client) *cobra.Command {
 	return cmd
 }
 
-func electLeaderCommand(cl *client.Client) *cobra.Command {
+func ElectLeadersCommand(cl *client.Client) *cobra.Command {
 	var allPartitions bool
 	var unclean bool
 	var run bool
@@ -303,7 +305,7 @@ func parseTopicPartitionOffsets(list []string) (map[string][]partitionOffset, er
 	return tpos, nil
 }
 
-func describeClusterCommand(cl *client.Client) *cobra.Command {
+func DescribeClusterCommand(cl *client.Client) *cobra.Command {
 	var includeAuthorizedOps bool
 
 	cmd := &cobra.Command{
@@ -396,7 +398,7 @@ in the cluster.
 	return cmd
 }
 
-func describeQuorumCommand(cl *client.Client) *cobra.Command {
+func DescribeQuorumCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "describe-quorum",
 		Short: "Describe the KRaft quorum (Kafka 3.0+).",

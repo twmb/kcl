@@ -15,8 +15,9 @@ import (
 
 func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "partas",
-		Short: "Alter or list partition (re)assignments.",
+		Use:     "reassign",
+		Aliases: []string{"partas"},
+		Short:   "Alter or list partition (re)assignments.",
 	}
 	cmd.AddCommand(listPartitionReassignments(cl))
 	cmd.AddCommand(alterPartitionAssignments(cl))
