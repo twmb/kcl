@@ -27,6 +27,8 @@ func Command(cl *client.Client) *cobra.Command {
 		admin.DescribeQuorumCommand(cl),
 		admin.ElectLeadersCommand(cl),
 		features.Command(cl),
+		addControllerCommand(cl),
+		removeControllerCommand(cl),
 	)
 
 	return cmd
