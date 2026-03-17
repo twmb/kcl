@@ -1,11 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/commands/admin"
@@ -102,6 +104,20 @@ Command completion is available at:
 
 	root.SetUsageTemplate(usageTmpl)
 
+	var helpJSON bool
+	root.PersistentFlags().BoolVar(&helpJSON, "help-json", false, "dump the full command tree as JSON")
+
+	// Handle --help-json: parse flags early and check before Execute.
+	// This is needed because cobra processes help before PersistentPreRun.
+	root.ParseFlags(os.Args[1:])
+	if helpJSON {
+		tree := buildCommandJSON(root)
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		enc.Encode(tree)
+		os.Exit(0)
+	}
+
 	if err := root.Execute(); err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -113,6 +129,68 @@ func allCommands(root *cobra.Command, fn func(*cobra.Command)) {
 		allCommands(cmd, fn)
 	}
 	fn(root)
+}
+
+type commandJSON struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	Usage       string                 `json:"usage,omitempty"`
+	Aliases     []string               `json:"aliases,omitempty"`
+	Deprecated  string                 `json:"deprecated,omitempty"`
+	Flags       map[string]flagJSON    `json:"flags,omitempty"`
+	Commands    map[string]commandJSON `json:"commands,omitempty"`
+}
+
+type flagJSON struct {
+	Short       string `json:"short,omitempty"`
+	Type        string `json:"type"`
+	Default     string `json:"default,omitempty"`
+	Description string `json:"description"`
+}
+
+func buildCommandJSON(cmd *cobra.Command) commandJSON {
+	c := commandJSON{
+		Name:        cmd.Name(),
+		Description: cmd.Short,
+		Deprecated:  cmd.Deprecated,
+	}
+	if cmd.Runnable() {
+		c.Usage = cmd.UseLine()
+	}
+	if len(cmd.Aliases) > 0 {
+		c.Aliases = cmd.Aliases
+	}
+
+	// Flags.
+	cmd.LocalFlags().VisitAll(func(f *pflag.Flag) {
+		if f.Name == "help" || f.Name == "help-json" {
+			return
+		}
+		fj := flagJSON{
+			Type:        f.Value.Type(),
+			Default:     f.DefValue,
+			Description: f.Usage,
+		}
+		if f.Shorthand != "" {
+			fj.Short = f.Shorthand
+		}
+		if c.Flags == nil {
+			c.Flags = make(map[string]flagJSON)
+		}
+		c.Flags[f.Name] = fj
+	})
+
+	// Subcommands.
+	for _, sub := range cmd.Commands() {
+		if sub.Name() == "help" {
+			continue
+		}
+		if c.Commands == nil {
+			c.Commands = make(map[string]commandJSON)
+		}
+		c.Commands[sub.Name()] = buildCommandJSON(sub)
+	}
+	return c
 }
 
 const usageTmpl = `USAGE:{{if .Runnable}}
