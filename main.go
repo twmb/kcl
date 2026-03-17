@@ -12,6 +12,7 @@ import (
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/commands/admin"
 	"github.com/twmb/kcl/commands/admin/acl"
+	"github.com/twmb/kcl/commands/admin/clientmetrics"
 	"github.com/twmb/kcl/commands/admin/clientquotas"
 	"github.com/twmb/kcl/commands/admin/configs"
 	"github.com/twmb/kcl/commands/admin/dtoken"
@@ -82,6 +83,7 @@ Command completion is available at:
 		streamsgroup.Command(cl),
 		cluster.Command(cl),
 		acl.Command(cl),
+		clientmetrics.Command(cl),
 		configs.Command(cl),
 		clientquotas.Command(cl),
 		dtoken.Command(cl),
