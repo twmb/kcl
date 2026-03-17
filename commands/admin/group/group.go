@@ -68,25 +68,24 @@ the groups listed. This prints all of the information from a ListGroups request.
 				TypesFilter:  typesFilter,
 			})
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
-			fmt.Fprintf(tw, "BROKER\tGROUP ID\tPROTO TYPE\tGROUP TYPE\tSTATE\tERROR\n")
+			table := out.NewFormattedTable(cl.Format(), "group.list", 1, "groups",
+				"BROKER", "GROUP ID", "PROTO TYPE", "GROUP TYPE", "STATE", "ERROR")
 			for _, kresp := range kresps {
 				err := kresp.Err
 				if err == nil {
 					err = kerr.ErrorForCode(kresp.Resp.(*kmsg.ListGroupsResponse).ErrorCode)
 				}
 				if err != nil {
-					fmt.Fprintf(tw, "%d\t\t\t\t\t%v\n", kresp.Meta.NodeID, err)
+					table.Row(kresp.Meta.NodeID, "", "", "", "", err)
 					continue
 				}
 
 				resp := kresp.Resp.(*kmsg.ListGroupsResponse)
 				for _, group := range resp.Groups {
-					fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t\n", kresp.Meta.NodeID, group.Group, group.ProtocolType, group.GroupType, group.GroupState)
+					table.Row(kresp.Meta.NodeID, group.Group, group.ProtocolType, group.GroupType, group.GroupState, "")
 				}
 			}
+			table.Flush()
 		},
 	}
 	cmd.Flags().StringArrayVarP(&statesFilter, "filter", "f", nil, "filter groups listed by state (Preparing, PreparingRebalance, CompletingRebalance, Stable, Dead, Empty; Kafka 2.6.0+; repeatable)")

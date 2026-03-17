@@ -321,33 +321,73 @@ in the cluster.
 
 			kresp, err := cl.Client().Request(context.Background(), req)
 			out.MaybeDie(err, "unable to describe cluster: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
-			}
 
 			resp := kresp.(*kmsg.DescribeClusterResponse)
 			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+				if cl.Format() == "json" {
+					msg := err.Error()
+					if resp.ErrorMessage != nil {
+						msg += ": " + *resp.ErrorMessage
+					}
+					out.DieJSON("cluster.describe", err.Error(), msg)
+				}
 				out.ErrAndMsg(resp.ErrorCode, resp.ErrorMessage)
 				out.Exit()
 			}
 
-			fmt.Printf("CLUSTER ID: %s\n", resp.ClusterID)
-			fmt.Printf("CONTROLLER: %d\n", resp.ControllerID)
-			if includeAuthorizedOps {
-				fmt.Printf("AUTHORIZED OPS: %d\n", resp.ClusterAuthorizedOperations)
-			}
-			fmt.Println()
-
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
-			fmt.Fprintf(tw, "ID\tHOST\tPORT\tRACK\n")
-			for _, broker := range resp.Brokers {
-				var rack string
-				if broker.Rack != nil {
-					rack = *broker.Rack
+			switch cl.Format() {
+			case "json":
+				type brokerJSON struct {
+					ID   int32  `json:"id"`
+					Host string `json:"host"`
+					Port int32  `json:"port"`
+					Rack string `json:"rack,omitempty"`
 				}
-				fmt.Fprintf(tw, "%d\t%s\t%d\t%s\n", broker.NodeID, broker.Host, broker.Port, rack)
+				brokers := make([]brokerJSON, len(resp.Brokers))
+				for i, b := range resp.Brokers {
+					brokers[i] = brokerJSON{ID: b.NodeID, Host: b.Host, Port: b.Port}
+					if b.Rack != nil {
+						brokers[i].Rack = *b.Rack
+					}
+				}
+				fields := map[string]interface{}{
+					"cluster_id":    resp.ClusterID,
+					"controller_id": resp.ControllerID,
+					"brokers":       brokers,
+				}
+				if includeAuthorizedOps {
+					fields["authorized_operations"] = resp.ClusterAuthorizedOperations
+				}
+				out.MarshalJSON("cluster.describe", 1, fields)
+
+			case "awk":
+				for _, broker := range resp.Brokers {
+					var rack string
+					if broker.Rack != nil {
+						rack = *broker.Rack
+					}
+					fmt.Printf("%d\t%s\t%d\t%s\n", broker.NodeID, broker.Host, broker.Port, rack)
+				}
+
+			default:
+				fmt.Printf("CLUSTER ID: %s\n", resp.ClusterID)
+				fmt.Printf("CONTROLLER: %d\n", resp.ControllerID)
+				if includeAuthorizedOps {
+					fmt.Printf("AUTHORIZED OPS: %d\n", resp.ClusterAuthorizedOperations)
+				}
+				fmt.Println()
+
+				tw := out.BeginTabWrite()
+				defer tw.Flush()
+
+				fmt.Fprintf(tw, "ID\tHOST\tPORT\tRACK\n")
+				for _, broker := range resp.Brokers {
+					var rack string
+					if broker.Rack != nil {
+						rack = *broker.Rack
+					}
+					fmt.Fprintf(tw, "%d\t%s\t%d\t%s\n", broker.NodeID, broker.Host, broker.Port, rack)
+				}
 			}
 		},
 	}

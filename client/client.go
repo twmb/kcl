@@ -79,6 +79,7 @@ type Client struct {
 
 	asVersion string
 	asJSON    bool
+	format    string
 
 	// config options parsed and filled on load
 	defaultCfgPath string
@@ -90,8 +91,25 @@ type Client struct {
 	cfg            Cfg
 }
 
+// Format returns the output format: "text", "json", or "awk".
+// If --dump-json is set and --format is not explicitly set, returns "json".
+func (c *Client) Format() string {
+	switch c.format {
+	case "text", "json", "awk":
+	default:
+		out.Die("invalid --format %q: must be text, json, or awk", c.format)
+	}
+	if c.format != "text" {
+		return c.format
+	}
+	if c.asJSON {
+		return "json"
+	}
+	return "text"
+}
+
 // AsJSON returns whether the output should be dumped as JSON if applicable.
-func (c *Client) AsJSON() bool { return c.asJSON }
+func (c *Client) AsJSON() bool { return c.Format() == "json" }
 
 // TimeoutMillis is what requests that have timeouts should use.
 func (c *Client) TimeoutMillis() int32 {
@@ -137,7 +155,9 @@ func New(root *cobra.Command) *Client {
 	root.PersistentFlags().StringVar(&c.envPfx, "config-env-prefix", "KCL_", "environment variable prefix for config overrides (middle priority)")
 	root.PersistentFlags().StringArrayVarP(&c.flagOverrides, "config-opt", "X", nil, "flag provided config option (highest priority)")
 	root.PersistentFlags().StringVar(&c.asVersion, "as-version", "", "if nonempty, which version of Kafka versions to use (e.g. '0.8.0', '2.3.0')")
+	root.PersistentFlags().StringVar(&c.format, "format", "text", "output format (text, json, awk)")
 	root.PersistentFlags().BoolVarP(&c.asJSON, "dump-json", "j", false, "dump response as json if supported")
+	root.PersistentFlags().MarkDeprecated("dump-json", "use --format json instead")
 
 	return c
 }
