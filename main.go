@@ -10,6 +10,7 @@ import (
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/commands/admin"
 	"github.com/twmb/kcl/commands/admin/group"
+	"github.com/twmb/kcl/commands/admin/sharegroup"
 	"github.com/twmb/kcl/commands/admin/topic"
 	"github.com/twmb/kcl/commands/consume"
 	"github.com/twmb/kcl/commands/metadata"
@@ -59,6 +60,7 @@ Command completion is available at:
 
 		topic.Command(cl),
 		group.Command(cl),
+		sharegroup.Command(cl),
 	)
 
 	allCommands(root, func(cmd *cobra.Command) {

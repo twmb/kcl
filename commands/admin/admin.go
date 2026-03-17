@@ -24,6 +24,7 @@ import (
 	"github.com/twmb/kcl/commands/admin/group"
 	"github.com/twmb/kcl/commands/admin/logdirs"
 	"github.com/twmb/kcl/commands/admin/partas"
+	"github.com/twmb/kcl/commands/admin/sharegroup"
 	"github.com/twmb/kcl/commands/admin/topic"
 	"github.com/twmb/kcl/commands/admin/txn"
 	"github.com/twmb/kcl/commands/admin/userscram"
@@ -53,6 +54,7 @@ func Command(cl *client.Client) *cobra.Command {
 		topic.Command(cl),
 		logdirs.Command(cl),
 		partas.Command(cl),
+		sharegroup.Command(cl),
 		userscram.Command(cl),
 		txn.Command(cl),
 	)
