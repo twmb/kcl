@@ -25,6 +25,7 @@ type consumption struct {
 	cl *client.Client
 
 	group           string
+	shareGroup      string
 	groupAlg        string
 	instanceID      string
 	regex           bool
@@ -90,12 +91,16 @@ func (c *consumption) run(topics []string) {
 		out.Die("__consumer_offsets or __transaction_state must be the only topic listed when trying to consume it")
 	}
 
+	if c.group != "" && c.shareGroup != "" {
+		out.Die("--group and --share-group are mutually exclusive")
+	}
+
 	offset := c.parseOffset()
 	c.cl.AddOpt(kgo.ConsumeResetOffset(offset))
 	if len(c.partitions) == 0 {
 		c.cl.AddOpt(kgo.ConsumeTopics(topics...))
 	} else {
-		if len(c.group) != 0 {
+		if c.group != "" || c.shareGroup != "" {
 			out.Die("incompatible flag assignment: group consuming cannot be used with direct partition consuming")
 		}
 		offsets := make(map[string]map[int32]kgo.Offset)
@@ -146,6 +151,10 @@ func (c *consumption) run(topics []string) {
 	}
 	c.cl.AddOpt(kgo.FetchMaxWait(c.fetchMaxWait))
 	c.cl.AddOpt(kgo.Rack(c.rack))
+
+	if c.shareGroup != "" {
+		c.cl.AddOpt(kgo.ShareGroup(c.shareGroup))
+	}
 
 	isGroup := len(c.group) > 0 && !(isConsumerOffsets || isTransactionState)
 	if isGroup {

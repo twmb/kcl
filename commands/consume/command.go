@@ -16,7 +16,8 @@ func (c *consumption) command() *cobra.Command {
 			c.run(args)
 		},
 	}
-	cmd.Flags().StringVarP(&c.group, "group", "g", "", "group to assign")
+	cmd.Flags().StringVarP(&c.group, "group", "g", "", "consumer group to assign")
+	cmd.Flags().StringVar(&c.shareGroup, "share-group", "", "share group to consume from (Kafka 4.0+, mutually exclusive with --group)")
 	cmd.Flags().StringVarP(&c.groupAlg, "balancer", "b", "cooperative-sticky", "group balancer to use if group consuming (range, roundrobin, sticky, cooperative-sticky)")
 	cmd.Flags().StringVarP(&c.instanceID, "instance-id", "i", "", "group instance ID to use for consuming; empty means none (implies static membership, Kafka 2.3.0+)")
 	cmd.Flags().Int32SliceVarP(&c.partitions, "partitions", "p", nil, "comma delimited list of specific partitions to consume")

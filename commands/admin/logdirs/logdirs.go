@@ -50,6 +50,7 @@ func describeCommand(cl *client.Client) *cobra.Command {
 	var broker int32
 	var humanReadable bool
 	var sortBySize bool
+	var aggregateInto string
 	cmd := &cobra.Command{
 		Use:     "describe",
 		Aliases: []string{"d"},
@@ -190,6 +191,54 @@ describe // describes all`,
 				})
 			}
 
+			// Aggregate mode: sum sizes by broker, dir, or topic.
+			if aggregateInto != "" {
+				type aggEntry struct {
+					key  string
+					size int64
+				}
+				agg := make(map[string]int64)
+				for _, r := range rows {
+					if r.err != nil {
+						continue
+					}
+					var key string
+					switch aggregateInto {
+					case "broker":
+						key = fmt.Sprintf("%d", r.broker)
+					case "dir":
+						key = fmt.Sprintf("%d:%s", r.broker, r.dir)
+					case "topic":
+						key = r.topic
+					default:
+						out.Die("--aggregate-into must be broker, dir, or topic")
+					}
+					agg[key] += r.size
+				}
+				var entries []aggEntry
+				for k, v := range agg {
+					entries = append(entries, aggEntry{k, v})
+				}
+				sort.Slice(entries, func(i, j int) bool {
+					if sortBySize {
+						return entries[i].size > entries[j].size
+					}
+					return entries[i].key < entries[j].key
+				})
+				tw := out.BeginTabWrite()
+				defer tw.Flush()
+				header := strings.ToUpper(aggregateInto)
+				fmt.Fprintf(tw, "%s\tSIZE\n", header)
+				for _, e := range entries {
+					sizeStr := fmt.Sprintf("%d", e.size)
+					if humanReadable {
+						sizeStr = humanSize(e.size)
+					}
+					fmt.Fprintf(tw, "%s\t%s\n", e.key, sizeStr)
+				}
+				return
+			}
+
 			tw := out.BeginTabWrite()
 			defer tw.Flush()
 			fmt.Fprintf(tw, "BROKER\tERR\tDIR\tTOPIC\tPARTITION\tSIZE\tOFFSET LAG\tIS FUTURE\n")
@@ -211,6 +260,7 @@ describe // describes all`,
 	cmd.Flags().Int32VarP(&broker, "broker", "b", -1, "a specific broker to direct the request to")
 	cmd.Flags().BoolVarP(&humanReadable, "human-readable", "H", false, "print sizes in human-readable format (KB, MB, GB)")
 	cmd.Flags().BoolVar(&sortBySize, "sort-by-size", false, "sort output by partition size (largest first)")
+	cmd.Flags().StringVar(&aggregateInto, "aggregate-into", "", "aggregate sizes by dimension (broker, dir, topic)")
 	return cmd
 }
 
