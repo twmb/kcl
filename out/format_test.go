@@ -194,3 +194,89 @@ func TestMarshalJSON(t *testing.T) {
 		t.Errorf("cluster_id = %v", result["cluster_id"])
 	}
 }
+
+func TestFormattedTableJSONTypesPreserved(t *testing.T) {
+	output := captureStdout(func() {
+		table := NewFormattedTable("json", "test.cmd", 1, "data", "NAME", "COUNT", "ACTIVE")
+		table.Row("alpha", 42, true)
+		table.Row("beta", 0, false)
+		table.Flush()
+	})
+
+	var result map[string]interface{}
+	json.Unmarshal([]byte(output), &result)
+	data := result["data"].([]interface{})
+
+	first := data[0].(map[string]interface{})
+	// JSON encoding preserves Go types: int→float64, bool→bool, string→string.
+	if first["name"] != "alpha" {
+		t.Errorf("name = %v", first["name"])
+	}
+	if first["count"] != float64(42) {
+		t.Errorf("count = %v (type %T)", first["count"], first["count"])
+	}
+	if first["active"] != true {
+		t.Errorf("active = %v", first["active"])
+	}
+
+	second := data[1].(map[string]interface{})
+	if second["active"] != false {
+		t.Errorf("second active = %v", second["active"])
+	}
+}
+
+func TestFormattedTableAWKNoHeaders(t *testing.T) {
+	output := captureStdout(func() {
+		table := NewFormattedTable("awk", "test.cmd", 1, "data", "HEADER1", "HEADER2")
+		table.Row("a", "b")
+		table.Flush()
+	})
+
+	// AWK output must NOT contain header names.
+	if strings.Contains(output, "HEADER") {
+		t.Error("awk output should not contain headers")
+	}
+	if strings.TrimSpace(output) != "a\tb" {
+		t.Errorf("awk output = %q, want %q", strings.TrimSpace(output), "a\tb")
+	}
+}
+
+func TestFormattedTableTextAlignment(t *testing.T) {
+	output := captureStdout(func() {
+		table := NewFormattedTable("text", "test.cmd", 1, "data", "SHORT", "LONG HEADER")
+		table.Row("x", "y")
+		table.Flush()
+	})
+
+	// Headers should be present and the output should have at least 2 lines.
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) != 2 {
+		t.Errorf("expected 2 lines, got %d: %q", len(lines), output)
+	}
+	if !strings.Contains(lines[0], "SHORT") || !strings.Contains(lines[0], "LONG HEADER") {
+		t.Errorf("header line missing expected columns: %q", lines[0])
+	}
+}
+
+func TestDieJSON(t *testing.T) {
+	// DieJSON calls os.Exit, so we can't test it directly.
+	// But we can test the JSON output it would produce via writeJSON.
+	output := captureStdout(func() {
+		writeJSON(map[string]interface{}{
+			"_command": "test.cmd",
+			"error":    "NOT_FOUND",
+			"message":  "resource not found",
+		})
+	})
+
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if result["error"] != "NOT_FOUND" {
+		t.Errorf("error = %v", result["error"])
+	}
+	if result["message"] != "resource not found" {
+		t.Errorf("message = %v", result["message"])
+	}
+}
