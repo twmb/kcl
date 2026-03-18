@@ -90,14 +90,9 @@ The information printed:
 
 			resp, err := req.RequestWith(context.Background(), cl.Client())
 			out.MaybeDie(err, "unable to describe producers: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(resp)
-			}
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
-			fmt.Fprintf(tw, "TOPIC\tPARTITION\tERROR\tID\tEPOCH\tLAST SEQUENCE\tLAST TIMESTAMP\tCOORDINATOR EPOCH\tTXN START OFFSET\n")
+			table := out.NewFormattedTable(cl.Format(), "txn.describe-producers", 1, "producers",
+				"TOPIC", "PARTITION", "ERROR", "ID", "EPOCH", "LAST SEQUENCE", "LAST TIMESTAMP", "COORDINATOR EPOCH", "TXN START OFFSET")
 			for _, topic := range resp.Topics {
 				for _, partition := range topic.Partitions {
 					if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
@@ -105,13 +100,14 @@ The information printed:
 						if partition.ErrorMessage != nil {
 							msg += ": " + *partition.ErrorMessage
 						}
-						fmt.Fprintf(tw, "%s\t%d\t%s\t\t\t\t\t\t\n", topic.Topic, partition.Partition, msg)
+						table.Row(topic.Topic, partition.Partition, msg, "", "", "", "", "", "")
 						continue
 					}
 					for _, producer := range partition.ActiveProducers {
-						fmt.Fprintf(tw, "%s\t%d\t\t%d\t%d\t%d\t%s\t%d\t%d\n",
+						table.Row(
 							topic.Topic,
 							partition.Partition,
+							"",
 							producer.ProducerID,
 							producer.ProducerEpoch,
 							producer.LastSequence,
@@ -122,6 +118,7 @@ The information printed:
 					}
 				}
 			}
+			table.Flush()
 		},
 	}
 
@@ -148,28 +145,23 @@ transaction state or producer ID.
 				ProducerIDFilters: producerIDFilter,
 			})
 
-			if cl.AsJSON() {
-				out.ExitJSON(kresps)
-			}
-
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
-			fmt.Fprintf(tw, "BROKER\tTRANSACTIONAL-ID\tPRODUCER-ID\tSTATE\tERROR\n")
+			table := out.NewFormattedTable(cl.Format(), "txn.list", 1, "transactions",
+				"BROKER", "TRANSACTIONAL-ID", "PRODUCER-ID", "STATE", "ERROR")
 			for _, kresp := range kresps {
 				if kresp.Err != nil {
-					fmt.Fprintf(tw, "%d\t\t\t\t%v\n", kresp.Meta.NodeID, kresp.Err)
+					table.Row(kresp.Meta.NodeID, "", "", "", kresp.Err)
 					continue
 				}
 				resp := kresp.Resp.(*kmsg.ListTransactionsResponse)
 				if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-					fmt.Fprintf(tw, "%d\t\t\t\t%v\n", kresp.Meta.NodeID, err)
+					table.Row(kresp.Meta.NodeID, "", "", "", err)
 					continue
 				}
 				for _, txn := range resp.TransactionStates {
-					fmt.Fprintf(tw, "%d\t%s\t%d\t%s\t\n", kresp.Meta.NodeID, txn.TransactionalID, txn.ProducerID, txn.TransactionState)
+					table.Row(kresp.Meta.NodeID, txn.TransactionalID, txn.ProducerID, txn.TransactionState, "")
 				}
 			}
+			table.Flush()
 		},
 	}
 
@@ -194,17 +186,12 @@ the producer ID, epoch, timeout, and the topics/partitions involved.
 
 			resp, err := req.RequestWith(context.Background(), cl.Client())
 			out.MaybeDie(err, "unable to describe transactions: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(resp)
-			}
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
-			fmt.Fprintf(tw, "TRANSACTIONAL-ID\tSTATE\tPRODUCER-ID\tPRODUCER-EPOCH\tTIMEOUT-MS\tSTART-TIMESTAMP\tTOPICS\tERROR\n")
+			table := out.NewFormattedTable(cl.Format(), "txn.describe", 1, "transactions",
+				"TRANSACTIONAL-ID", "STATE", "PRODUCER-ID", "PRODUCER-EPOCH", "TIMEOUT-MS", "START-TIMESTAMP", "TOPICS", "ERROR")
 			for _, txn := range resp.TransactionStates {
 				if err := kerr.ErrorForCode(txn.ErrorCode); err != nil {
-					fmt.Fprintf(tw, "%s\t\t\t\t\t\t\t%v\n", txn.TransactionalID, err)
+					table.Row(txn.TransactionalID, "", "", "", "", "", "", err)
 					continue
 				}
 				var topics []string
@@ -212,7 +199,7 @@ the producer ID, epoch, timeout, and the topics/partitions involved.
 					topics = append(topics, fmt.Sprintf("%s%v", topic.Topic, topic.Partitions))
 				}
 				sort.Strings(topics)
-				fmt.Fprintf(tw, "%s\t%s\t%d\t%d\t%d\t%s\t%s\t\n",
+				table.Row(
 					txn.TransactionalID,
 					txn.State,
 					txn.ProducerID,
@@ -220,8 +207,10 @@ the producer ID, epoch, timeout, and the topics/partitions involved.
 					txn.TimeoutMillis,
 					time.Unix(0, txn.StartTimestamp*1e6).UTC().Format("2006-01-02 15:04:05.999"),
 					strings.Join(topics, ", "),
+					"",
 				)
 			}
+			table.Flush()
 		},
 	}
 }

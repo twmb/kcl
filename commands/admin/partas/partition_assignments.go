@@ -67,17 +67,14 @@ reassignment for that partition.
 			kresp, err := cl.Client().Request(context.Background(), req)
 			out.MaybeDie(err, "unable to alter partition assignments: %v", err)
 			resp := kresp.(*kmsg.AlterPartitionAssignmentsResponse)
-			if cl.AsJSON() {
-				out.ExitJSON(resp)
-			}
 
 			if resp.ErrorCode != 0 {
 				out.ErrAndMsg(resp.ErrorCode, resp.ErrorMessage)
 				out.Exit()
 			}
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
+			table := out.NewFormattedTable(cl.Format(), "reassign.alter", 1, "results",
+				"TOPIC", "PARTITION", "STATUS", "DETAIL")
 			for _, topic := range resp.Topics {
 				for _, partition := range topic.Partitions {
 					msg := "OK"
@@ -88,9 +85,10 @@ reassignment for that partition.
 					if partition.ErrorMessage != nil {
 						detail = *partition.ErrorMessage
 					}
-					fmt.Fprintf(tw, "%s\t%d\t%s\t%s\n", topic.Topic, partition.Partition, msg, detail)
+					table.Row(topic.Topic, partition.Partition, msg, detail)
 				}
 			}
+			table.Flush()
 		},
 	}
 }
@@ -130,26 +128,23 @@ If no topics are specified, this lists all active reassignments.
 			kresp, err := cl.Client().Request(context.Background(), req)
 			out.MaybeDie(err, "unable to list partition reassignments: %v", err)
 			resp := kresp.(*kmsg.ListPartitionReassignmentsResponse)
-			if cl.AsJSON() {
-				out.ExitJSON(resp)
-			}
 
 			if resp.ErrorCode != 0 {
 				out.ErrAndMsg(resp.ErrorCode, resp.ErrorMessage)
 				out.Exit()
 			}
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-			fmt.Fprint(tw, "TOPIC\tPARTITION\tCURRENT REPLICAS\tADDING\tREMOVING\n")
+			table := out.NewFormattedTable(cl.Format(), "reassign.list", 1, "reassignments",
+				"TOPIC", "PARTITION", "CURRENT REPLICAS", "ADDING", "REMOVING")
 			for _, topic := range resp.Topics {
 				for _, p := range topic.Partitions {
 					sort.Slice(p.Replicas, func(i, j int) bool { return p.Replicas[i] < p.Replicas[j] })
 					sort.Slice(p.AddingReplicas, func(i, j int) bool { return p.AddingReplicas[i] < p.AddingReplicas[j] })
 					sort.Slice(p.RemovingReplicas, func(i, j int) bool { return p.RemovingReplicas[i] < p.RemovingReplicas[j] })
-					fmt.Fprintf(tw, "%s\t%d\t%v\t%v\t%v\n", topic.Topic, p.Partition, p.Replicas, p.AddingReplicas, p.RemovingReplicas)
+					table.Row(topic.Topic, p.Partition, fmt.Sprint(p.Replicas), fmt.Sprint(p.AddingReplicas), fmt.Sprint(p.RemovingReplicas))
 				}
 			}
+			table.Flush()
 		},
 	}
 }

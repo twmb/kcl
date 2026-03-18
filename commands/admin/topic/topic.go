@@ -131,17 +131,15 @@ replicas each. When using --replica-assignment, do not use --num-partitions or
 
 			kresp, err := cl.Client().Request(context.Background(), &req)
 			out.MaybeDie(err, "unable to create topic %q: %v", args[0], err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
-			}
 
 			resp := kresp.(*kmsg.CreateTopicsResponse)
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
+			var table *out.FormattedTable
 			if resp.Version >= 7 {
-				fmt.Fprintf(tw, "NAME\tID\tMESSAGE\n")
+				table = out.NewFormattedTable(cl.Format(), "topic.create", 1, "topics",
+					"NAME", "ID", "MESSAGE")
 			} else {
-				fmt.Fprintf(tw, "NAME\tMESSAGE\n")
+				table = out.NewFormattedTable(cl.Format(), "topic.create", 1, "topics",
+					"NAME", "MESSAGE")
 			}
 			for _, topic := range resp.Topics {
 				msg := "OK"
@@ -156,11 +154,12 @@ replicas each. When using --replica-assignment, do not use --num-partitions or
 					}
 				}
 				if resp.Version >= 7 {
-					fmt.Fprintf(tw, "%s\t%x\t%s\n", topic.Topic, topic.TopicID, msg)
+					table.Row(topic.Topic, fmt.Sprintf("%x", topic.TopicID), msg)
 				} else {
-					fmt.Fprintf(tw, "%s\t%s\n", topic.Topic, msg)
+					table.Row(topic.Topic, msg)
 				}
 			}
+			table.Flush()
 		},
 	}
 
@@ -304,12 +303,10 @@ without actually deleting them.
 
 			resp, err := cl.Client().Request(context.Background(), req)
 			out.MaybeDie(err, "unable to delete topics: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(resp)
-			}
+
 			resps := resp.(*kmsg.DeleteTopicsResponse).Topics
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
+			table := out.NewFormattedTable(cl.Format(), "topic.delete", 1, "topics",
+				"NAME", "MESSAGE")
 			for _, topicResp := range resps {
 				msg := "OK"
 				if err := kerr.ErrorForCode(topicResp.ErrorCode); err != nil {
@@ -328,8 +325,9 @@ without actually deleting them.
 				} else {
 					topic = fmt.Sprintf("%x", topicResp.TopicID)
 				}
-				fmt.Fprintf(tw, "%s\t%s\n", topic, msg)
+				table.Row(topic, msg)
 			}
+			table.Flush()
 		},
 	}
 	cmd.Flags().BoolVar(&ids, "ids", false, "whether the input topics should be parsed as topic IDs")
@@ -430,13 +428,9 @@ add-partitions -t bar -t baz 1, 2, 3`,
 			createResp, err := cl.Client().Request(context.Background(), &createReq)
 			out.MaybeDie(err, "unable to create topic partitions: %v", err)
 
-			if cl.AsJSON() {
-				out.ExitJSON(createResp)
-			}
-
 			resps := createResp.(*kmsg.CreatePartitionsResponse).Topics
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
+			table := out.NewFormattedTable(cl.Format(), "topic.add-partitions", 1, "topics",
+				"NAME", "STATUS", "MESSAGE")
 			for _, topic := range resps {
 				errKind := "OK"
 				errMsg := ""
@@ -446,8 +440,9 @@ add-partitions -t bar -t baz 1, 2, 3`,
 						errMsg = *topic.ErrorMessage
 					}
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\n", topic.Topic, errKind, errMsg)
+				table.Row(topic.Topic, errKind, errMsg)
 			}
+			table.Flush()
 		},
 	}
 

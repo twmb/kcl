@@ -79,39 +79,28 @@ func describeUserSCRAM(cl *client.Client) *cobra.Command {
 			kresp, err := cl.Client().Request(context.Background(), &req)
 			out.MaybeDie(err, "unable to describe user scram credentials: %v", err)
 			resp := kresp.(*kmsg.DescribeUserSCRAMCredentialsResponse)
-			if cl.AsJSON() {
-				out.ExitJSON(resp)
-			}
 
 			if resp.ErrorCode != 0 {
 				out.ErrAndMsg(resp.ErrorCode, resp.ErrorMessage)
 				out.Exit()
 			}
 
+			table := out.NewFormattedTable(cl.Format(), "user.list", 1, "credentials",
+				"USER", "MECHANISM", "ITERATIONS", "ERROR")
 			for _, res := range resp.Results {
 				if res.ErrorCode != 0 {
 					msg := ""
 					if res.ErrorMessage != nil {
 						msg = *res.ErrorMessage
 					}
-					fmt.Printf("%s => %s, %s\n",
-						res.User,
-						kerr.ErrorForCode(res.ErrorCode),
-						msg,
-					)
-					fmt.Println()
+					table.Row(res.User, "", "", fmt.Sprintf("%v, %s", kerr.ErrorForCode(res.ErrorCode), msg))
 					continue
 				}
-
-				fmt.Printf("%s =>\n", res.User)
 				for _, info := range res.CredentialInfos {
-					fmt.Printf("\t%s=iterations=%d\n",
-						mech2str(info.Mechanism),
-						info.Iterations,
-					)
+					table.Row(res.User, mech2str(info.Mechanism), info.Iterations, "")
 				}
-				fmt.Println()
 			}
+			table.Flush()
 		},
 	}
 
@@ -266,19 +255,13 @@ Both --set and --del can be specified many times.
 			kresp, err := cl.Client().Request(context.Background(), &req)
 			out.MaybeDie(err, "unable to alter user scram credentials: %v", err)
 			resp := kresp.(*kmsg.AlterUserSCRAMCredentialsResponse)
-			if cl.AsJSON() {
-				out.ExitJSON(resp)
-			}
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
-			fmt.Fprint(tw, "USER\tERROR\n")
+			table := out.NewFormattedTable(cl.Format(), "user.alter", 1, "results",
+				"USER", "ERROR")
 			for _, res := range resp.Results {
-				fmt.Fprintf(tw, "%s\t%v\n",
-					res.User,
-					kerr.ErrorForCode(res.ErrorCode))
+				table.Row(res.User, kerr.ErrorForCode(res.ErrorCode))
 			}
+			table.Flush()
 		},
 	}
 

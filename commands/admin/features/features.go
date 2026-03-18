@@ -43,37 +43,20 @@ version ranges and finalized feature version ranges.
 
 			kresp, err := cl.Client().Request(context.Background(), req)
 			out.MaybeDie(err, "unable to request api versions: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
-			}
-
 			resp := kresp.(*kmsg.ApiVersionsResponse)
 			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
 				out.Die("%v", err)
 			}
 
-			if len(resp.SupportedFeatures) > 0 {
-				fmt.Println("SUPPORTED FEATURES:")
-				tw := out.BeginTabWrite()
-				fmt.Fprintf(tw, "  NAME\tMIN-VERSION\tMAX-VERSION\n")
-				for _, f := range resp.SupportedFeatures {
-					fmt.Fprintf(tw, "  %s\t%d\t%d\n", f.Name, f.MinVersion, f.MaxVersion)
-				}
-				tw.Flush()
+			table := out.NewFormattedTable(cl.Format(), "features.describe", 1, "features",
+				"KIND", "NAME", "MIN-VERSION", "MAX-VERSION")
+			for _, f := range resp.SupportedFeatures {
+				table.Row("SUPPORTED", f.Name, f.MinVersion, f.MaxVersion)
 			}
-
-			if len(resp.FinalizedFeatures) > 0 {
-				if len(resp.SupportedFeatures) > 0 {
-					fmt.Println()
-				}
-				fmt.Printf("FINALIZED FEATURES (epoch %d):\n", resp.FinalizedFeaturesEpoch)
-				tw := out.BeginTabWrite()
-				fmt.Fprintf(tw, "  NAME\tMIN-VERSION\tMAX-VERSION\n")
-				for _, f := range resp.FinalizedFeatures {
-					fmt.Fprintf(tw, "  %s\t%d\t%d\n", f.Name, f.MinVersionLevel, f.MaxVersionLevel)
-				}
-				tw.Flush()
+			for _, f := range resp.FinalizedFeatures {
+				table.Row("FINALIZED", f.Name, f.MinVersionLevel, f.MaxVersionLevel)
 			}
+			table.Flush()
 
 			if len(resp.SupportedFeatures) == 0 && len(resp.FinalizedFeatures) == 0 {
 				fmt.Println("No feature flags found.")
@@ -122,20 +105,14 @@ To avoid accidental updates, this command requires a --run flag to run.
 
 			kresp, err := cl.Client().Request(context.Background(), req)
 			out.MaybeDie(err, "unable to update features: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
-			}
-
 			resp := kresp.(*kmsg.UpdateFeaturesResponse)
 			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
 				out.ErrAndMsg(resp.ErrorCode, resp.ErrorMessage)
 				out.Exit()
 			}
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
-			fmt.Fprintf(tw, "FEATURE\tERROR\tMESSAGE\n")
+			table := out.NewFormattedTable(cl.Format(), "features.update", 1, "results",
+				"FEATURE", "ERROR", "MESSAGE")
 			for _, result := range resp.Results {
 				var errStr, msg string
 				if err := kerr.ErrorForCode(result.ErrorCode); err != nil {
@@ -144,8 +121,9 @@ To avoid accidental updates, this command requires a --run flag to run.
 				if result.ErrorMessage != nil {
 					msg = *result.ErrorMessage
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\n", result.Feature, errStr, msg)
+				table.Row(result.Feature, errStr, msg)
 			}
+			table.Flush()
 		},
 	}
 

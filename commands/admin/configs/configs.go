@@ -255,14 +255,18 @@ func (c *cfger) alterIncremental() {
 
 	kresp, err := c.requestor.Request(context.Background(), &req)
 	out.MaybeDie(err, "unable to alter config: %v", err)
-
-	if c.cl.AsJSON() {
-		out.ExitJSON(kresp)
-	}
 	resp := kresp.(*kmsg.IncrementalAlterConfigsResponse)
-	for _, resource := range resp.Resources { // should only be one iteration
-		out.ErrAndMsg(resource.ErrorCode, resource.ErrorMessage)
+
+	table := out.NewFormattedTable(c.cl.Format(), "config.alter", 1, "results",
+		"RESOURCE", "ERROR", "ERROR MESSAGE")
+	for _, resource := range resp.Resources {
+		errMsg := ""
+		if resource.ErrorMessage != nil {
+			errMsg = *resource.ErrorMessage
+		}
+		table.Row(resource.ResourceName, resource.ErrorCode, errMsg)
 	}
+	table.Flush()
 }
 
 func (c *cfger) alterOld() {
@@ -287,14 +291,18 @@ func (c *cfger) alterOld() {
 
 	kresp, err := c.requestor.Request(context.Background(), &req)
 	out.MaybeDie(err, "unable to alter config: %v", err)
-
-	if c.cl.AsJSON() {
-		out.ExitJSON(kresp)
-	}
 	resp := kresp.(*kmsg.AlterConfigsResponse)
-	for _, resource := range resp.Resources { // should only be one iteration
-		out.ErrAndMsg(resource.ErrorCode, resource.ErrorMessage)
+
+	table := out.NewFormattedTable(c.cl.Format(), "config.alter", 1, "results",
+		"RESOURCE", "ERROR", "ERROR MESSAGE")
+	for _, resource := range resp.Resources {
+		errMsg := ""
+		if resource.ErrorMessage != nil {
+			errMsg = *resource.ErrorMessage
+		}
+		table.Row(resource.ResourceName, resource.ErrorCode, errMsg)
 	}
+	table.Flush()
 }
 
 // confirmAlterLoss prompts for yes or no when issuing alter configs
@@ -417,17 +425,20 @@ describe bar --type topic`,
 			q.parseEntity(args)
 
 			resp, resource := q.issueDescribeConfig(withDocs)
-			if cl.AsJSON() {
-				out.ExitJSON(resp)
-			}
 
 			kvs := resource.Configs
 			sort.Slice(kvs, func(i, j int) bool {
 				return kvs[i].Name < kvs[j].Name
 			})
 
-			tw := out.BeginTabWrite()
-
+			var table *out.FormattedTable
+			if resp.Version >= 3 && withTypes {
+				table = out.NewFormattedTable(cl.Format(), "config.describe", 1, "configs",
+					"KEY", "TYPE", "VALUE", "SOURCE")
+			} else {
+				table = out.NewFormattedTable(cl.Format(), "config.describe", 1, "configs",
+					"KEY", "VALUE", "SOURCE")
+			}
 			for _, kv := range kvs {
 				key := kv.Name
 				if kv.ReadOnly {
@@ -441,25 +452,13 @@ describe bar --type topic`,
 					val = "(sensitive)"
 				}
 
-				fmtStr := "%s\t%s\t%s"
-				args := []interface{}{
-					key,
-					val,
-					kv.Source,
-				}
 				if resp.Version >= 3 && withTypes {
-					fmtStr += "\t%s"
-					args = []interface{}{
-						key,
-						kv.ConfigType,
-						val,
-						kv.Source,
-					}
+					table.Row(key, kv.ConfigType, val, kv.Source)
+				} else {
+					table.Row(key, val, kv.Source)
 				}
-				fmt.Fprintf(tw, fmtStr+"\n", args...)
 			}
-
-			tw.Flush()
+			table.Flush()
 
 			if !withDocs || resp.Version < 3 {
 				return

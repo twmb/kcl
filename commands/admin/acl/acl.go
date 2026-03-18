@@ -200,20 +200,14 @@ SEE ALSO:
 
 			kresp, err := cl.Client().Request(context.Background(), req)
 			out.MaybeDie(err, "unable to describe acls: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
-			}
 			resp := kresp.(*kmsg.DescribeACLsResponse)
 			out.MaybeExitErrMsg(resp.ErrorCode, resp.ErrorMessage)
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
-			fmt.Fprintf(tw, "TYPE\tNAME\tPATTERN\tPRINCIPAL\tHOST\tOPERATION\tPERMISSION\tERROR\tERROR MESSAGE\n")
-
+			table := out.NewFormattedTable(cl.Format(), "acl.list", 1, "acls",
+				"TYPE", "NAME", "PATTERN", "PRINCIPAL", "HOST", "OPERATION", "PERMISSION")
 			for _, resource := range resp.Resources {
 				for _, acl := range resource.ACLs {
-					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					table.Row(
 						resource.ResourceType,
 						resource.ResourceName,
 						resource.ResourcePatternType,
@@ -224,6 +218,7 @@ SEE ALSO:
 					)
 				}
 			}
+			table.Flush()
 		},
 	}
 
@@ -428,9 +423,6 @@ SEE ALSO:
 
 			kresp, err := cl.Client().Request(context.Background(), req)
 			out.MaybeDie(err, "unable to create acls: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
-			}
 			resp := kresp.(*kmsg.CreateACLsResponse)
 
 			if len(resp.Results) != len(req.Creations) {
@@ -439,11 +431,8 @@ SEE ALSO:
 				out.ExitJSON(kresp)
 			}
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
-			fmt.Fprintf(tw, "TYPE\tNAME\tPATTERN\tPRINCIPAL\tHOST\tOPERATION\tPERMISSION\tERROR\tERROR MSG\n")
-
+			table := out.NewFormattedTable(cl.Format(), "acl.create", 1, "results",
+				"TYPE", "NAME", "PATTERN", "PRINCIPAL", "HOST", "OPERATION", "PERMISSION", "ERROR", "ERROR MSG")
 			for i, result := range resp.Results {
 				errStr, errMsg := "OK", ""
 				if err := kerr.ErrorForCode(result.ErrorCode); err != nil {
@@ -453,7 +442,7 @@ SEE ALSO:
 					}
 				}
 				creation := req.Creations[i]
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				table.Row(
 					creation.ResourceType,
 					creation.ResourceName,
 					creation.ResourcePatternType,
@@ -465,6 +454,7 @@ SEE ALSO:
 					errMsg,
 				)
 			}
+			table.Flush()
 		},
 	}
 
@@ -575,19 +565,17 @@ For more detailed information about ACLs, read kcl acl --help.
 
 				kresp, err := cl.Client().Request(context.Background(), descReq)
 				out.MaybeDie(err, "unable to describe acls: %v", err)
-				if cl.AsJSON() {
-					out.ExitJSON(kresp)
-				}
 				resp := kresp.(*kmsg.DescribeACLsResponse)
 				out.MaybeExitErrMsg(resp.ErrorCode, resp.ErrorMessage)
 
-				fmt.Println("Dry run: the following ACLs would be deleted:")
-				tw := out.BeginTabWrite()
-				defer tw.Flush()
-				fmt.Fprintf(tw, "TYPE\tNAME\tPATTERN\tPRINCIPAL\tHOST\tOPERATION\tPERMISSION\n")
+				if cl.Format() != "json" {
+					fmt.Println("Dry run: the following ACLs would be deleted:")
+				}
+				table := out.NewFormattedTable(cl.Format(), "acl.delete-dry-run", 1, "acls",
+					"TYPE", "NAME", "PATTERN", "PRINCIPAL", "HOST", "OPERATION", "PERMISSION")
 				for _, resource := range resp.Resources {
 					for _, acl := range resource.ACLs {
-						fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+						table.Row(
 							resource.ResourceType,
 							resource.ResourceName,
 							resource.ResourcePatternType,
@@ -598,6 +586,7 @@ For more detailed information about ACLs, read kcl acl --help.
 						)
 					}
 				}
+				table.Flush()
 				return
 			}
 
@@ -659,13 +648,7 @@ For more detailed information about ACLs, read kcl acl --help.
 
 			kresp, err := cl.Client().Request(context.Background(), req)
 			out.MaybeDie(err, "unable to describe acls: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
-			}
 			resp := kresp.(*kmsg.DeleteACLsResponse)
-
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
 
 			if len(resp.Results) != 1 {
 				out.Die("we requested one filter, but got %d responses; dumping JSON", len(resp.Results))
@@ -675,8 +658,8 @@ For more detailed information about ACLs, read kcl acl --help.
 			result := resp.Results[0]
 			out.MaybeExitErrMsg(result.ErrorCode, result.ErrorMessage)
 
-			fmt.Fprintf(tw, "TYPE\tNAME\tPATTERN\tPRINCIPAL\tHOST\tOPERATION\tPERMISSION\tERROR\tERROR MSG\n")
-
+			table := out.NewFormattedTable(cl.Format(), "acl.delete", 1, "deleted",
+				"TYPE", "NAME", "PATTERN", "PRINCIPAL", "HOST", "OPERATION", "PERMISSION", "ERROR", "ERROR MSG")
 			for _, acl := range result.MatchingACLs {
 				errStr, errMsg := "OK", ""
 				if err = kerr.ErrorForCode(acl.ErrorCode); err != nil {
@@ -685,7 +668,7 @@ For more detailed information about ACLs, read kcl acl --help.
 						errMsg = *acl.ErrorMessage
 					}
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				table.Row(
 					acl.ResourceType,
 					acl.ResourceName,
 					acl.ResourcePatternType,
@@ -697,6 +680,7 @@ For more detailed information about ACLs, read kcl acl --help.
 					errMsg,
 				)
 			}
+			table.Flush()
 		},
 	}
 

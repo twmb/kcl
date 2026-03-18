@@ -172,9 +172,6 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 			if version == "" {
 				kresp, err := cl.Client().Request(context.Background(), apiVersionsRequest())
 				out.MaybeDie(err, "unable to request API versions: %v", err)
-				if cl.AsJSON() {
-					out.ExitJSON(kresp)
-				}
 				resp := kresp.(*kmsg.ApiVersionsResponse)
 				v = kversion.FromApiVersionsResponse(resp)
 			} else {
@@ -184,25 +181,29 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 				}
 			}
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
 			if keys {
-				fmt.Fprintf(tw, "NAME\tKEY\tMAX\n")
+				table := out.NewFormattedTable(cl.Format(), "misc.api-versions", 1, "api_versions",
+					"NAME", "KEY", "MAX")
+				v.EachMaxKeyVersion(func(k, ver int16) {
+					kind := kmsg.NameForKey(k)
+					if kind == "" {
+						kind = "Unknown"
+					}
+					table.Row(kind, k, ver)
+				})
+				table.Flush()
 			} else {
-				fmt.Fprintf(tw, "NAME\tMAX\n")
+				table := out.NewFormattedTable(cl.Format(), "misc.api-versions", 1, "api_versions",
+					"NAME", "MAX")
+				v.EachMaxKeyVersion(func(k, ver int16) {
+					kind := kmsg.NameForKey(k)
+					if kind == "" {
+						kind = "Unknown"
+					}
+					table.Row(kind, ver)
+				})
+				table.Flush()
 			}
-			v.EachMaxKeyVersion(func(k, v int16) {
-				kind := kmsg.NameForKey(k)
-				if kind == "" {
-					kind = "Unknown"
-				}
-				if keys {
-					fmt.Fprintf(tw, "%s\t%d\t%d\n", kind, k, v)
-				} else {
-					fmt.Fprintf(tw, "%s\t%d\n", kind, v)
-				}
-			})
 		},
 	}
 

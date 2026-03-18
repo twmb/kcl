@@ -2,7 +2,6 @@ package topic
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -101,25 +100,25 @@ SEE ALSO:
 
 			kresp, err := req.RequestWith(context.Background(), cl.Client())
 			out.MaybeDie(err, "unable to alter configs: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
-			}
 
+			table := out.NewFormattedTable(cl.Format(), "topic.alter-config", 1, "topics",
+				"NAME", "MESSAGE")
 			for _, r := range kresp.Resources {
 				if err := kerr.ErrorForCode(r.ErrorCode); err != nil {
 					msg := err.Error()
 					if r.ErrorMessage != nil {
 						msg += ": " + *r.ErrorMessage
 					}
-					fmt.Fprintf(out.BeginTabWrite(), "%s: %s\n", r.ResourceName, msg)
+					table.Row(r.ResourceName, msg)
 				} else {
 					if dryRun {
-						fmt.Printf("%s: OK (dry run)\n", r.ResourceName)
+						table.Row(r.ResourceName, "OK (dry run)")
 					} else {
-						fmt.Printf("%s: OK\n", r.ResourceName)
+						table.Row(r.ResourceName, "OK")
 					}
 				}
 			}
+			table.Flush()
 		},
 	}
 

@@ -84,8 +84,77 @@ member assignments, and process IDs.
 			req.Groups = groups
 
 			shards := cl.Client().RequestSharded(context.Background(), req)
-			if cl.AsJSON() {
-				out.ExitJSON(shards)
+
+			if cl.Format() == "json" {
+				type jsonMember struct {
+					MemberID    string `json:"member_id"`
+					ClientID    string `json:"client_id"`
+					Host        string `json:"host"`
+					MemberEpoch int32  `json:"member_epoch"`
+					ProcessID   string `json:"process_id"`
+				}
+				type jsonSubtopology struct {
+					SubtopologyID           string   `json:"subtopology_id"`
+					SourceTopics            []string `json:"source_topics"`
+					RepartitionSinkTopics   []string `json:"repartition_sink_topics"`
+					StateChangelogTopics    []string `json:"state_changelog_topics"`
+					RepartitionSourceTopics []string `json:"repartition_source_topics"`
+				}
+				type jsonGroup struct {
+					GroupID       string            `json:"group_id"`
+					Coordinator   int32             `json:"coordinator"`
+					State         string            `json:"state"`
+					Epoch         int32             `json:"epoch"`
+					TopologyEpoch int32             `json:"topology_epoch,omitempty"`
+					Members       []jsonMember      `json:"members"`
+					Subtopologies []jsonSubtopology `json:"subtopologies,omitempty"`
+					Error         string            `json:"error,omitempty"`
+				}
+				var groups []jsonGroup
+				for _, shard := range shards {
+					if shard.Err != nil {
+						continue
+					}
+					resp := shard.Resp.(*kmsg.StreamsGroupDescribeResponse)
+					for _, g := range resp.Groups {
+						jg := jsonGroup{
+							GroupID:     g.Group,
+							Coordinator: shard.Meta.NodeID,
+							State:       g.State,
+							Epoch:       g.Epoch,
+						}
+						if err := kerr.ErrorForCode(g.ErrorCode); err != nil {
+							jg.Error = err.Error()
+							if g.ErrorMessage != nil {
+								jg.Error += ": " + *g.ErrorMessage
+							}
+						}
+						if g.Topology != nil {
+							jg.TopologyEpoch = g.Topology.Epoch
+							for _, st := range g.Topology.Subtopologies {
+								jg.Subtopologies = append(jg.Subtopologies, jsonSubtopology{
+									SubtopologyID:           st.SubtopologyID,
+									SourceTopics:            st.SourceTopics,
+									RepartitionSinkTopics:   st.RepartitionSinkTopics,
+									StateChangelogTopics:    topicInfoNameSlice(st.StateChangelogTopics),
+									RepartitionSourceTopics: topicInfoNameSlice(st.RepartitionSourceTopics),
+								})
+							}
+						}
+						for _, m := range g.Members {
+							jg.Members = append(jg.Members, jsonMember{
+								MemberID:    m.MemberID,
+								ClientID:    m.ClientID,
+								Host:        m.ClientHost,
+								MemberEpoch: m.MemberEpoch,
+								ProcessID:   m.ProcessID,
+							})
+						}
+						groups = append(groups, jg)
+					}
+				}
+				out.MarshalJSON("streams-group.describe", 1, map[string]any{"groups": groups})
+				return
 			}
 
 			for _, shard := range shards {
@@ -173,6 +242,14 @@ func printStreamsGroup(broker int32, g kmsg.StreamsGroupDescribeResponseGroup) {
 		}
 		memTw.Flush()
 	}
+}
+
+func topicInfoNameSlice(infos []kmsg.TopicInfo) []string {
+	names := make([]string, len(infos))
+	for i, ti := range infos {
+		names[i] = ti.Topic
+	}
+	return names
 }
 
 func topicInfoNames(infos []kmsg.TopicInfo) string {

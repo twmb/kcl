@@ -3,7 +3,6 @@ package clientmetrics
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -49,20 +48,17 @@ func listCommand(cl *client.Client) *cobra.Command {
 
 			kresp, err := req.RequestWith(context.Background(), cl.Client())
 			out.MaybeDie(err, "unable to list client metrics: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
-			}
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-			fmt.Fprintf(tw, "NAME\tCONFIGS\n")
+			table := out.NewFormattedTable(cl.Format(), "client-metrics.list", 1, "subscriptions",
+				"NAME", "CONFIGS")
 			for _, r := range kresp.Resources {
 				if err := kerr.ErrorForCode(r.ErrorCode); err != nil {
-					fmt.Fprintf(tw, "%s\t%v\n", r.ResourceName, err)
+					table.Row(r.ResourceName, err)
 					continue
 				}
-				fmt.Fprintf(tw, "%s\t%d\n", r.ResourceName, len(r.Configs))
+				table.Row(r.ResourceName, len(r.Configs))
 			}
+			table.Flush()
 		},
 	}
 }
@@ -82,9 +78,6 @@ func describeCommand(cl *client.Client) *cobra.Command {
 
 			kresp, err := req.RequestWith(context.Background(), cl.Client())
 			out.MaybeDie(err, "unable to describe client metrics: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
-			}
 
 			for _, r := range kresp.Resources {
 				if err := kerr.ErrorForCode(r.ErrorCode); err != nil {
@@ -95,15 +88,16 @@ func describeCommand(cl *client.Client) *cobra.Command {
 					out.Die(msg)
 				}
 
-				tw := out.NewTable("KEY", "VALUE", "SOURCE")
+				table := out.NewFormattedTable(cl.Format(), "client-metrics.describe", 1, "configs",
+					"KEY", "VALUE", "SOURCE")
 				for _, c := range r.Configs {
 					val := ""
 					if c.Value != nil {
 						val = *c.Value
 					}
-					tw.Print(c.Name, val, c.Source)
+					table.Row(c.Name, val, c.Source)
 				}
-				tw.Flush()
+				table.Flush()
 			}
 		},
 	}
@@ -157,20 +151,21 @@ EXAMPLES:
 			req.Resources = append(req.Resources, r)
 			kresp, err := req.RequestWith(context.Background(), cl.Client())
 			out.MaybeDie(err, "unable to alter client metrics: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
-			}
 
+			table := out.NewFormattedTable(cl.Format(), "client-metrics.alter", 1, "results",
+				"NAME", "STATUS")
 			for _, r := range kresp.Resources {
 				if err := kerr.ErrorForCode(r.ErrorCode); err != nil {
 					msg := err.Error()
 					if r.ErrorMessage != nil {
 						msg += ": " + *r.ErrorMessage
 					}
-					out.Die(msg)
+					table.Row(r.ResourceName, msg)
+					continue
 				}
-				fmt.Printf("%s: OK\n", r.ResourceName)
+				table.Row(r.ResourceName, "OK")
 			}
+			table.Flush()
 		},
 	}
 
@@ -213,20 +208,21 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 			alterReq.Resources = append(alterReq.Resources, ar)
 			alterResp, err := alterReq.RequestWith(context.Background(), cl.Client())
 			out.MaybeDie(err, "unable to delete client metrics: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(alterResp)
-			}
 
+			table := out.NewFormattedTable(cl.Format(), "client-metrics.delete", 1, "results",
+				"NAME", "STATUS")
 			for _, res := range alterResp.Resources {
 				if err := kerr.ErrorForCode(res.ErrorCode); err != nil {
 					msg := err.Error()
 					if res.ErrorMessage != nil {
 						msg += ": " + *res.ErrorMessage
 					}
-					out.Die(msg)
+					table.Row(res.ResourceName, msg)
+					continue
 				}
-				fmt.Printf("%s: deleted\n", res.ResourceName)
+				table.Row(res.ResourceName, "deleted")
 			}
+			table.Flush()
 		},
 	}
 }

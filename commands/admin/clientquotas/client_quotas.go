@@ -2,7 +2,6 @@ package clientquotas
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -106,36 +105,29 @@ filter specified by flags is returned.
 			kresp, err := cl.Client().Request(context.Background(), req)
 			out.MaybeDie(err, "unable to describe client quotas: %v", err)
 			resp := kresp.(*kmsg.DescribeClientQuotasResponse)
-			if cl.AsJSON() {
-				out.ExitJSON(resp)
-			}
 
 			if resp.ErrorCode != 0 {
 				out.ErrAndMsg(resp.ErrorCode, resp.ErrorMessage)
 				out.Exit()
 			}
 
+			table := out.NewFormattedTable(cl.Format(), "quota.describe", 1, "quotas",
+				"ENTITY", "KEY", "VALUE")
 			for _, entry := range resp.Entries {
-				fmt.Print("{")
-				for i, entity := range entry.Entity {
-					if i > 0 {
-						fmt.Print(", ")
-					}
-					fmt.Print(entity.Type)
-					fmt.Print("=")
+				var entityParts []string
+				for _, entity := range entry.Entity {
 					name := "<default>"
 					if entity.Name != nil {
 						name = *entity.Name
 					}
-					fmt.Print(name)
+					entityParts = append(entityParts, entity.Type+"="+name)
 				}
-				fmt.Println("}")
-
+				entityStr := "{" + strings.Join(entityParts, ", ") + "}"
 				for _, value := range entry.Values {
-					fmt.Printf("%s=%v\n", value.Key, value.Value)
+					table.Row(entityStr, value.Key, value.Value)
 				}
-				fmt.Println()
 			}
+			table.Flush()
 		},
 	}
 
@@ -240,41 +232,32 @@ matches, this runs an alter on anything that matches.
 			kresp, err := cl.Client().Request(context.Background(), req)
 			out.MaybeDie(err, "unable to alter client quotas: %v", err)
 			resp := kresp.(*kmsg.AlterClientQuotasResponse)
-			if cl.AsJSON() {
-				out.ExitJSON(resp)
-			}
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
+			table := out.NewFormattedTable(cl.Format(), "quota.alter", 1, "results",
+				"ENTITY", "STATUS", "MESSAGE")
 			for _, entry := range resp.Entries {
-				fmt.Fprint(tw, "{")
-				for i, entity := range entry.Entity {
-					if i > 0 {
-						fmt.Fprint(tw, ", ")
-					}
-					fmt.Fprint(tw, entity.Type)
-					fmt.Fprint(tw, "=")
+				var entityParts []string
+				for _, entity := range entry.Entity {
 					name := "<default>"
 					if entity.Name != nil {
 						name = *entity.Name
 					}
-					fmt.Fprint(tw, name)
+					entityParts = append(entityParts, entity.Type+"="+name)
 				}
-				fmt.Fprint(tw, "}\t")
+				entityStr := "{" + strings.Join(entityParts, ", ") + "}"
 
 				code := "OK"
 				if err := kerr.ErrorForCode(entry.ErrorCode); err != nil {
 					code = err.Error()
 				}
-				fmt.Fprintf(tw, "%s\t", code)
 
 				msg := ""
 				if entry.ErrorMessage != nil {
 					msg = *entry.ErrorMessage
 				}
-				fmt.Fprintf(tw, "%s\n", msg)
+				table.Row(entityStr, code, msg)
 			}
+			table.Flush()
 		},
 	}
 

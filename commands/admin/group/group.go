@@ -214,25 +214,23 @@ with a JSON file:
 			kresp, err := cl.Client().Request(context.Background(), req)
 			out.MaybeDie(err, "unable to delete offsets: %v", err)
 			resp := kresp.(*kmsg.OffsetDeleteResponse)
-			if cl.AsJSON() {
-				out.ExitJSON(resp)
-			}
 
 			if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
 				out.Die(err.Error())
 			}
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
+			table := out.NewFormattedTable(cl.Format(), "group.offset-delete", 1, "results",
+				"TOPIC", "PARTITION", "STATUS")
 			for _, topic := range resp.Topics {
 				for _, partition := range topic.Partitions {
 					msg := "OK"
 					if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
 						msg = err.Error()
 					}
-					fmt.Fprintf(tw, "%s\t%d\t%s\n", topic.Topic, partition.Partition, msg)
+					table.Row(topic.Topic, partition.Partition, msg)
 				}
 			}
+			table.Flush()
 		},
 	}
 

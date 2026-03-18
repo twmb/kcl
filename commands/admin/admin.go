@@ -114,18 +114,14 @@ To avoid accidental triggers, this command requires a --run flag to run.
 
 			kresp, err := cl.Client().Request(context.Background(), req)
 			out.MaybeDie(err, "unable to elect leaders: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
-			}
 
 			resp := kresp.(*kmsg.ElectLeadersResponse)
 			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
 				out.Die("%v", err)
 			}
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
+			table := out.NewFormattedTable(cl.Format(), "cluster.elect-leaders", 1, "results",
+				"TOPIC", "PARTITION", "ERROR", "MESSAGE")
 			for _, topic := range resp.Topics {
 				for _, partition := range topic.Partitions {
 					errKind := ""
@@ -136,14 +132,10 @@ To avoid accidental triggers, this command requires a --run flag to run.
 					if partition.ErrorMessage != nil {
 						msg = *partition.ErrorMessage
 					}
-					fmt.Fprintf(tw, "%s\t%d\t%v\t%s\n",
-						topic.Topic,
-						partition.Partition,
-						errKind,
-						msg,
-					)
+					table.Row(topic.Topic, partition.Partition, errKind, msg)
 				}
 			}
+			table.Flush()
 		},
 	}
 
@@ -418,9 +410,6 @@ and observers.
 
 			kresp, err := cl.Client().Request(context.Background(), req)
 			out.MaybeDie(err, "unable to describe quorum: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
-			}
 
 			resp := kresp.(*kmsg.DescribeQuorumResponse)
 			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
@@ -428,37 +417,87 @@ and observers.
 				out.Exit()
 			}
 
-			for _, topic := range resp.Topics {
-				for _, p := range topic.Partitions {
-					if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
-						fmt.Printf("%s partition %d: %v\n", topic.Topic, p.Partition, err)
-						continue
-					}
-					fmt.Printf("%s partition %d: leader %d, epoch %d, high-watermark %d\n",
-						topic.Topic, p.Partition, p.LeaderID, p.LeaderEpoch, p.HighWatermark)
-
-					if len(p.CurrentVoters) > 0 {
-						fmt.Println()
-						fmt.Println("VOTERS:")
-						tw := out.BeginTabWrite()
-						fmt.Fprintf(tw, "  REPLICA\tLOG-END-OFFSET\tLAST-FETCH-TIMESTAMP\tLAST-CAUGHT-UP-TIMESTAMP\n")
+			switch cl.Format() {
+			case "json":
+				type replicaJSON struct {
+					ReplicaID            int32 `json:"replica_id"`
+					LogEndOffset         int64 `json:"log_end_offset"`
+					LastFetchTimestamp    int64 `json:"last_fetch_timestamp"`
+					LastCaughtUpTimestamp int64 `json:"last_caught_up_timestamp"`
+				}
+				type partJSON struct {
+					Topic         string        `json:"topic"`
+					Partition     int32         `json:"partition"`
+					Leader        int32         `json:"leader"`
+					LeaderEpoch   int32         `json:"leader_epoch"`
+					HighWatermark int64         `json:"high_watermark"`
+					Voters        []replicaJSON `json:"voters,omitempty"`
+					Observers     []replicaJSON `json:"observers,omitempty"`
+				}
+				var parts []partJSON
+				for _, topic := range resp.Topics {
+					for _, p := range topic.Partitions {
+						pj := partJSON{
+							Topic: topic.Topic, Partition: p.Partition,
+							Leader: p.LeaderID, LeaderEpoch: p.LeaderEpoch,
+							HighWatermark: p.HighWatermark,
+						}
 						for _, v := range p.CurrentVoters {
-							fmt.Fprintf(tw, "  %d\t%d\t%d\t%d\n",
-								v.ReplicaID, v.LogEndOffset, v.LastFetchTimestamp, v.LastCaughtUpTimestamp)
+							pj.Voters = append(pj.Voters, replicaJSON{v.ReplicaID, v.LogEndOffset, v.LastFetchTimestamp, v.LastCaughtUpTimestamp})
 						}
-						tw.Flush()
-					}
-
-					if len(p.Observers) > 0 {
-						fmt.Println()
-						fmt.Println("OBSERVERS:")
-						tw := out.BeginTabWrite()
-						fmt.Fprintf(tw, "  REPLICA\tLOG-END-OFFSET\tLAST-FETCH-TIMESTAMP\tLAST-CAUGHT-UP-TIMESTAMP\n")
 						for _, o := range p.Observers {
-							fmt.Fprintf(tw, "  %d\t%d\t%d\t%d\n",
-								o.ReplicaID, o.LogEndOffset, o.LastFetchTimestamp, o.LastCaughtUpTimestamp)
+							pj.Observers = append(pj.Observers, replicaJSON{o.ReplicaID, o.LogEndOffset, o.LastFetchTimestamp, o.LastCaughtUpTimestamp})
 						}
-						tw.Flush()
+						parts = append(parts, pj)
+					}
+				}
+				out.MarshalJSON("cluster.describe-quorum", 1, map[string]any{"partitions": parts})
+
+			case "awk":
+				for _, topic := range resp.Topics {
+					for _, p := range topic.Partitions {
+						for _, v := range p.CurrentVoters {
+							fmt.Printf("%s\t%d\tvoter\t%d\t%d\t%d\t%d\n", topic.Topic, p.Partition, v.ReplicaID, v.LogEndOffset, v.LastFetchTimestamp, v.LastCaughtUpTimestamp)
+						}
+						for _, o := range p.Observers {
+							fmt.Printf("%s\t%d\tobserver\t%d\t%d\t%d\t%d\n", topic.Topic, p.Partition, o.ReplicaID, o.LogEndOffset, o.LastFetchTimestamp, o.LastCaughtUpTimestamp)
+						}
+					}
+				}
+
+			default:
+				for _, topic := range resp.Topics {
+					for _, p := range topic.Partitions {
+						if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
+							fmt.Printf("%s partition %d: %v\n", topic.Topic, p.Partition, err)
+							continue
+						}
+						fmt.Printf("%s partition %d: leader %d, epoch %d, high-watermark %d\n",
+							topic.Topic, p.Partition, p.LeaderID, p.LeaderEpoch, p.HighWatermark)
+
+						if len(p.CurrentVoters) > 0 {
+							fmt.Println()
+							fmt.Println("VOTERS:")
+							tw := out.BeginTabWrite()
+							fmt.Fprintf(tw, "  REPLICA\tLOG-END-OFFSET\tLAST-FETCH-TIMESTAMP\tLAST-CAUGHT-UP-TIMESTAMP\n")
+							for _, v := range p.CurrentVoters {
+								fmt.Fprintf(tw, "  %d\t%d\t%d\t%d\n",
+									v.ReplicaID, v.LogEndOffset, v.LastFetchTimestamp, v.LastCaughtUpTimestamp)
+							}
+							tw.Flush()
+						}
+
+						if len(p.Observers) > 0 {
+							fmt.Println()
+							fmt.Println("OBSERVERS:")
+							tw := out.BeginTabWrite()
+							fmt.Fprintf(tw, "  REPLICA\tLOG-END-OFFSET\tLAST-FETCH-TIMESTAMP\tLAST-CAUGHT-UP-TIMESTAMP\n")
+							for _, o := range p.Observers {
+								fmt.Fprintf(tw, "  %d\t%d\t%d\t%d\n",
+									o.ReplicaID, o.LogEndOffset, o.LastFetchTimestamp, o.LastCaughtUpTimestamp)
+							}
+							tw.Flush()
+						}
 					}
 				}
 			}

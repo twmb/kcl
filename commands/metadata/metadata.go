@@ -52,7 +52,7 @@ If the brokers section is printed, the controller broker is marked with *.
 					sections++
 				}
 			}
-			if sections == 0 && !cl.AsJSON() {
+			if sections == 0 && cl.Format() == "text" {
 				out.Die("no metadata section requested")
 			}
 
@@ -79,36 +79,101 @@ If the brokers section is printed, the controller broker is marked with *.
 
 			kresp, err := cl.Client().Request(context.Background(), &req)
 			out.MaybeDie(err, "unable to get metadata: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
-			}
 			resp := kresp.(*kmsg.MetadataResponse)
 
-			if pcluster && resp.ClusterID != nil {
-				if includeHeader {
-					fmt.Printf("CLUSTER\n=======\n")
+			switch cl.Format() {
+			case "json":
+				fields := map[string]any{}
+				if resp.ClusterID != nil {
+					fields["cluster_id"] = *resp.ClusterID
 				}
-				fmt.Printf("%s\n", *resp.ClusterID)
-				if includeHeader {
-					fmt.Println()
+				type brokerJSON struct {
+					ID   int32  `json:"id"`
+					Host string `json:"host"`
+					Port int32  `json:"port"`
+					Rack string `json:"rack,omitempty"`
 				}
-			}
+				brokers := make([]brokerJSON, len(resp.Brokers))
+				for i, b := range resp.Brokers {
+					brokers[i] = brokerJSON{ID: b.NodeID, Host: b.Host, Port: b.Port}
+					if b.Rack != nil {
+						brokers[i].Rack = *b.Rack
+					}
+				}
+				fields["brokers"] = brokers
+				type topicJSON struct {
+					Name       string `json:"name"`
+					ID         string `json:"id,omitempty"`
+					Internal   bool   `json:"internal,omitempty"`
+					Partitions int    `json:"partitions"`
+					Replicas   int    `json:"replicas"`
+				}
+				var topicsJSON []topicJSON
+				for _, t := range resp.Topics {
+					if !pinternal && t.IsInternal {
+						continue
+					}
+					tj := topicJSON{
+						Name:       topicOut(t.Topic),
+						Internal:   t.IsInternal,
+						Partitions: len(t.Partitions),
+					}
+					if resp.Version >= 10 {
+						tj.ID = fmt.Sprintf("%x", t.TopicID)
+					}
+					if len(t.Partitions) > 0 {
+						tj.Replicas = len(t.Partitions[0].Replicas)
+					}
+					topicsJSON = append(topicsJSON, tj)
+				}
+				fields["topics"] = topicsJSON
+				out.MarshalJSON("metadata", 1, fields)
 
-			if pbrokers {
-				if includeHeader {
-					fmt.Printf("BROKERS\n=======\n")
+			case "awk":
+				// AWK mode: output topic table only (TSV).
+				for _, t := range resp.Topics {
+					if !pinternal && t.IsInternal {
+						continue
+					}
+					parts := len(t.Partitions)
+					replicas := 0
+					if parts > 0 {
+						replicas = len(t.Partitions[0].Replicas)
+					}
+					if resp.Version >= 10 {
+						fmt.Printf("%s\t%x\t%d\t%d\n", topicOut(t.Topic), t.TopicID, parts, replicas)
+					} else {
+						fmt.Printf("%s\t%d\t%d\n", topicOut(t.Topic), parts, replicas)
+					}
 				}
-				printBrokers(resp.ControllerID, resp.Brokers)
-				if includeHeader {
-					fmt.Println()
-				}
-			}
 
-			if ptopics && len(resp.Topics) > 0 {
-				if includeHeader {
-					fmt.Printf("TOPICS\n======\n")
+			default:
+				if pcluster && resp.ClusterID != nil {
+					if includeHeader {
+						fmt.Printf("CLUSTER\n=======\n")
+					}
+					fmt.Printf("%s\n", *resp.ClusterID)
+					if includeHeader {
+						fmt.Println()
+					}
 				}
-				PrintTopics(resp.Version, resp.Topics, pinternal, detailed)
+
+				if pbrokers {
+					if includeHeader {
+						fmt.Printf("BROKERS\n=======\n")
+					}
+					printBrokers(resp.ControllerID, resp.Brokers)
+					if includeHeader {
+						fmt.Println()
+					}
+				}
+
+				if ptopics && len(resp.Topics) > 0 {
+					if includeHeader {
+						fmt.Printf("TOPICS\n======\n")
+					}
+					PrintTopics(resp.Version, resp.Topics, pinternal, detailed)
+				}
 			}
 		},
 	}

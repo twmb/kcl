@@ -62,10 +62,9 @@ are given (just "foo"), all partitions for that topic are described.
 			}
 
 			shards := cl.Client().RequestSharded(context.Background(), req)
-			if cl.AsJSON() {
-				out.ExitJSON(shards)
-			}
 
+			table := out.NewFormattedTable(cl.Format(), "share-group.describe-offsets", 1, "offsets",
+				"GROUP", "TOPIC", "PARTITION", "START-OFFSET", "LEADER-EPOCH", "LAG", "ERROR")
 			for _, shard := range shards {
 				if shard.Err != nil {
 					fmt.Printf("unable to issue DescribeShareGroupOffsets to broker %d (%s:%d): %v\n", shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
@@ -74,17 +73,15 @@ are given (just "foo"), all partitions for that topic are described.
 
 				resp := shard.Resp.(*kmsg.DescribeShareGroupOffsetsResponse)
 				for _, group := range resp.Groups {
-					fmt.Printf("GROUP: %s\n", group.GroupID)
 					if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
 						msg := err.Error()
 						if group.ErrorMessage != nil {
 							msg += ": " + *group.ErrorMessage
 						}
-						fmt.Printf("  ERROR: %s\n", msg)
+						table.Row(group.GroupID, "", "", "", "", "", msg)
 						continue
 					}
 
-					tw := out.NewTable("TOPIC", "PARTITION", "START-OFFSET", "LEADER-EPOCH", "LAG", "ERROR")
 					for _, topic := range group.Topics {
 						for _, partition := range topic.Partitions {
 							errMsg := ""
@@ -98,7 +95,8 @@ are given (just "foo"), all partitions for that topic are described.
 							if partition.Lag >= 0 {
 								lag = strconv.FormatInt(partition.Lag, 10)
 							}
-							tw.Print(
+							table.Row(
+								group.GroupID,
 								topic.Topic,
 								partition.Partition,
 								partition.StartOffset,
@@ -108,10 +106,9 @@ are given (just "foo"), all partitions for that topic are described.
 							)
 						}
 					}
-					tw.Flush()
-					fmt.Println()
 				}
 			}
+			table.Flush()
 		},
 	}
 	cmd.Flags().StringArrayVarP(&topicParts, "topic", "t", nil, "topic and optional partitions to describe offsets for (e.g. foo:1,2,3 or foo); repeatable")
@@ -154,9 +151,6 @@ topic:p#,o# argument.
 
 			kresp, err := req.RequestWith(context.Background(), cl.Client())
 			out.MaybeDie(err, "unable to alter share group offsets: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
-			}
 
 			if err := kerr.ErrorForCode(kresp.ErrorCode); err != nil {
 				msg := err.Error()
@@ -166,7 +160,8 @@ topic:p#,o# argument.
 				out.Die(msg)
 			}
 
-			tw := out.NewTable("TOPIC", "PARTITION", "ERROR")
+			table := out.NewFormattedTable(cl.Format(), "share-group.alter-offsets", 1, "results",
+				"TOPIC", "PARTITION", "STATUS")
 			for _, topic := range kresp.Topics {
 				for _, partition := range topic.Partitions {
 					errMsg := "OK"
@@ -176,10 +171,10 @@ topic:p#,o# argument.
 							errMsg += ": " + *partition.ErrorMessage
 						}
 					}
-					tw.Print(topic.Topic, partition.Partition, errMsg)
+					table.Row(topic.Topic, partition.Partition, errMsg)
 				}
 			}
-			tw.Flush()
+			table.Flush()
 		},
 	}
 	return cmd
@@ -210,9 +205,6 @@ for the specified topics within the share group.
 
 			kresp, err := req.RequestWith(context.Background(), cl.Client())
 			out.MaybeDie(err, "unable to delete share group offsets: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
-			}
 
 			if err := kerr.ErrorForCode(kresp.ErrorCode); err != nil {
 				msg := err.Error()
@@ -222,7 +214,8 @@ for the specified topics within the share group.
 				out.Die(msg)
 			}
 
-			tw := out.NewTable("TOPIC", "ERROR")
+			table := out.NewFormattedTable(cl.Format(), "share-group.delete-offsets", 1, "results",
+				"TOPIC", "STATUS")
 			for _, topic := range kresp.Topics {
 				errMsg := "OK"
 				if err := kerr.ErrorForCode(topic.ErrorCode); err != nil {
@@ -231,9 +224,9 @@ for the specified topics within the share group.
 						errMsg += ": " + *topic.ErrorMessage
 					}
 				}
-				tw.Print(topic.Topic, errMsg)
+				table.Row(topic.Topic, errMsg)
 			}
-			tw.Flush()
+			table.Flush()
 		},
 	}
 	return cmd

@@ -117,9 +117,6 @@ Use -v to also show start offsets and lag from DescribeShareGroupOffsets.
 			req.GroupIDs = groups
 
 			shards := cl.Client().RequestSharded(context.Background(), req)
-			if cl.AsJSON() {
-				out.ExitJSON(shards)
-			}
 
 			// If verbose, also fetch offsets.
 			var offsetsByGroup map[string]*kmsg.DescribeShareGroupOffsetsResponseGroup
@@ -127,36 +124,144 @@ Use -v to also show start offsets and lag from DescribeShareGroupOffsets.
 				offsetsByGroup = fetchShareGroupOffsets(cl, groups)
 			}
 
-			for _, shard := range shards {
-				if shard.Err != nil {
-					fmt.Printf("unable to issue ShareGroupDescribe to broker %d (%s:%d): %v\n", shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
-					continue
+			switch cl.Format() {
+			case "json":
+				type jsonMember struct {
+					MemberID         string   `json:"member_id"`
+					ClientID         string   `json:"client_id"`
+					Host             string   `json:"host"`
+					MemberEpoch      int32    `json:"member_epoch"`
+					SubscribedTopics []string `json:"subscribed_topics"`
+					Assignment       string   `json:"assignment"`
 				}
-
-				resp := shard.Resp.(*kmsg.ShareGroupDescribeResponse)
-				for _, group := range resp.Groups {
-					printShareGroup(shard.Meta.NodeID, group)
-					if verbose {
-						if offsets, ok := offsetsByGroup[group.GroupID]; ok {
-							fmt.Println()
-							tw := out.NewTable("TOPIC", "PARTITION", "START-OFFSET", "LEADER-EPOCH", "LAG", "ERROR")
-							for _, topic := range offsets.Topics {
-								for _, p := range topic.Partitions {
-									errMsg := ""
-									if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
-										errMsg = err.Error()
-									}
-									lagStr := "-"
-									if p.Lag >= 0 {
-										lagStr = fmt.Sprintf("%d", p.Lag)
-									}
-									tw.Print(topic.Topic, p.Partition, p.StartOffset, p.LeaderEpoch, lagStr, errMsg)
-								}
+				type jsonGroup struct {
+					GroupID         string       `json:"group_id"`
+					Coordinator     int32        `json:"coordinator"`
+					State           string       `json:"state"`
+					Epoch           int32        `json:"epoch"`
+					AssignmentEpoch int32        `json:"assignment_epoch"`
+					Assignor        string       `json:"assignor"`
+					Members         []jsonMember `json:"members"`
+					Error           string       `json:"error,omitempty"`
+				}
+				var groups []jsonGroup
+				for _, shard := range shards {
+					if shard.Err != nil {
+						continue
+					}
+					resp := shard.Resp.(*kmsg.ShareGroupDescribeResponse)
+					for _, group := range resp.Groups {
+						jg := jsonGroup{
+							GroupID:         group.GroupID,
+							Coordinator:     shard.Meta.NodeID,
+							State:           group.GroupState,
+							Epoch:           group.GroupEpoch,
+							AssignmentEpoch: group.AssignmentEpoch,
+							Assignor:        group.Assignor,
+						}
+						if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
+							msg := err.Error()
+							if group.ErrorMessage != nil {
+								msg += ": " + *group.ErrorMessage
 							}
-							tw.Flush()
+							jg.Error = msg
+						}
+						for _, member := range group.Members {
+							var assignedParts []string
+							for _, tp := range member.Assignment.TopicPartitions {
+								name := tp.Topic
+								if name == "" {
+									name = fmt.Sprintf("%x", tp.TopicID)
+								}
+								parts := make([]string, len(tp.Partitions))
+								for i, p := range tp.Partitions {
+									parts[i] = fmt.Sprintf("%d", p)
+								}
+								assignedParts = append(assignedParts, name+":"+strings.Join(parts, ","))
+							}
+							jg.Members = append(jg.Members, jsonMember{
+								MemberID:         member.MemberID,
+								ClientID:         member.ClientID,
+								Host:             member.ClientHost,
+								MemberEpoch:      member.MemberEpoch,
+								SubscribedTopics: member.SubscribedTopicNames,
+								Assignment:       strings.Join(assignedParts, " "),
+							})
+						}
+						groups = append(groups, jg)
+					}
+				}
+				out.MarshalJSON("share-group.describe", 1, map[string]any{
+					"groups": groups,
+				})
+			case "awk":
+				for _, shard := range shards {
+					if shard.Err != nil {
+						continue
+					}
+					resp := shard.Resp.(*kmsg.ShareGroupDescribeResponse)
+					for _, group := range resp.Groups {
+						for _, member := range group.Members {
+							var rack string
+							if member.RackID != nil {
+								rack = " (rack=" + *member.RackID + ")"
+							}
+							var assignedParts []string
+							for _, tp := range member.Assignment.TopicPartitions {
+								name := tp.Topic
+								if name == "" {
+									name = fmt.Sprintf("%x", tp.TopicID)
+								}
+								parts := make([]string, len(tp.Partitions))
+								for i, p := range tp.Partitions {
+									parts[i] = fmt.Sprintf("%d", p)
+								}
+								assignedParts = append(assignedParts, name+":"+strings.Join(parts, ","))
+							}
+							fmt.Printf("%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
+								group.GroupID,
+								member.MemberID,
+								member.ClientID,
+								member.ClientHost+rack,
+								member.MemberEpoch,
+								strings.Join(member.SubscribedTopicNames, ","),
+								strings.Join(assignedParts, " "),
+							)
 						}
 					}
-					fmt.Println()
+				}
+			default:
+				for _, shard := range shards {
+					if shard.Err != nil {
+						fmt.Printf("unable to issue ShareGroupDescribe to broker %d (%s:%d): %v\n", shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
+						continue
+					}
+
+					resp := shard.Resp.(*kmsg.ShareGroupDescribeResponse)
+					for _, group := range resp.Groups {
+						printShareGroup(shard.Meta.NodeID, group)
+						if verbose {
+							if offsets, ok := offsetsByGroup[group.GroupID]; ok {
+								fmt.Println()
+								tw := out.NewTable("TOPIC", "PARTITION", "START-OFFSET", "LEADER-EPOCH", "LAG", "ERROR")
+								for _, topic := range offsets.Topics {
+									for _, p := range topic.Partitions {
+										errMsg := ""
+										if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
+											errMsg = err.Error()
+										}
+										lagStr := "-"
+										if p.Lag >= 0 {
+											lagStr = fmt.Sprintf("%d", p.Lag)
+										}
+										tw.Print(topic.Topic, p.Partition, p.StartOffset, p.LeaderEpoch, lagStr, errMsg)
+									}
+								}
+								tw.Flush()
+							}
+						}
+						fmt.Println()
+					}
 				}
 			}
 		},

@@ -150,20 +150,54 @@ func describeConsumerGroups(cl *client.Client, groups []string, readCommitted, s
 	req.Groups = groups
 
 	shards := cl.Client().RequestSharded(context.Background(), req)
-	if cl.AsJSON() {
+
+	switch cl.Format() {
+	case "json":
 		out.ExitJSON(shards)
-	}
-
-	for _, shard := range shards {
-		if shard.Err != nil {
-			fmt.Printf("unable to issue ConsumerGroupDescribe to broker %d (%s:%d): %v\n", shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
-			continue
+	case "awk":
+		for _, shard := range shards {
+			if shard.Err != nil {
+				continue
+			}
+			resp := shard.Resp.(*kmsg.ConsumerGroupDescribeResponse)
+			for _, group := range resp.Groups {
+				for _, member := range group.Members {
+					var extras []string
+					if member.InstanceID != nil {
+						extras = append(extras, "instance="+*member.InstanceID)
+					}
+					if member.RackID != nil {
+						extras = append(extras, "rack="+*member.RackID)
+					}
+					host := member.ClientHost
+					if len(extras) > 0 {
+						host += " (" + strings.Join(extras, ",") + ")"
+					}
+					fmt.Printf("%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
+						group.Group,
+						member.MemberID,
+						member.ClientID,
+						host,
+						member.MemberEpoch,
+						strings.Join(member.SubscribedTopics, ","),
+						formatAssignment(member.Assignment),
+						formatAssignment(member.TargetAssignment),
+					)
+				}
+			}
 		}
+	default:
+		for _, shard := range shards {
+			if shard.Err != nil {
+				fmt.Printf("unable to issue ConsumerGroupDescribe to broker %d (%s:%d): %v\n", shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
+				continue
+			}
 
-		resp := shard.Resp.(*kmsg.ConsumerGroupDescribeResponse)
-		for _, group := range resp.Groups {
-			printConsumerGroup(shard.Meta.NodeID, group)
-			fmt.Println()
+			resp := shard.Resp.(*kmsg.ConsumerGroupDescribeResponse)
+			for _, group := range resp.Groups {
+				printConsumerGroup(shard.Meta.NodeID, group)
+				fmt.Println()
+			}
 		}
 	}
 }

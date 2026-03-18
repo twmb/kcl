@@ -58,18 +58,23 @@ EXAMPLES:
 
 			kresp, err := req.RequestWith(context.Background(), cl.Client())
 			out.MaybeDie(err, "unable to add controller: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
-			}
 
 			if err := kerr.ErrorForCode(kresp.ErrorCode); err != nil {
 				msg := err.Error()
 				if kresp.ErrorMessage != nil {
 					msg += ": " + *kresp.ErrorMessage
 				}
+				if cl.Format() == "json" {
+					out.DieJSON("cluster.add-controller", err.Error(), msg)
+				}
 				out.Die(msg)
 			}
-			fmt.Println("OK")
+			switch cl.Format() {
+			case "json":
+				out.MarshalJSON("cluster.add-controller", 1, map[string]any{"status": "ok"})
+			default:
+				fmt.Println("OK")
+			}
 		},
 	}
 
@@ -106,18 +111,23 @@ EXAMPLES:
 
 			kresp, err := req.RequestWith(context.Background(), cl.Client())
 			out.MaybeDie(err, "unable to remove controller: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
-			}
 
 			if err := kerr.ErrorForCode(kresp.ErrorCode); err != nil {
 				msg := err.Error()
 				if kresp.ErrorMessage != nil {
 					msg += ": " + *kresp.ErrorMessage
 				}
+				if cl.Format() == "json" {
+					out.DieJSON("cluster.remove-controller", err.Error(), msg)
+				}
 				out.Die(msg)
 			}
-			fmt.Println("OK")
+			switch cl.Format() {
+			case "json":
+				out.MarshalJSON("cluster.remove-controller", 1, map[string]any{"status": "ok"})
+			default:
+				fmt.Println("OK")
+			}
 		},
 	}
 

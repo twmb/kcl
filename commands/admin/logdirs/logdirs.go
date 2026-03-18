@@ -324,28 +324,20 @@ which allows you to alter replicas.
 				kresp, err = cl.Client().Request(context.Background(), &req)
 			}
 			out.MaybeDie(err, "unable to alter replica log dirs: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
-			}
 
 			resp := kresp.(*kmsg.AlterReplicaLogDirsResponse)
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
-			fmt.Fprintf(tw, "TOPIC\tPARTITION\tERROR\n")
+			table := out.NewFormattedTable(cl.Format(), "logdirs.alter", 1, "results",
+				"TOPIC", "PARTITION", "ERROR")
 			for _, topic := range resp.Topics {
 				for _, partition := range topic.Partitions {
 					msg := ""
 					if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
 						msg = err.Error()
 					}
-					fmt.Fprintf(tw, "%s\t%d\t%s\n",
-						topic.Topic,
-						partition.Partition,
-						msg,
-					)
+					table.Row(topic.Topic, partition.Partition, msg)
 				}
 			}
+			table.Flush()
 		},
 	}
 	cmd.Flags().Int32VarP(&broker, "broker", "b", -1, "a specific broker to direct the request to")
