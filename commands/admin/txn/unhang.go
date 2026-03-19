@@ -3,6 +3,7 @@ package txn
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -50,7 +51,7 @@ func unstick(kcl *client.Client, topic string) error {
 
 	var nparts int
 	{
-		fmt.Printf("Issuing Metadata request for the topic to determine its number of partitions...\n")
+		fmt.Fprintf(os.Stderr, "Issuing Metadata request for the topic to determine its number of partitions...\n")
 		req := kmsg.NewMetadataRequest()
 		reqTopic := kmsg.NewMetadataRequestTopic()
 		reqTopic.Topic = kmsg.StringPtr(topic)
@@ -73,7 +74,7 @@ func unstick(kcl *client.Client, topic string) error {
 
 	possibleParts := make(map[int32]int64)
 	{
-		fmt.Printf("Metadata indicates that there are %d partitions in the topic. Issuing ListOffsets request to determine which partitions may be stuck (i.e., have records)...\n", nparts)
+		fmt.Fprintf(os.Stderr, "Metadata indicates that there are %d partitions in the topic. Issuing ListOffsets request to determine which partitions may be stuck (i.e., have records)...\n", nparts)
 		req := kmsg.NewPtrListOffsetsRequest()
 		reqTopic := kmsg.NewListOffsetsRequestTopic()
 		reqTopic.Topic = topic
@@ -133,7 +134,7 @@ func unstick(kcl *client.Client, topic string) error {
 		}
 
 		if len(possibleParts) == 0 {
-			fmt.Printf("No partition in the topic has records; thus nothing can be stuck.\nExiting\n")
+			fmt.Fprintf(os.Stderr, "No partition in the topic has records; thus nothing can be stuck.\nExiting\n")
 			return nil
 		}
 	}
@@ -142,7 +143,7 @@ func unstick(kcl *client.Client, topic string) error {
 	var stuckOffset int64
 	{
 		// First find the stuck LSO.
-		fmt.Printf("Looking for the last stable offset on a partition in %s...\n", topic)
+		fmt.Fprintf(os.Stderr, "Looking for the last stable offset on a partition in %s...\n", topic)
 		cl = kcl.RemakeWithOpts(kgo.ConsumeTopics(topic))
 		var found bool
 		for !found && len(possibleParts) > 0 {
@@ -162,7 +163,7 @@ func unstick(kcl *client.Client, topic string) error {
 		}
 
 		if !found && len(possibleParts) == 0 {
-			fmt.Printf("There do not appear to be any stuck partitions on topic %s; all partitions have a HighWatermark equal to the LastStableOffset.\nExiting.\n", topic)
+			fmt.Fprintf(os.Stderr, "There do not appear to be any stuck partitions on topic %s; all partitions have a HighWatermark equal to the LastStableOffset.\nExiting.\n", topic)
 			return nil
 		}
 	}
@@ -172,7 +173,7 @@ func unstick(kcl *client.Client, topic string) error {
 	{
 		// Now we directly consume at that offset to find which
 		// producer ID and epoch caused this.
-		fmt.Printf("Found partition %d stuck at offset %d, looking for producer that caused this...\n", stuckPartition, stuckOffset)
+		fmt.Fprintf(os.Stderr, "Found partition %d stuck at offset %d, looking for producer that caused this...\n", stuckPartition, stuckOffset)
 		cl = kcl.RemakeWithOpts(kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
 			topic: map[int32]kgo.Offset{
 				stuckPartition: kgo.NewOffset().At(stuckOffset),
@@ -199,7 +200,7 @@ func unstick(kcl *client.Client, topic string) error {
 
 	var txnid string
 	{
-		fmt.Printf("Found causing producer ID and epoch %d/%d, looking in __transaction_state to find its transactional id...\n", pid, epoch)
+		fmt.Fprintf(os.Stderr, "Found causing producer ID and epoch %d/%d, looking in __transaction_state to find its transactional id...\n", pid, epoch)
 		cl = kcl.RemakeWithOpts(kgo.ConsumeTopics("__transaction_state"))
 		var found bool
 		for !found {
@@ -231,21 +232,21 @@ func unstick(kcl *client.Client, topic string) error {
 	}
 
 	{
-		fmt.Printf("\nFound topic %s stuck with transactional id %s.\nAt this point we can attempt to unhang the transaction.\nIssue AddPartitionsToTxn followed by EndTxn? [Y/n] ", topic, txnid)
+		fmt.Fprintf(os.Stderr, "\nFound topic %s stuck with transactional id %s.\nAt this point we can attempt to unhang the transaction.\nIssue AddPartitionsToTxn followed by EndTxn? [Y/n] ", topic, txnid)
 		var s string
 		fmt.Scanln(&s)
 		switch strings.ToLower(s) {
 		case "y", "yes":
-			fmt.Printf("Proceeding to unstick...\n\n")
+			fmt.Fprintf(os.Stderr, "Proceeding to unstick...\n\n")
 		default:
-			fmt.Printf("Saw %s, not yes, exiting.\n", s)
+			fmt.Fprintf(os.Stderr, "Saw %s, not yes, exiting.\n", s)
 			return nil
 		}
 	}
 
 	{
 	start:
-		fmt.Println("Issuing AddPartitionsToTxn request to fake a new transaction...")
+		fmt.Fprintln(os.Stderr, "Issuing AddPartitionsToTxn request to fake a new transaction...")
 		req := kmsg.NewAddPartitionsToTxnRequest()
 		req.TransactionalID = txnid
 		req.ProducerID = pid
@@ -268,14 +269,14 @@ func unstick(kcl *client.Client, topic string) error {
 			for _, partition := range topic.Partitions {
 				if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
 					if err == kerr.ProducerFenced {
-						fmt.Printf("\nProducer at epoch %d was fenced, should we retry with a higher epoch? (If you are sure the txnal ID is no longer in use, this is fine) [Y/n] ", epoch)
+						fmt.Fprintf(os.Stderr, "\nProducer at epoch %d was fenced, should we retry with a higher epoch? (If you are sure the txnal ID is no longer in use, this is fine) [Y/n] ", epoch)
 						var s string
 						fmt.Scanln(&s)
 						switch strings.ToLower(s) {
 						case "y", "yes":
 							epoch++
 						default:
-							fmt.Printf("Saw %s, not yes, exiting.\n", s)
+							fmt.Fprintf(os.Stderr, "Saw %s, not yes, exiting.\n", s)
 							return nil
 						}
 
@@ -289,7 +290,7 @@ func unstick(kcl *client.Client, topic string) error {
 	}
 
 	{
-		fmt.Printf("Fake transaction began, issuing EndTxn request to end it...\n")
+		fmt.Fprintf(os.Stderr, "Fake transaction began, issuing EndTxn request to end it...\n")
 		req := kmsg.NewEndTxnRequest()
 		req.TransactionalID = txnid
 		req.ProducerID = pid
@@ -304,6 +305,6 @@ func unstick(kcl *client.Client, topic string) error {
 		}
 	}
 
-	fmt.Println("Complete.")
+	fmt.Fprintln(os.Stderr, "Complete.")
 	return nil
 }

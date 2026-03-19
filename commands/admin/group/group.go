@@ -115,9 +115,9 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 			}
 
 			if dryRun {
-				fmt.Println("Dry run: the following groups would be deleted:")
+				fmt.Fprintln(os.Stderr, "Dry run: the following groups would be deleted:")
 				for _, group := range args {
-					fmt.Printf("  %s\n", group)
+					fmt.Fprintf(os.Stderr, "  %s\n", group)
 				}
 				return nil
 			}
