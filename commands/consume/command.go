@@ -91,31 +91,66 @@ key and value with a trailing space.
 
 TEXT FORMATTING
 
-Topics, keys, and values support "base64", "base64raw", "hex", and "unpack"
-formatting:
-  %v{base64}         base64 encode the value
-  %v{base64raw}      base64 raw (no padding) encode the value
-  %k{hex}            hex encode the key
-  %v{unpack{>iIqQ}}  unpack binary data (Python struct-like)
+Topics, keys, and values support encoding modifiers in braces:
+  %v{base64}         base64 encode
+  %v{base64raw}      base64 encode without padding
+  %k{hex}            hex encode
+  %v{unpack{>iIqQ}}  unpack binary data (see below)
 
-Unpack syntax:
-  x    pad byte           <    little endian     >    big endian
-  b/B  signed/unsigned byte
-  h/H  int16/uint16       i/I  int32/uint32      q/Q  int64/uint64
-  c/.  any character       s    rest as string     $    assert end
+Unpack uses Python struct-like syntax inside nested delimiters:
+
+  Endianness:
+    >    big endian (default)
+    <    little endian
+
+  Integers:
+    b    int8                  B    uint8
+    h    int16                 H    uint16
+    i    int32                 I    uint32
+    q    int64                 Q    uint64
+
+  Other:
+    x    pad byte (skip)
+    c    any single byte       .    alias for c
+    s    rest of input as string
+    $    assert end of input
+
+Endianness switches can appear anywhere and affect everything after.
 
 
 NUMBER FORMATTING
 
 All number verbs (%T, %K, %V, %H, %p, %o, %e, %i, %x, %y, %[, %|, %])
-accept a brace modifier:
-  ascii / number    textual (the default)
-  hex               variable-width hex
-  hex64..hex4       fixed-width hex (16, 8, 4, 2, 1 chars)
-  big64 / big32 / big16 / big8   big endian binary
-  little64 / little32 / little16 / little8   little endian binary
-  byte              single byte
-  bool              "true" / "false"
+accept a brace modifier controlling how the number is printed. Without braces,
+numbers are printed as decimal text.
+
+  Decimal:
+    ascii      decimal text, e.g. "12345" (the default)
+    number     alias for ascii
+
+  Hex:
+    hex        as many hex characters as needed
+    hex64      16 hex characters (zero-padded)
+    hex32      8 hex characters
+    hex16      4 hex characters
+    hex8       2 hex characters
+    hex4       1 hex character
+
+  Big endian binary:
+    big64      8 bytes
+    big32      4 bytes
+    big16      2 bytes
+    big8       1 byte
+
+  Little endian binary:
+    little64   8 bytes
+    little32   4 bytes
+    little16   2 bytes
+    little8    1 byte
+
+  Other:
+    byte       single byte (alias for big8)
+    bool       "true" if non-zero, "false" if zero
 
 For example, %T{big64} prints the topic name length as an 8-byte big endian.
 

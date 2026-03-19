@@ -33,8 +33,13 @@ func Command(cl *client.Client) *cobra.Command {
 		Long: `Produce records, optionally to a specific topic, from stdin.
 
 By default, producing reads newline delimited, unkeyed records from stdin.
-The input format can be specified with delimiters or with sized numbers, and
-the format can parse a topic, key, value, and header keys and values.
+The input format (-f) can be specified with delimiters or with sized numbers,
+and the format can parse a topic, key, value, and header keys and values.
+
+The output format (-o) controls what is printed after each record is produced
+(e.g., to confirm topic/partition/offset). The output format uses the same
+syntax as "kcl consume --format"; see "kcl consume --help" for full output
+format documentation.
 
 Escape sequences:
   \n    newline
@@ -43,7 +48,10 @@ Escape sequences:
   \\    backslash
   \xNN  any byte (hex)
 
-Format options:
+
+INPUT FORMAT (-f)
+
+Format verbs for reading records from stdin:
   %t    topic name
   %T    topic name length
   %k    record key
@@ -68,34 +76,59 @@ Headers have their own internal format:
   %v    header value
   %V    header value length
 
+If the format includes %t, the topic is parsed from input and no topic
+argument should be given on the command line.
+
 
 TEXT DECODING
 
-Topics, keys, and values support "base64", "hex", "json", and "re" decoding:
-  %v{base64}     decode base64 input
-  %k{hex}        decode hex input
-  %v{json}       read a JSON value (object, array, string, number, bool, null)
-  %k{re[\d+]}    read input matching a regular expression
+Topics, keys, and values support decoding modifiers in braces:
+  %v{base64}      decode base64 input
+  %k{hex}         decode hex input
+  %v{json}        read a JSON value (object, array, string, number, bool, null)
+  %k{re[\d+]}     read input matching a regular expression
 
-Size specifications refer to the encoded size actually read.
+Size specifications (%T, %K, %V) refer to the encoded size actually read
+(i.e., the size as seen in the input, not after decoding).
 
 
 NUMBER FORMATTING
 
-Size and number verbs (%T, %K, %V, %H, %p, %o, %e, %d, %x, %y) accept a
-brace modifier:
-  ascii / number    parse decimal digits (the default)
-  hex64..hex4       read fixed-width hex (16, 8, 4, 2, 1 chars)
-  big64 / big32 / big16 / big8   read big endian binary
-  little64 / little32 / little16 / little8   read little endian binary
-  byte              read one byte
-  bool              read "true" as 1, "false" as 0
-  ###               read exactly N characters as a number
+All size and number verbs (%T, %K, %V, %H, %p, %o, %e, %d, %x, %y) accept
+a brace modifier controlling how the number is parsed. Without braces,
+numbers are parsed as decimal text.
 
-Without braces, numbers default to ascii. Note that ascii parsing reads digits
-greedily—if the value starts with digits and follows immediately after a size
-verb, the parser will consume those digits as part of the number. Use a space
-or delimiter to separate them.
+  Decimal:
+    ascii      read decimal digits until a non-digit (the default)
+    number     alias for ascii
+
+  Hex:
+    hex64      read 16 hex characters
+    hex32      read 8 hex characters
+    hex16      read 4 hex characters
+    hex8       read 2 hex characters
+    hex4       read 1 hex character
+
+  Big endian binary:
+    big64      read 8 bytes
+    big32      read 4 bytes
+    big16      read 2 bytes
+    big8       read 1 byte
+
+  Little endian binary:
+    little64   read 8 bytes
+    little32   read 4 bytes
+    little16   read 2 bytes
+    little8    read 1 byte
+
+  Other:
+    byte       read single byte (alias for big8)
+    bool       read "true" as 1, "false" as 0
+    ###        read exactly N characters (e.g., %V{3} reads "123" as 123)
+
+Note that ascii parsing reads digits greedily: if the value starts with digits
+immediately after a size verb, the parser will consume those digits as part of
+the number. Use a space or delimiter between them.
 
 
 EXAMPLES
@@ -127,6 +160,9 @@ To read a compact key, value, and single header, with each piece being 3 bytes:
 
 To read JSON-encoded values:
   -f '%v{json}\n'
+
+To show partition and offset for each produced record:
+  -o 'produced to %t[%p]@%o\n'
 `,
 		Args: cobra.MaximumNArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
