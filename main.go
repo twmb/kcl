@@ -67,6 +67,14 @@ Command completion is available at:
 	metadataCmd.Deprecated = "use 'kcl cluster info' instead"
 	metadataCmd.Hidden = true
 
+	// Add hidden consume/produce aliases under topic.
+	topicCmd := topic.Command(cl)
+	topicConsume := consume.Command(cl)
+	topicConsume.Hidden = true
+	topicProduce := produce.Command(cl)
+	topicProduce.Hidden = true
+	topicCmd.AddCommand(topicConsume, topicProduce)
+
 	root.AddCommand(
 		consume.Command(cl),
 		produce.Command(cl),
@@ -78,7 +86,7 @@ Command completion is available at:
 		myconfig.DeprecatedCommand(cl),   // "myconfig" (deprecated alias)
 
 		// Resource commands (promoted from admin).
-		topic.Command(cl),
+		topicCmd,
 		group.Command(cl),
 		sharegroup.Command(cl),
 		streamsgroup.Command(cl),
