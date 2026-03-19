@@ -129,7 +129,7 @@ fields.
 
 		Example: `alter foo -s cleanup.policy=compact --delete preallocate
 
-alter foo --dry --type topic --set preallocate=true --delete cleanup.policy
+alter foo --dry-run --type topic --set preallocate=true --delete cleanup.policy
 
 alter my-share-group -tg -s share.auto.offset.reset=earliest
 
@@ -148,7 +148,7 @@ alter my-subscription -tcm -s match=[client_software_name=kcl]`,
 	cmd.Flags().StringArrayVar(&cfger.deleteKeys, "delete", nil, "delete config key (incremental; repeatable)")
 	cmd.Flags().StringArrayVar(&cfger.appendKVs, "append", nil, "append to list config key=value (incremental; repeatable)")
 	cmd.Flags().StringArrayVar(&cfger.subtractKVs, "subtract", nil, "subtract from list config key=value (incremental; repeatable)")
-	cmd.Flags().BoolVarP(&cfger.dryRun, "dry", "d", false, "dry run: validate the config alter request, but do not apply")
+	cmd.Flags().BoolVarP(&cfger.dryRun, "dry-run", "d", false, "validate the config alter request, but do not apply")
 	cmd.Flags().BoolVar(&cfger.noConfirm, "no-confirm", false, "skip confirmation of to-be-lost unspecified existing dynamic config keys")
 
 	return cmd

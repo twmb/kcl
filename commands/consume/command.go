@@ -4,18 +4,25 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/twmb/kcl/out"
 )
 
 func (c *consumption) command() *cobra.Command {
+	var topicFlags []string
 	cmd := &cobra.Command{
-		Use:   "consume TOPICS...",
+		Use:   "consume [TOPICS...]",
 		Short: "Consume topic records",
 		Long:  help,
-		Args:  cobra.MinimumNArgs(1), // topic
 		RunE: func(_ *cobra.Command, args []string) error {
-			return c.run(args)
+			topics := append(args, topicFlags...)
+			if len(topics) == 0 {
+				return out.Errf(out.ExitUsage, "at least one topic is required (positional or --topic/-t)")
+			}
+			return c.run(topics)
 		},
 	}
+	cmd.Flags().StringArrayVarP(&topicFlags, "topic", "t", nil, "topic to consume (repeatable; alternative to positional args)")
 	cmd.Flags().StringVarP(&c.group, "group", "g", "", "consumer group to assign")
 	cmd.Flags().StringVar(&c.shareGroup, "share-group", "", "share group to consume from (Kafka 4.0+, mutually exclusive with --group)")
 	cmd.Flags().StringVarP(&c.groupAlg, "balancer", "b", "cooperative-sticky", "group balancer to use if group consuming (range, roundrobin, sticky, cooperative-sticky)")

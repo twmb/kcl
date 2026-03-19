@@ -169,7 +169,7 @@ replicas each. When using --replica-assignment, do not use --num-partitions or
 		},
 	}
 
-	cmd.Flags().BoolVarP(&validateOnly, "dry", "d", false, "dry run: validate the topic creation request; do not create topics (Kafka 0.10.2+)")
+	cmd.Flags().BoolVarP(&validateOnly, "dry-run", "d", false, "validate the topic creation request; do not create topics (Kafka 0.10.2+)")
 	cmd.Flags().Int32VarP(&numPartitions, "num-partitions", "p", 20, "number of partitions to create")
 	cmd.Flags().Int16VarP(&replicationFactor, "replication-factor", "r", 1, "number of replicas to have of each partition")
 	cmd.Flags().StringArrayVarP(&configKVs, "kv", "k", nil, "list of key=value config parameters (repeatable, e.g. -k cleanup.policy=compact -k preallocate=true)")

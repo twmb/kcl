@@ -150,7 +150,7 @@ func alterClientQuotas(cl *client.Client) *cobra.Command {
 	var (
 		names    []string
 		defaults []string
-		run      bool
+		dryRun   bool
 		adds     []string
 		deletes  []string
 	)
@@ -172,7 +172,7 @@ matches, this runs an alter on anything that matches.
 		RunE: func(_ *cobra.Command, _ []string) error {
 			req := &kmsg.AlterClientQuotasRequest{
 				Entries:      []kmsg.AlterClientQuotasRequestEntry{{}},
-				ValidateOnly: !run,
+				ValidateOnly: dryRun,
 			}
 
 			if len(names) == 0 && len(defaults) == 0 {
@@ -277,7 +277,7 @@ matches, this runs an alter on anything that matches.
 	cmd.Flags().StringArrayVar(&defaults, "default", nil, "type for default matching, where type is user, client-id, or ip; repeatable")
 	cmd.Flags().StringArrayVar(&adds, "add", nil, "key=value quota to add, where the value is a float64; repeatable")
 	cmd.Flags().StringArrayVar(&deletes, "delete", nil, "key quota to delete; repeatable")
-	cmd.Flags().BoolVar(&run, "run", false, "whether to actually run the alter vs. the default to validate only")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "validate the request without applying changes")
 
 	return cmd
 }

@@ -61,7 +61,7 @@ func Command(cl *client.Client) *cobra.Command {
 func ElectLeadersCommand(cl *client.Client) *cobra.Command {
 	var allPartitions bool
 	var unclean bool
-	var run bool
+	var dryRun bool
 
 	cmd := &cobra.Command{
 		Use:   "elect-leaders",
@@ -75,16 +75,20 @@ pass any topic flags, and you must use the --all-partitions flag.
 The format for triggering topic partitions is "foo:1,2,3", where foo is a
 topic and 1,2,3 are partition numbers.
 
-To avoid accidental triggers, this command requires a --run flag to run.
+Use --dry-run to preview without applying.
 `,
-		Example: "elect-leaders --run foo:1,2,3 bar:9",
+		Example: "elect-leaders foo:1,2,3 bar:9",
 		RunE: func(_ *cobra.Command, topicParts []string) error {
 			tps, err := flagutil.ParseTopicPartitions(topicParts)
 			if err != nil {
 				return fmt.Errorf("unable to parse topic partitions: %v", err)
 			}
-			if !run {
-				return fmt.Errorf("use --run to actually run this command")
+			if dryRun {
+				fmt.Println("Dry run: would elect leaders for the following partitions:")
+				for topic, parts := range tps {
+					fmt.Printf("  %s: %v\n", topic, parts)
+				}
+				return nil
 			}
 
 			req := &kmsg.ElectLeadersRequest{
@@ -140,7 +144,7 @@ To avoid accidental triggers, this command requires a --run flag to run.
 
 	cmd.Flags().BoolVar(&allPartitions, "all-partitions", false, "trigger leader election on all topics for all partitions")
 	cmd.Flags().BoolVar(&unclean, "unclean", false, "allow unclean leader election (Kafka 2.4.0+)")
-	cmd.Flags().BoolVar(&run, "run", false, "actually run the command (avoids accidental elections without this flag)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview which partitions would have leaders elected without applying")
 
 	return cmd
 }

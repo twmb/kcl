@@ -69,7 +69,7 @@ version ranges and finalized feature version ranges.
 }
 
 func updateCommand(cl *client.Client) *cobra.Command {
-	var run, validateOnly bool
+	var dryRun bool
 
 	cmd := &cobra.Command{
 		Use:   "update FEATURE=VERSION...",
@@ -80,18 +80,14 @@ This command updates finalized feature flags. Each argument must be of the
 form FEATURE=VERSION, where VERSION is the new max version level for the
 feature. Set VERSION to 0 to delete a feature flag.
 
-To avoid accidental updates, this command requires a --run flag to run.
+Use --dry-run to preview without applying.
 `,
-		Example: "update --run metadata.version=17",
+		Example: "update metadata.version=17",
 		Args:    cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			if !run {
-				return fmt.Errorf("use --run to actually run this command")
-			}
-
 			req := kmsg.NewPtrUpdateFeaturesRequest()
 			req.TimeoutMillis = cl.TimeoutMillis()
-			req.ValidateOnly = validateOnly
+			req.ValidateOnly = dryRun
 
 			for _, arg := range args {
 				parts := strings.SplitN(arg, "=", 2)
@@ -138,7 +134,6 @@ To avoid accidental updates, this command requires a --run flag to run.
 		},
 	}
 
-	cmd.Flags().BoolVar(&run, "run", false, "actually run the command (avoids accidental updates without this flag)")
-	cmd.Flags().BoolVar(&validateOnly, "validate-only", false, "validate the request without applying changes (Kafka 3.3+)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "validate the request without applying changes")
 	return cmd
 }
