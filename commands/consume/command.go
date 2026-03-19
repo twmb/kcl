@@ -48,135 +48,146 @@ being to newline delimit record values.
 
 The input topics can be regular expressions with the --regex (-r) flag.
 
-Format options:
-  %t    topic name
-  %T    topic name length
-  %k    record key
-  %K    record key length
-  %v    record value
-  %V    record value length
+Slash escapes:
+  \t    tab
+  \n    newline
+  \r    carriage return
+  \\    backslash
+  \xNN  any byte (hex)
+
+Percent verbs:
+  %t    topic
+  %T    topic length
+  %k    key
+  %K    key length
+  %v    value
+  %V    value length
   %h    begin the header specification
   %H    number of headers
-  %p    record partition
-  %o    record offset
-  %e    record leader epoch
-  %d    record timestamp (date)
-  %a    record attributes (formatting required, see below)
-  %x    record producer id
-  %y    record producer epoch
-  %D    share group delivery count (0 if not share)
-  %A    share group acquisition deadline (timestamp, like %d)
-
+  %p    partition
+  %o    offset
+  %e    leader epoch
+  %d    timestamp (date, formatting described below)
+  %a    record attributes (formatting required, described below)
+  %x    producer id
+  %y    producer epoch
+  %D    share group delivery count (0 if not from a share group)
+  %A    share group acquisition deadline (timestamp, like %d; 0 if not share)
   %[    partition log start offset
   %|    partition last stable offset
   %]    partition high watermark
-
   %i    format iteration number (starts at 1)
   %%    percent sign
   %{    left brace
   %}    right brace
-  \n    newline
-  \r    carriage return
-  \t    tab
-  \\    slash
-  \xNN  any ASCII character
 
-Headers have their own internal format:
-  %k    header key
+
+HEADER SPECIFICATION
+
+%h opens a nested format that is applied to each header. Inside the braces,
+the key and value escapes are:
   %K    header key length
-  %v    header value
+  %k    header key
   %V    header value length
+  %v    header value
 
-For example, "%H %h{%k %v }" prints the header count, then each header's
-key and value with a trailing space.
-
-
-TEXT FORMATTING
-
-Topics, keys, and values support encoding modifiers in braces:
-  %v{base64}         base64 encode
-  %v{base64raw}      base64 encode without padding
-  %k{hex}            hex encode
-  %v{unpack{>iIqQ}}  unpack binary data (see below)
-
-Unpack uses Python struct-like syntax inside nested delimiters:
-
-  Endianness:
-    >    big endian (default)
-    <    little endian
-
-  Integers:
-    b    int8                  B    uint8
-    h    int16                 H    uint16
-    i    int32                 I    uint32
-    q    int64                 Q    uint64
-
-  Other:
-    x    pad byte (skip)
-    c    any single byte       .    alias for c
-    s    rest of input as string
-    $    assert end of input
-
-Endianness switches can appear anywhere and affect everything after.
+For example, "%H %h{%k %v }" will print the number of headers, and then each
+header key and value with a space after each.
 
 
-NUMBER FORMATTING
+NUMBERS
 
-All number verbs (%T, %K, %V, %H, %p, %o, %e, %i, %x, %y, %[, %|, %])
-accept a brace modifier controlling how the number is printed. Without braces,
-numbers are printed as decimal text.
+All number verbs accept braces that control how the number is printed:
+  %T{ascii}       the default, print the number as ascii
+  %T{number}      alias for ascii
+  %T{hex64}       print 16 hex characters for the number
+  %T{hex32}       print 8 hex characters for the number
+  %T{hex16}       print 4 hex characters for the number
+  %T{hex8}        print 2 hex characters for the number
+  %T{hex4}        print 1 hex character for the number
+  %T{hex}         print as many hex characters as necessary for the number
+  %T{big64}       print the number in big endian uint64 format
+  %T{big32}       print the number in big endian uint32 format
+  %T{big16}       print the number in big endian uint16 format
+  %T{big8}        alias for byte
+  %T{little64}    print the number in little endian uint64 format
+  %T{little32}    print the number in little endian uint32 format
+  %T{little16}    print the number in little endian uint16 format
+  %T{little8}     alias for byte
+  %T{byte}        print the number as a single byte
+  %T{bool}        print "true" if the number is non-zero, otherwise "false"
 
-  Decimal:
-    ascii      decimal text, e.g. "12345" (the default)
-    number     alias for ascii
-
-  Hex:
-    hex        as many hex characters as needed
-    hex64      16 hex characters (zero-padded)
-    hex32      8 hex characters
-    hex16      4 hex characters
-    hex8       2 hex characters
-    hex4       1 hex character
-
-  Big endian binary:
-    big64      8 bytes
-    big32      4 bytes
-    big16      2 bytes
-    big8       1 byte
-
-  Little endian binary:
-    little64   8 bytes
-    little32   4 bytes
-    little16   2 bytes
-    little8    1 byte
-
-  Other:
-    byte       single byte (alias for big8)
-    bool       "true" if non-zero, "false" if zero
-
-For example, %T{big64} prints the topic name length as an 8-byte big endian.
+All numbers are truncated as necessary per each given format.
 
 
-TIME FORMATTING
+TIMESTAMPS
 
-%d without braces prints the millisecond timestamp as a number.
-%d with braces supports:
-  %d{strftime[%F %T]}     strftime formatting
-  %d{go#2006-01-02#}      Go time formatting
+Timestamps (%d, %A) can be specified in three formats: plain number formatting,
+native Go timestamp formatting, or strftime formatting. Number formatting
+follows the rules above using the millisecond timestamp value. Go and strftime
+have further internal format options:
 
-The inner delimiter can be repeated for nesting (e.g., [[%F]]).
+  %d{go##2006-01-02T15:04:05Z07:00##}
+  %d{strftime[%F]}
+
+An arbitrary amount of pounds, braces, and brackets are understood before
+beginning the actual timestamp formatting. For Go formatting, the format is
+simply passed to the time package's AppendFormat function. For strftime, all
+"man strftime" options are supported. Time is always in UTC.
 
 
 ATTRIBUTES
 
-%a requires braces specifying which attribute:
-  %a{compression}              "none", "gzip", "snappy", "lz4", "zstd"
+Record attributes require formatting, where each formatting option selects
+which attribute to print and how to print it.
+
+  %a{compression}              prints "none", "gzip", "snappy", "lz4", "zstd"
   %a{compression;number}       compression as a number
-  %a{timestamp-type}           -1, 0 (client), or 1 (broker)
+  %a{compression;hex8}         compression as hex
+  %a{timestamp-type}           -1 for pre-0.10, 0 for client, 1 for broker
+  %a{timestamp-type;big64}     timestamp type as big endian uint64
   %a{transactional-bit}        1 if transactional, else 0
   %a{transactional-bit;bool}   "true" / "false"
   %a{control-bit}              1 if control record, else 0
   %a{control-bit;bool}         "true" / "false"
+
+The ";number" suffix accepts any number format from the NUMBERS section.
+
+
+TEXT
+
+Topics, keys, and values have "base64", "base64raw", "hex", and "unpack"
+formatting options:
+
+  %t{hex}
+  %k{unpack{<bBhH>iIqQc.$}}
+  %v{base64}
+  %v{base64raw}
+
+Unpack formatting is inside of enclosing pounds, braces, or brackets, the
+same way that timestamp formatting is understood. The syntax roughly follows
+Python's struct packing/unpacking rules:
+
+  x    pad character (does not parse input)
+  <    parse what follows as little endian
+  >    parse what follows as big endian
+  b    signed byte
+  B    unsigned byte
+  h    int16 ("half word")
+  H    uint16 ("half word")
+  i    int32
+  I    uint32
+  q    int64 ("quad word")
+  Q    uint64 ("quad word")
+  c    any character
+  .    alias for c
+  s    consume the rest of the input as a string
+  $    match the end of the line (append error string if anything remains)
+
+Unlike Python, a '<' or '>' can appear anywhere in the format string and
+affects everything that follows. It is possible to switch endianness multiple
+times. If the parser needs more data than available, or if more input remains
+after '$', an error message will be appended.
 
 
 EXAMPLES

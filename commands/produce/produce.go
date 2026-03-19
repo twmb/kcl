@@ -42,94 +42,90 @@ The output format (-o) controls what is printed after each record is produced
 syntax as "kcl consume --format"; see "kcl consume --help" for full output
 format documentation.
 
-Escape sequences:
+Slash escapes:
+  \t    tab
   \n    newline
   \r    carriage return
-  \t    tab
   \\    backslash
   \xNN  any byte (hex)
 
-
-INPUT FORMAT (-f)
-
-Format verbs for reading records from stdin:
-  %t    topic name
-  %T    topic name length
-  %k    record key
-  %K    record key length
-  %v    record value
-  %V    record value length
+Percent verbs for reading records from stdin:
+  %t    topic
+  %T    topic length
+  %k    key
+  %K    key length
+  %v    value
+  %V    value length
   %h    begin the header specification
   %H    number of headers
   %p    partition
   %o    offset
   %e    leader epoch
-  %d    timestamp (milliseconds)
+  %d    timestamp (read as milliseconds)
   %x    producer id
   %y    producer epoch
   %%    percent sign
   %{    left brace
   %}    right brace
 
-Headers have their own internal format:
-  %k    header key
-  %K    header key length
-  %v    header value
-  %V    header value length
+If using length / number verbs (i.e., "sized" verbs), they must occur before
+what they are sizing.
 
 If the format includes %t, the topic is parsed from input and no topic
 argument should be given on the command line.
 
 
-TEXT DECODING
+HEADER SPECIFICATION
 
-Topics, keys, and values support decoding modifiers in braces:
-  %v{base64}      decode base64 input
-  %k{hex}         decode hex input
-  %v{json}        read a JSON value (object, array, string, number, bool, null)
-  %k{re[\d+]}     read input matching a regular expression
-
-Size specifications (%T, %K, %V) refer to the encoded size actually read
-(i.e., the size as seen in the input, not after decoding).
+Similar to number formatting, headers are parsed using a nested primitive
+format option, accepting the key and value escapes:
+  %K    header key length
+  %k    header key
+  %V    header value length
+  %v    header value
 
 
-NUMBER FORMATTING
+NUMBERS
 
-All size and number verbs (%T, %K, %V, %H, %p, %o, %e, %d, %x, %y) accept
-a brace modifier controlling how the number is parsed. Without braces,
-numbers are parsed as decimal text.
+All size numbers can be parsed in the following ways:
+  %V{ascii}       parse numeric digits until a non-numeric (the default)
+  %V{number}      alias for ascii
+  %V{hex64}       read 16 hex characters for the number
+  %V{hex32}       read 8 hex characters for the number
+  %V{hex16}       read 4 hex characters for the number
+  %V{hex8}        read 2 hex characters for the number
+  %V{hex4}        read 1 hex character for the number
+  %V{big64}       read the number as big endian uint64 format
+  %V{big32}       read the number as big endian uint32 format
+  %V{big16}       read the number as big endian uint16 format
+  %V{big8}        alias for byte
+  %V{little64}    read the number as little endian uint64 format
+  %V{little32}    read the number as little endian uint32 format
+  %V{little16}    read the number as little endian uint16 format
+  %V{little8}     read the number as a byte
+  %V{byte}        read the number as a byte
+  %V{bool}        read "true" as 1, "false" as 0
+  %V{3}           read 3 characters (any number)
 
-  Decimal:
-    ascii      read decimal digits until a non-digit (the default)
-    number     alias for ascii
+Unlike record formatting, timestamps can only be read as numbers because Go
+or strftime formatting can both be variable length and do not play too well
+with delimiters. Timestamp numbers are read as milliseconds.
 
-  Hex:
-    hex64      read 16 hex characters
-    hex32      read 8 hex characters
-    hex16      read 4 hex characters
-    hex8       read 2 hex characters
-    hex4       read 1 hex character
 
-  Big endian binary:
-    big64      read 8 bytes
-    big32      read 4 bytes
-    big16      read 2 bytes
-    big8       read 1 byte
+TEXT
 
-  Little endian binary:
-    little64   read 8 bytes
-    little32   read 4 bytes
-    little16   read 2 bytes
-    little8    read 1 byte
+Topics, keys, and values can be decoded using "base64", "hex", "json", and
+"re" (regex) formatting options. Any size specification is the size of the
+encoded value actually being read (i.e., size as seen, not size when decoded).
+JSON values are compacted after being read.
 
-  Other:
-    byte       read single byte (alias for big8)
-    bool       read "true" as 1, "false" as 0
-    ###        read exactly N characters (e.g., %V{3} reads "123" as 123)
+  %T%t{hex}     -  4abcd reads four hex characters "abcd"
+  %V%v{base64}  -  2z9 reads two base64 characters "z9"
+  %v{json} %k   -  {"foo" : "bar"} foo reads a JSON object and then "foo"
 
-Note that ascii parsing reads digits greedily: if the value starts with digits
-immediately after a size verb, the parser will consume those digits as part of
-the number. Use a space or delimiter between them.
+As well, these text options can be parsed with regular expressions:
+
+  %k{re[\d*]}%v{re[\s+]}
 
 
 EXAMPLES
