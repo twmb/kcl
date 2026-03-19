@@ -85,7 +85,7 @@ func useCommand(cl *client.Client) *cobra.Command {
 			if err := writeCfgFile(cfgPath, cfgFile); err != nil {
 				return err
 			}
-			fmt.Printf("Switched to profile %q\n", name)
+			fmt.Fprintf(os.Stderr, "Switched to profile %q\n", name)
 			return nil
 		},
 	}
@@ -106,7 +106,7 @@ func listCommand(cl *client.Client) *cobra.Command {
 			}
 
 			if len(cfgFile.Profiles) == 0 {
-				fmt.Println("No profiles configured. Config uses flat format.")
+				fmt.Fprintln(os.Stderr, "No profiles configured. Config uses flat format.")
 				return nil
 			}
 
@@ -136,7 +136,7 @@ func currentCommand(cl *client.Client) *cobra.Command {
 			}
 
 			if cfgFile.CurrentProfile == "" {
-				fmt.Println("(no profile set)")
+				fmt.Fprintln(os.Stderr, "(no profile set)")
 			} else {
 				fmt.Println(cfgFile.CurrentProfile)
 			}
@@ -202,7 +202,7 @@ func renameCommand(cl *client.Client) *cobra.Command {
 			if err := writeCfgFile(cfgPath, cfgFile); err != nil {
 				return err
 			}
-			fmt.Printf("Renamed profile %q to %q\n", oldName, newName)
+			fmt.Fprintf(os.Stderr, "Renamed profile %q to %q\n", oldName, newName)
 			return nil
 		},
 	}
@@ -234,7 +234,7 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 			if err := writeCfgFile(cfgPath, cfgFile); err != nil {
 				return err
 			}
-			fmt.Printf("Deleted profile %q\n", name)
+			fmt.Fprintf(os.Stderr, "Deleted profile %q\n", name)
 			return nil
 		},
 	}
@@ -351,7 +351,7 @@ func linkCommand(cl *client.Client) *cobra.Command {
 			if err := os.Symlink(src, cl.DefaultCfgPath()); err != nil {
 				return fmt.Errorf("unable to symlink: %v", err)
 			}
-			fmt.Printf("linked %q to %q\n", src, cl.DefaultCfgPath())
+			fmt.Fprintf(os.Stderr, "linked %q to %q\n", src, cl.DefaultCfgPath())
 			return nil
 		},
 	}
@@ -368,7 +368,7 @@ func unlinkCommand(cl *client.Client) *cobra.Command {
 			existing, err := os.Lstat(cl.DefaultCfgPath())
 			if err != nil {
 				if os.IsNotExist(err) {
-					fmt.Printf("no symlink found at %q\n", cl.DefaultCfgPath())
+					fmt.Fprintf(os.Stderr, "no symlink found at %q\n", cl.DefaultCfgPath())
 					return nil
 				}
 				return fmt.Errorf("stat err: %v", err)
@@ -379,7 +379,7 @@ func unlinkCommand(cl *client.Client) *cobra.Command {
 			if err := os.Remove(cl.DefaultCfgPath()); err != nil {
 				return fmt.Errorf("unable to remove symlink: %v", err)
 			}
-			fmt.Printf("unlinked config symlink %q\n", cl.DefaultCfgPath())
+			fmt.Fprintf(os.Stderr, "unlinked config symlink %q\n", cl.DefaultCfgPath())
 			return nil
 		},
 	}

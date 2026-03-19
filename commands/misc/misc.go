@@ -100,7 +100,7 @@ func errtextCommand() *cobra.Command {
 				}
 
 				if verbose {
-					fmt.Printf("trying %s...\n", kerr.Message)
+					fmt.Fprintf(os.Stderr, "trying %s...\n", kerr.Message)
 				}
 				if client.Strnorm(kerr.Message) == text {
 					fmt.Printf("%s (%d)\n%s\n", kerr.Message, kerr.Code, kerr.Description)
@@ -424,7 +424,7 @@ offset.
 
 			for _, brokerResp := range startResps {
 				if brokerResp.Err != nil {
-					fmt.Printf("unable to list start offsets from broker %d (%s:%d): %v\n", brokerResp.Meta.NodeID, brokerResp.Meta.Host, brokerResp.Meta.Port, brokerResp.Err)
+					fmt.Fprintf(os.Stderr, "unable to list start offsets from broker %d (%s:%d): %v\n", brokerResp.Meta.NodeID, brokerResp.Meta.Host, brokerResp.Meta.Port, brokerResp.Err)
 					continue
 				}
 				startResp := brokerResp.Resp.(*kmsg.ListOffsetsResponse)
@@ -450,7 +450,7 @@ offset.
 
 			for _, brokerResp := range endResps {
 				if brokerResp.Err != nil {
-					fmt.Printf("unable to list end offsets from broker %d (%s:%d): %v\n", brokerResp.Meta.NodeID, brokerResp.Meta.Host, brokerResp.Meta.Port, brokerResp.Err)
+					fmt.Fprintf(os.Stderr, "unable to list end offsets from broker %d (%s:%d): %v\n", brokerResp.Meta.NodeID, brokerResp.Meta.Host, brokerResp.Meta.Port, brokerResp.Err)
 					continue
 				}
 				endResp := brokerResp.Resp.(*kmsg.ListOffsetsResponse)
@@ -487,7 +487,7 @@ offset.
 
 			for _, brokerResp := range stableResps {
 				if brokerResp.Err != nil {
-					fmt.Printf("unable to list stable offsets from broker %d (%s:%d): %v\n", brokerResp.Meta.NodeID, brokerResp.Meta.Host, brokerResp.Meta.Port, brokerResp.Err)
+					fmt.Fprintf(os.Stderr, "unable to list stable offsets from broker %d (%s:%d): %v\n", brokerResp.Meta.NodeID, brokerResp.Meta.Host, brokerResp.Meta.Port, brokerResp.Err)
 					continue
 				}
 				stableResp := brokerResp.Resp.(*kmsg.ListOffsetsResponse)
@@ -600,7 +600,7 @@ it does, read the documentation for kmsg.OffsetForLeaderEpochRequest.
 
 			for _, shard := range shards {
 				if shard.Err != nil {
-					fmt.Printf("unable to issue request to broker %d (%s:%d): %v\n", shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
+					fmt.Fprintf(os.Stderr, "unable to issue request to broker %d (%s:%d): %v\n", shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
 					continue
 				}
 
