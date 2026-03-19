@@ -162,6 +162,12 @@ func (c *consumption) run(topics []string) error {
 	cl := c.cl.Client()
 
 	ctx, cancel := context.WithCancel(context.Background())
+	var keepCancel bool
+	defer func() {
+		if !keepCancel {
+			cancel()
+		}
+	}()
 
 	// Resolve timestamp-based start offsets via ListOffsetsAfterMilli.
 	if c.startTimestampMillis >= 0 {
@@ -355,6 +361,7 @@ func (c *consumption) run(topics []string) error {
 		}
 	}
 
+	keepCancel = true // ownership transferred to co / signal handler
 	go co.consume()
 
 	<-sigs

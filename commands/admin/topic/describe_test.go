@@ -76,7 +76,10 @@ func TestTopicDescribeConfigs(t *testing.T) {
 	}
 
 	// Fetch configs.
-	configs := fetchTopicConfigs(ctx, cl, []string{"config-test"})
+	configs, err := fetchTopicConfigs(ctx, cl, []string{"config-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if configs == nil {
 		t.Fatal("expected non-nil configs")
 	}

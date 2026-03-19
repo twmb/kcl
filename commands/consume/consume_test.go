@@ -12,7 +12,10 @@ import (
 func testParseOffset(t *testing.T, offset string) *consumption {
 	t.Helper()
 	c := &consumption{offset: offset}
-	_ = c.parseOffset()
+	_, err := c.parseOffset()
+	if err != nil {
+		t.Fatal(err)
+	}
 	return c
 }
 
