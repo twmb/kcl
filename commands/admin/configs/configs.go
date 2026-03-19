@@ -390,7 +390,7 @@ func (c *cfger) confirmAlterLoss() error {
 			case "y", "yes":
 				return nil
 			case "n", "no":
-				return fmt.Errorf("aborting.")
+				return fmt.Errorf("aborting")
 			default:
 				fmt.Fprintf(os.Stderr, "unrecognized input %q, valid options are y, yes, n, no\n", s)
 			}

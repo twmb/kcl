@@ -36,8 +36,6 @@ import (
 //	go build -ldflags "-X main.version=v1.0.0"
 var version string
 
-// TODO remove cobra to remove ridiculous implicit "help" command from everything.
-
 func main() {
 	v := version
 	if v == "" {

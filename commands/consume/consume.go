@@ -522,7 +522,9 @@ func (co *consumeOutput) consume() {
 		if co.timeout > 0 && fetches.NumRecords() > 0 {
 			lastRecordTime = time.Now()
 		}
-		// TODO Errors(), print to stderr
+		fetches.EachError(func(t string, p int32, err error) {
+			fmt.Fprintf(os.Stderr, "fetch error %s[%d]: %v\n", t, p, err)
+		})
 		fetches.EachPartition(func(p kgo.FetchTopicPartition) {
 			partEndOffset := int64(-1)
 			if co.untilOffset {
