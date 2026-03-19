@@ -2,21 +2,19 @@
 package transact
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
-	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/kcl/client"
-	"github.com/twmb/kcl/format"
 	"github.com/twmb/kcl/out"
 )
 
@@ -42,8 +40,6 @@ Kafka, and finishes the transaction.
 
 func Command(cl *client.Client) *cobra.Command {
 	var (
-		escapeChar string // common
-
 		// Consuming opts
 		topics      []string
 		regex       bool
@@ -57,7 +53,6 @@ func Command(cl *client.Client) *cobra.Command {
 
 		// Producing opts
 		readFormat  string
-		maxBuf      int
 		destTopic   string
 		compression string
 		txnID       string
@@ -163,36 +158,20 @@ func Command(cl *client.Client) *cobra.Command {
 			// formatting //
 			////////////////
 
-			if len(escapeChar) == 0 {
-				out.Die("invalid empty escape character")
-			}
-			escape, size := utf8.DecodeRuneInString(escapeChar)
-			if size != len(escapeChar) {
-				out.Die("invalid multi character escape character")
-			}
-
 			if rwFormat != "" {
 				readFormat = rwFormat
 				writeFormat = rwFormat
 			}
 
-			w, err := format.ParseWriteFormat(writeFormat, escape)
+			w, err := kgo.NewRecordFormatter(writeFormat)
 			out.MaybeDie(err, "unable to parse write format: %v", err)
 
-			r, err := format.NewReader(readFormat, escape, maxBuf, nil, tombstone)
+			r, err := kgo.NewRecordReader(strings.NewReader(""), readFormat)
 			out.MaybeDie(err, "unable to parse read format: %v", err)
-			if r.ParsesTopic() && len(destTopic) != 0 {
-				out.Die("cannot produce to a destination topic; the read format specifies that it parses a topic")
-			}
-			if !r.ParsesTopic() && len(destTopic) == 0 {
-				out.Die("destiniation topic is missing and the read format does not specify that it parses a topic")
-			}
 
-			go transact(quitCtx, cl.GroupTransactSession(), w, r, destTopic, verbose, args...)
+			go transact(quitCtx, cl.GroupTransactSession(), w, r, destTopic, verbose, tombstone, args...)
 		},
 	}
-
-	cmd.Flags().StringVarP(&escapeChar, "escape-char", "c", "%", "character to use for beginning a record field escape (accepts any utf8)")
 
 	cmd.Flags().StringArrayVarP(&topics, "topic", "t", nil, "topic to consume (repeatable)")
 	cmd.Flags().BoolVar(&regex, "regex", false, "parse topics as regex; consume any topic that matches any expression")
@@ -205,7 +184,6 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd.Flags().StringVarP(&readFormat, "read-format", "r", "", "format to read from the transform program")
 	cmd.Flags().StringVar(&rwFormat, "rw", "", "if non-empty, the format to use for both reading and writing (overrides w and r)")
 
-	cmd.Flags().IntVar(&maxBuf, "max-delim-buf", bufio.MaxScanTokenSize, "maximum input to buffer before a delimiter is required, if using delimiters")
 	cmd.Flags().StringVarP(&compression, "compression", "z", "snappy", "compression to use for producing batches (none, gzip, snappy, lz4, zstd)")
 	cmd.Flags().StringVarP(&destTopic, "destination-topic", "d", "", "if non-empty, the topic to produce to (read-format must not contain %t)")
 	cmd.Flags().StringVarP(&txnID, "txn-id", "x", "", "transactional ID")
@@ -218,10 +196,11 @@ func Command(cl *client.Client) *cobra.Command {
 func transact(
 	quitCtx context.Context,
 	sess *kgo.GroupTransactSession,
-	w func([]byte, *kgo.Record, *kgo.FetchPartition) []byte,
-	r *format.Reader,
+	w *kgo.RecordFormatter,
+	r *kgo.RecordReader,
 	destTopic string,
 	verbose bool,
+	tombstone bool,
 	args ...string,
 ) {
 	defer sess.Close()
@@ -247,7 +226,7 @@ func transact(
 				for _, partition := range topic.Partitions {
 					out.MaybeDie(partition.Err, "fetch partition error: %v", partition.Err)
 					for _, record := range partition.Records {
-						buf = w(buf, record, &partition)
+						buf = w.AppendPartitionRecord(buf, &partition, record)
 					}
 				}
 			}
@@ -278,14 +257,20 @@ func transact(
 		var received []*kgo.Record
 		r.SetReader(stdout)
 		for {
-			receive, err := r.Next()
+			receive, err := r.ReadRecord()
 			if err != nil {
 				if err != io.EOF {
 					out.Die("invalid record received: %v", err)
 				}
 				break
 			}
-			if !r.ParsesTopic() {
+			if tombstone && len(receive.Value) == 0 {
+				receive.Value = nil
+			}
+			if receive.Topic == "" {
+				if destTopic == "" {
+					out.Die("destination topic is missing and the read format does not parse a topic")
+				}
 				receive.Topic = destTopic
 			}
 			received = append(received, receive)

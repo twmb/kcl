@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
-	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -16,7 +15,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	"github.com/twmb/kcl/client"
-	"github.com/twmb/kcl/format"
 	"github.com/twmb/kcl/offsetparse"
 	"github.com/twmb/kcl/out"
 )
@@ -33,9 +31,8 @@ type consumption struct {
 	offset          string
 	num             int
 	numPerPartition int
-	format          string
-	escapeChar      string
-	rack            string
+	format string
+	rack   string
 
 	readUncommitted     bool
 	printControlRecords bool
@@ -66,14 +63,6 @@ func Command(cl *client.Client) *cobra.Command {
 }
 
 func (c *consumption) run(topics []string) {
-	if len(c.escapeChar) == 0 {
-		out.Die("invalid empty escape character")
-	}
-	escape, size := utf8.DecodeRuneInString(c.escapeChar)
-	if size != len(c.escapeChar) {
-		out.Die("invalid multi character escape character")
-	}
-
 	// Compile grep filters.
 	var grepFilters []grepFilter
 	if len(c.grepPatterns) > 0 {
@@ -338,11 +327,11 @@ func (c *consumption) run(topics []string) {
 	} else if isTransactionState {
 		co.buildTransactionStateFormatFn()
 	} else {
-		fn, err := format.ParseWriteFormat(c.format, escape)
+		f, err := kgo.NewRecordFormatter(c.format)
 		out.MaybeDie(err, "%v", err)
 		var buf []byte
 		co.format = func(r *kgo.Record, p *kgo.FetchPartition) {
-			buf = fn(buf[:0], r, p)
+			buf = f.AppendPartitionRecord(buf[:0], p, r)
 			os.Stdout.Write(buf)
 		}
 	}
