@@ -29,7 +29,6 @@ import (
 	"github.com/twmb/kcl/commands/misc"
 	"github.com/twmb/kcl/commands/myconfig"
 	"github.com/twmb/kcl/commands/produce"
-	"github.com/twmb/kcl/commands/transact"
 	"github.com/twmb/kcl/out"
 )
 
@@ -79,7 +78,6 @@ Command completion is available at:
 		consume.Command(cl),
 		produce.Command(cl),
 		metadataCmd,
-		transact.Command(cl),
 		misc.Command(cl),
 		admin.Command(cl),
 		myconfig.Command(cl),            // "profile" (primary)

@@ -26,7 +26,7 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "topic",
 		Aliases: []string{"t"},
-		Short:   "Topic operations (list, describe, create, delete, alter-config, trim-prefix).",
+		Short:   "Topic operations (list, describe, create, delete, trim-prefix).",
 	}
 
 	cmd.AddCommand(topicCreateCommand(cl))
@@ -34,7 +34,6 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd.AddCommand(topicDeleteCommand(cl))
 	cmd.AddCommand(topicAddPartitionsCommand(cl))
 	cmd.AddCommand(topicDescribeCommand(cl))
-	cmd.AddCommand(topicAlterConfigCommand(cl))
 	cmd.AddCommand(topicTrimPrefixCommand(cl))
 	return cmd
 }
