@@ -15,6 +15,7 @@ import (
 
 func Command(cl *client.Client) *cobra.Command {
 	var (
+		topicFlag            string
 		informat             string
 		verboseFormat        string
 		compression          string
@@ -166,6 +167,13 @@ To show partition and offset for each produced record:
 `,
 		Args: cobra.MaximumNArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
+			if topicFlag != "" {
+				if len(args) > 0 {
+					out.Die("topic specified both as -t flag and positional argument")
+				}
+				args = []string{topicFlag}
+			}
+
 			reader, err := kgo.NewRecordReader(os.Stdin, informat)
 			out.MaybeDie(err, "unable to parse in format: %v", err)
 
@@ -256,6 +264,7 @@ To show partition and offset for each produced record:
 		},
 	}
 
+	cmd.Flags().StringVarP(&topicFlag, "topic", "t", "", "topic to produce to (alternative to positional argument)")
 	cmd.Flags().StringVarP(&informat, "format", "f", "%v\n", "record only delimiter")
 	cmd.Flags().StringVarP(&verboseFormat, "output-format", "o", "", "format string for produced record output (topic, partition, offset of each record)")
 	cmd.Flags().StringVarP(&compression, "compression", "z", "snappy", "compression to use for producing batches (none, gzip, snappy, lz4, zstd)")

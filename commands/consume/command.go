@@ -64,6 +64,8 @@ Format options:
   %a    record attributes (formatting required, see below)
   %x    record producer id
   %y    record producer epoch
+  %D    share group delivery count (0 if not share)
+  %A    share group acquisition deadline (timestamp, like %d)
 
   %[    partition log start offset
   %|    partition last stable offset
