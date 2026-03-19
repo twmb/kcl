@@ -134,7 +134,7 @@ SEE ALSO:
 						}
 					})
 				case offsetparse.KindStart:
-					fmt.Println("Nothing to trim: offset is already at start.")
+					fmt.Fprintln(os.Stderr, "Nothing to trim: offset is already at start.")
 					return nil
 				default:
 					return out.Errf(out.ExitUsage, "unsupported offset kind for trim-prefix: %v", spec.Start.Kind)
@@ -142,7 +142,7 @@ SEE ALSO:
 			}
 
 			if len(targets) == 0 {
-				fmt.Println("No partitions to trim.")
+				fmt.Fprintln(os.Stderr, "No partitions to trim.")
 				return nil
 			}
 
@@ -158,12 +158,12 @@ SEE ALSO:
 			tw.Flush()
 
 			if !noConfirm {
-				fmt.Print("\nDelete records before these offsets? [y/N] ")
+				fmt.Fprint(os.Stderr, "\nDelete records before these offsets? [y/N] ")
 				scanner := bufio.NewScanner(os.Stdin)
 				scanner.Scan()
 				answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
 				if answer != "y" && answer != "yes" {
-					fmt.Println("Aborted.")
+					fmt.Fprintln(os.Stderr, "Aborted.")
 					return nil
 				}
 			}
@@ -183,12 +183,12 @@ SEE ALSO:
 			req.Topics = append(req.Topics, rt)
 
 			shards := kclClient.RequestSharded(ctx, req)
-			fmt.Println()
+			fmt.Fprintln(os.Stderr)
 			resultTable := out.NewFormattedTable(cl.Format(), "topic.trim-prefix", 1, "results",
 				"PARTITION", "NEW-LOW-WATERMARK", "ERROR")
 			for _, shard := range shards {
 				if shard.Err != nil {
-					fmt.Printf("error from broker %d: %v\n", shard.Meta.NodeID, shard.Err)
+					fmt.Fprintf(os.Stderr, "error from broker %d: %v\n", shard.Meta.NodeID, shard.Err)
 					continue
 				}
 				resp := shard.Resp.(*kmsg.DeleteRecordsResponse)

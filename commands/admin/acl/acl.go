@@ -417,7 +417,7 @@ SEE ALSO:
 			}
 
 			if dryRun {
-				fmt.Printf("Dry run: %d ACL(s) would be created:\n", len(req.Creations))
+				fmt.Fprintf(os.Stderr, "Dry run: %d ACL(s) would be created:\n", len(req.Creations))
 				tw := out.BeginTabWrite()
 				defer tw.Flush()
 				fmt.Fprintf(tw, "TYPE\tNAME\tPATTERN\tPRINCIPAL\tHOST\tOPERATION\tPERMISSION\n")
@@ -589,7 +589,7 @@ For more detailed information about ACLs, read kcl acl --help.
 				}
 
 				if cl.Format() != "json" {
-					fmt.Println("Dry run: the following ACLs would be deleted:")
+					fmt.Fprintln(os.Stderr, "Dry run: the following ACLs would be deleted:")
 				}
 				table := out.NewFormattedTable(cl.Format(), "acl.delete-dry-run", 1, "acls",
 					"TYPE", "NAME", "PATTERN", "PRINCIPAL", "HOST", "OPERATION", "PERMISSION")
@@ -635,7 +635,7 @@ For more detailed information about ACLs, read kcl acl --help.
 					return fmt.Errorf("%s%s", err, additional)
 				}
 
-				fmt.Println("The following ACLs will be deleted:")
+				fmt.Fprintln(os.Stderr, "The following ACLs will be deleted:")
 				tw := out.BeginTabWrite()
 				fmt.Fprintf(tw, "TYPE\tNAME\tPATTERN\tPRINCIPAL\tHOST\tOPERATION\tPERMISSION\n")
 				for _, resource := range resp.Resources {
@@ -653,11 +653,11 @@ For more detailed information about ACLs, read kcl acl --help.
 				}
 				tw.Flush()
 
-				fmt.Print("\nProceed with deletion? [y/N] ")
+				fmt.Fprint(os.Stderr, "\nProceed with deletion? [y/N] ")
 				var answer string
 				fmt.Scanln(&answer)
 				if answer != "y" && answer != "Y" {
-					fmt.Println("Aborting.")
+					fmt.Fprintln(os.Stderr, "Aborting.")
 					return nil
 				}
 			}

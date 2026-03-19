@@ -284,15 +284,15 @@ without actually deleting them.
 					}
 				}
 				if len(topics) == 0 {
-					fmt.Println("No topics matched the provided regex patterns.")
+					fmt.Fprintln(os.Stderr, "No topics matched the provided regex patterns.")
 					return nil
 				}
 			}
 
 			if dryRun {
-				fmt.Println("Dry run: the following topics would be deleted:")
+				fmt.Fprintln(os.Stderr, "Dry run: the following topics would be deleted:")
 				for _, topic := range topics {
-					fmt.Printf("  %s\n", topic)
+					fmt.Fprintf(os.Stderr, "  %s\n", topic)
 				}
 				return nil
 			}

@@ -3,6 +3,7 @@ package group
 import (
 	"context"
 	"fmt"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -209,7 +210,7 @@ func describeConsumerGroups(cl *client.Client, groups []string, readCommitted, s
 	default:
 		for _, shard := range shards {
 			if shard.Err != nil {
-				fmt.Printf("unable to issue ConsumerGroupDescribe to broker %d (%s:%d): %v\n", shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
+				fmt.Fprintf(os.Stderr, "unable to issue ConsumerGroupDescribe to broker %d (%s:%d): %v\n", shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
 				continue
 			}
 
@@ -317,12 +318,12 @@ func listGroupsByType(cl *client.Client, types []string) ([]string, error) {
 }
 
 func shardFail(name string, shard kgo.ResponseShard, failures *int) {
-	fmt.Printf("unable to issue %s to broker %d (%s:%d): %v\n", name, shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
+	fmt.Fprintf(os.Stderr, "unable to issue %s to broker %d (%s:%d): %v\n", name, shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
 	*failures++
 }
 
 func shardErr(name string, shard kgo.ResponseShard, err error) {
-	fmt.Printf("%s request error to broker %d (%s:%d): %v\n", name, shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, err)
+	fmt.Fprintf(os.Stderr, "%s request error to broker %d (%s:%d): %v\n", name, shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, err)
 }
 
 func listGroups(cl *client.Client) ([]string, error) {
@@ -364,7 +365,7 @@ func fetchOffsets(cl *client.Client, groups []string) (map[string]map[int32]offs
 		req.Group = groups[i]
 		resp, err := req.RequestWith(context.Background(), cl.Client())
 		if err != nil {
-			fmt.Printf("unable to issue OffsetFetch: %v\n", err)
+			fmt.Fprintf(os.Stderr, "unable to issue OffsetFetch: %v\n", err)
 			failures++
 			continue
 		}

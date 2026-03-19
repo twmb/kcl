@@ -4,6 +4,7 @@ package sharegroup
 import (
 	"context"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 
@@ -238,7 +239,7 @@ Use --summary to show only aggregate information (total lag, member count).
 			default:
 				for _, shard := range shards {
 					if shard.Err != nil {
-						fmt.Printf("unable to issue ShareGroupDescribe to broker %d (%s:%d): %v\n", shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
+						fmt.Fprintf(os.Stderr, "unable to issue ShareGroupDescribe to broker %d (%s:%d): %v\n", shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
 						continue
 					}
 
@@ -402,14 +403,14 @@ without actually deleting them.
 					return err
 				}
 				if len(args) == 0 {
-					fmt.Println("No share groups matched the provided regex patterns.")
+					fmt.Fprintln(os.Stderr, "No share groups matched the provided regex patterns.")
 					return nil
 				}
 			}
 			if dryRun {
-				fmt.Println("Dry run: the following share groups would be deleted:")
+				fmt.Fprintln(os.Stderr, "Dry run: the following share groups would be deleted:")
 				for _, g := range args {
-					fmt.Printf("  %s\n", g)
+					fmt.Fprintf(os.Stderr, "  %s\n", g)
 				}
 				return nil
 			}
@@ -455,13 +456,13 @@ func listShareGroups(cl *client.Client) ([]string, error) {
 	var failures int
 	for _, kresp := range kresps {
 		if kresp.Err != nil {
-			fmt.Printf("unable to issue ListGroups to broker %d (%s:%d): %v\n", kresp.Meta.NodeID, kresp.Meta.Host, kresp.Meta.Port, kresp.Err)
+			fmt.Fprintf(os.Stderr, "unable to issue ListGroups to broker %d (%s:%d): %v\n", kresp.Meta.NodeID, kresp.Meta.Host, kresp.Meta.Port, kresp.Err)
 			failures++
 			continue
 		}
 		resp := kresp.Resp.(*kmsg.ListGroupsResponse)
 		if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-			fmt.Printf("ListGroups error from broker %d: %v\n", kresp.Meta.NodeID, err)
+			fmt.Fprintf(os.Stderr, "ListGroups error from broker %d: %v\n", kresp.Meta.NodeID, err)
 			continue
 		}
 		for _, group := range resp.Groups {

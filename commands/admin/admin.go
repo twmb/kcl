@@ -4,6 +4,7 @@ package admin
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 
@@ -84,9 +85,9 @@ Use --dry-run to preview without applying.
 				return fmt.Errorf("unable to parse topic partitions: %v", err)
 			}
 			if dryRun {
-				fmt.Println("Dry run: would elect leaders for the following partitions:")
+				fmt.Fprintln(os.Stderr, "Dry run: would elect leaders for the following partitions:")
 				for topic, parts := range tps {
-					fmt.Printf("  %s: %v\n", topic, parts)
+					fmt.Fprintf(os.Stderr, "  %s: %v\n", topic, parts)
 				}
 				return nil
 			}

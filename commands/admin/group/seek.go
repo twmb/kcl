@@ -344,7 +344,7 @@ SEE ALSO:
 			}
 
 			if len(newOffsets) == 0 {
-				fmt.Println("No offsets to change.")
+				fmt.Fprintln(os.Stderr, "No offsets to change.")
 				return nil
 			}
 
@@ -376,7 +376,7 @@ SEE ALSO:
 			})
 
 			// 5. Print preview table.
-			fmt.Printf("GROUP: %s\n\n", groupName)
+			fmt.Fprintf(os.Stderr, "GROUP: %s\n\n", groupName)
 			tw := out.NewTable("TOPIC", "PARTITION", "PRIOR-OFFSET", "NEW-OFFSET")
 			for _, r := range rows {
 				priorStr := fmt.Sprintf("%d", r.priorAt)
@@ -392,18 +392,18 @@ SEE ALSO:
 				return nil
 			}
 			if !execute {
-				fmt.Print("\nApply these offset changes? [y/N] ")
+				fmt.Fprint(os.Stderr, "\nApply these offset changes? [y/N] ")
 				scanner := bufio.NewScanner(os.Stdin)
 				scanner.Scan()
 				answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
 				if answer != "y" && answer != "yes" {
-					fmt.Println("Aborted.")
+					fmt.Fprintln(os.Stderr, "Aborted.")
 					return nil
 				}
 			}
 
 			// 7. Commit offsets.
-			fmt.Println()
+			fmt.Fprintln(os.Stderr)
 			committed, err := adm.CommitOffsets(ctx, groupName, newOffsets)
 			if err != nil {
 				return fmt.Errorf("unable to commit offsets: %v", err)

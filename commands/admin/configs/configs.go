@@ -4,6 +4,7 @@ package configs
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -374,15 +375,15 @@ func (c *cfger) confirmAlterLoss() error {
 		sort.Slice(losing, func(i, j int) bool {
 			return losing[i].k < losing[j].v
 		})
-		fmt.Println("THIS ALTER WILL LOSE THE FOLLOWING CONFIG KEY/VALUES, IS THAT OK?")
-		fmt.Println()
+		fmt.Fprintln(os.Stderr, "THIS ALTER WILL LOSE THE FOLLOWING CONFIG KEY/VALUES, IS THAT OK?")
+		fmt.Fprintln(os.Stderr)
 		for _, toLose := range losing {
-			fmt.Printf("%s=%s\n", toLose.k, toLose.v)
+			fmt.Fprintf(os.Stderr, "%s=%s\n", toLose.k, toLose.v)
 		}
-		fmt.Println()
+		fmt.Fprintln(os.Stderr)
 
 		for {
-			fmt.Print("[y]es|[n]o > ")
+			fmt.Fprint(os.Stderr, "[y]es|[n]o > ")
 			var s string
 			fmt.Scanf("%s", &s)
 			switch s {
@@ -391,7 +392,7 @@ func (c *cfger) confirmAlterLoss() error {
 			case "n", "no":
 				return fmt.Errorf("aborting.")
 			default:
-				fmt.Printf("unrecognized input %q, valid options are y, yes, n, no\n", s)
+				fmt.Fprintf(os.Stderr, "unrecognized input %q, valid options are y, yes, n, no\n", s)
 			}
 		}
 	}
@@ -516,16 +517,16 @@ describe my-subscription -tcm`,
 				return nil
 			}
 
-			fmt.Println()
+			fmt.Fprintln(os.Stderr)
 			for _, kv := range kvs {
 				docs := kv.Documentation
 				if docs == nil {
 					continue
 				}
 
-				fmt.Println(kv.Name + ":")
-				fmt.Println(*docs)
-				fmt.Println()
+				fmt.Fprintln(os.Stderr, kv.Name+":")
+				fmt.Fprintln(os.Stderr, *docs)
+				fmt.Fprintln(os.Stderr)
 			}
 			return nil
 		},

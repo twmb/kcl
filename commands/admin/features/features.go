@@ -3,6 +3,7 @@ package features
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -61,7 +62,7 @@ version ranges and finalized feature version ranges.
 			table.Flush()
 
 			if len(resp.SupportedFeatures) == 0 && len(resp.FinalizedFeatures) == 0 {
-				fmt.Println("No feature flags found.")
+				fmt.Fprintln(os.Stderr, "No feature flags found.")
 			}
 			return nil
 		},

@@ -180,7 +180,7 @@ EXAMPLES:
 			}
 
 			if len(targets) == 0 {
-				fmt.Println("No offsets to change.")
+				fmt.Fprintln(os.Stderr, "No offsets to change.")
 				return nil
 			}
 
@@ -192,7 +192,7 @@ EXAMPLES:
 			})
 
 			// Print preview table.
-			fmt.Printf("GROUP: %s\n\n", groupName)
+			fmt.Fprintf(os.Stderr, "GROUP: %s\n\n", groupName)
 			tw := out.NewTable("TOPIC", "PARTITION", "NEW-START-OFFSET")
 			for _, t := range targets {
 				tw.Print(t.topic, t.partition, t.offset)
@@ -204,18 +204,18 @@ EXAMPLES:
 				return nil
 			}
 			if !execute {
-				fmt.Print("\nApply these offset changes? [y/N] ")
+				fmt.Fprint(os.Stderr, "\nApply these offset changes? [y/N] ")
 				scanner := bufio.NewScanner(os.Stdin)
 				scanner.Scan()
 				answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
 				if answer != "y" && answer != "yes" {
-					fmt.Println("Aborted.")
+					fmt.Fprintln(os.Stderr, "Aborted.")
 					return nil
 				}
 			}
 
 			// Commit via AlterShareGroupOffsets.
-			fmt.Println()
+			fmt.Fprintln(os.Stderr)
 			req := kmsg.NewPtrAlterShareGroupOffsetsRequest()
 			req.GroupID = groupName
 
