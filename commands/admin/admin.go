@@ -84,11 +84,13 @@ topic and 1,2,3 are partition numbers.
 To avoid accidental triggers, this command requires a --run flag to run.
 `,
 		Example: "elect-leaders --run foo:1,2,3 bar:9",
-		Run: func(_ *cobra.Command, topicParts []string) {
+		RunE: func(_ *cobra.Command, topicParts []string) error {
 			tps, err := flagutil.ParseTopicPartitions(topicParts)
-			out.MaybeDie(err, "unable to parse topic partitions: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to parse topic partitions: %v", err)
+			}
 			if !run {
-				out.Die("use --run to actually run this command")
+				return fmt.Errorf("use --run to actually run this command")
 			}
 
 			req := &kmsg.ElectLeadersRequest{
@@ -102,7 +104,7 @@ To avoid accidental triggers, this command requires a --run flag to run.
 			if allPartitions {
 				topics = nil
 			} else if len(topics) == 0 {
-				out.Die("no topics requested for leader election, and not triggering all; nothing to do")
+				return fmt.Errorf("no topics requested for leader election, and not triggering all; nothing to do")
 			}
 
 			for topic, partitions := range tps {
@@ -113,11 +115,13 @@ To avoid accidental triggers, this command requires a --run flag to run.
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to elect leaders: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to elect leaders: %v", err)
+			}
 
 			resp := kresp.(*kmsg.ElectLeadersResponse)
 			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-				out.Die("%v", err)
+				return fmt.Errorf("%v", err)
 			}
 
 			table := out.NewFormattedTable(cl.Format(), "cluster.elect-leaders", 1, "results",
@@ -136,6 +140,7 @@ To avoid accidental triggers, this command requires a --run flag to run.
 				}
 			}
 			table.Flush()
+			return nil
 		},
 	}
 
@@ -182,12 +187,14 @@ record deletion needs to be issued a request. This does that appropriately.
 `,
 
 		Example: `delete-records foo:p0,o120 foo:p1,o3888
-		
+
 delete-records --json-file records.json`,
 
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			tpos, err := parseTopicPartitionOffsets(args)
-			out.MaybeDie(err, "unable to parse topic partition offsets: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to parse topic partition offsets: %v", err)
+			}
 
 			if jsonFile != "" {
 				type fileReq struct {
@@ -197,16 +204,20 @@ delete-records --json-file records.json`,
 				}
 				var fileReqs []fileReq
 				raw, err := os.ReadFile(jsonFile)
-				out.MaybeDie(err, "unable to read json file: %v", err)
+				if err != nil {
+					return fmt.Errorf("unable to read json file: %v", err)
+				}
 				err = json.Unmarshal(raw, &fileReqs)
-				out.MaybeDie(err, "unable to unmarshal json file: %v", err)
+				if err != nil {
+					return fmt.Errorf("unable to unmarshal json file: %v", err)
+				}
 				for _, fileReq := range fileReqs {
 					tpos[fileReq.Topic] = append(tpos[fileReq.Topic], partitionOffset{fileReq.Partition, fileReq.Offset})
 				}
 			}
 
 			if len(tpos) == 0 {
-				out.Die("no records requested for deletion")
+				return fmt.Errorf("no records requested for deletion")
 			}
 
 			// Create and fire off a bunch of concurrent requests...
@@ -259,6 +270,7 @@ delete-records --json-file records.json`,
 					}
 				}
 			}
+			return nil
 		},
 	}
 
@@ -309,12 +321,14 @@ This command prints the cluster ID, controller ID, and a table of all brokers
 in the cluster.
 `,
 		Args: cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			req := kmsg.NewPtrDescribeClusterRequest()
 			req.IncludeClusterAuthorizedOperations = includeAuthorizedOps
 
 			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to describe cluster: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to describe cluster: %v", err)
+			}
 
 			resp := kresp.(*kmsg.DescribeClusterResponse)
 			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
@@ -325,8 +339,11 @@ in the cluster.
 					}
 					out.DieJSON("cluster.describe", err.Error(), msg)
 				}
-				out.ErrAndMsg(resp.ErrorCode, resp.ErrorMessage)
-				out.Exit()
+				additional := ""
+				if resp.ErrorMessage != nil {
+					additional = ": " + *resp.ErrorMessage
+				}
+				return fmt.Errorf("%s%s", err, additional)
 			}
 
 			switch cl.Format() {
@@ -383,6 +400,7 @@ in the cluster.
 					fmt.Fprintf(tw, "%d\t%s\t%d\t%s\n", broker.NodeID, broker.Host, broker.Port, rack)
 				}
 			}
+			return nil
 		},
 	}
 
@@ -401,7 +419,7 @@ including the leader, epoch, high watermark, and information about voters
 and observers.
 `,
 		Args: cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			req := kmsg.NewPtrDescribeQuorumRequest()
 			req.Topics = []kmsg.DescribeQuorumRequestTopic{{
 				Topic:      "__cluster_metadata",
@@ -409,12 +427,17 @@ and observers.
 			}}
 
 			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to describe quorum: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to describe quorum: %v", err)
+			}
 
 			resp := kresp.(*kmsg.DescribeQuorumResponse)
 			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-				out.ErrAndMsg(resp.ErrorCode, resp.ErrorMessage)
-				out.Exit()
+				additional := ""
+				if resp.ErrorMessage != nil {
+					additional = ": " + *resp.ErrorMessage
+				}
+				return fmt.Errorf("%s%s", err, additional)
 			}
 
 			switch cl.Format() {
@@ -501,6 +524,7 @@ and observers.
 					}
 				}
 			}
+			return nil
 		},
 	}
 }

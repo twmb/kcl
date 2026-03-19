@@ -12,8 +12,8 @@ func (c *consumption) command() *cobra.Command {
 		Short: "Consume topic records",
 		Long:  help,
 		Args:  cobra.MinimumNArgs(1), // topic
-		Run: func(_ *cobra.Command, args []string) {
-			c.run(args)
+		RunE: func(_ *cobra.Command, args []string) error {
+			return c.run(args)
 		},
 	}
 	cmd.Flags().StringVarP(&c.group, "group", "g", "", "consumer group to assign")

@@ -65,9 +65,9 @@ func Command(cl *client.Client) *cobra.Command {
 		Short: "Transactionally consume, exec a program, and write back to Kafka; requires Kafka 0.11.0+.",
 		Long:  help,
 		Args:  cobra.MinimumNArgs(1), // exec
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			if len(txnID) == 0 {
-				out.Die("invalid empty transactional id")
+				return fmt.Errorf("invalid empty transactional id")
 			}
 
 			///////////////
@@ -94,7 +94,7 @@ func Command(cl *client.Client) *cobra.Command {
 			case "cooperative-sticky":
 				balancer = kgo.CooperativeStickyBalancer()
 			default:
-				out.Die("unrecognized group balancer %q", groupAlg)
+				return fmt.Errorf("unrecognized group balancer %q", groupAlg)
 			}
 			cl.AddOpt(kgo.Balancers(balancer))
 			if instanceID != "" {
@@ -121,7 +121,7 @@ func Command(cl *client.Client) *cobra.Command {
 			case "zstd":
 				codec = kgo.ZstdCompression()
 			default:
-				out.Die("invalid compression codec %q", codec)
+				return fmt.Errorf("invalid compression codec %q", codec)
 			}
 			cl.AddOpt(kgo.TransactionalID(txnID))
 			cl.AddOpt(kgo.ProducerBatchCompression(codec))
@@ -145,13 +145,13 @@ func Command(cl *client.Client) *cobra.Command {
 
 			if len(args) == 1 && args[0] == "mirror" {
 				if readFormat != "" || writeFormat != "" || rwFormat != "" {
-					out.Die("formats must not be specified when mirroring")
+					return fmt.Errorf("formats must not be specified when mirroring")
 				}
 				if len(destTopic) == 0 {
-					out.Die("destiniation topic is missing (required for mirroring)")
+					return fmt.Errorf("destiniation topic is missing (required for mirroring)")
 				}
 				go transactMirror(quitCtx, cl.GroupTransactSession(), destTopic, verbose)
-				return
+				return nil
 			}
 
 			////////////////
@@ -164,12 +164,17 @@ func Command(cl *client.Client) *cobra.Command {
 			}
 
 			w, err := kgo.NewRecordFormatter(writeFormat)
-			out.MaybeDie(err, "unable to parse write format: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to parse write format: %v", err)
+			}
 
 			r, err := kgo.NewRecordReader(strings.NewReader(""), readFormat)
-			out.MaybeDie(err, "unable to parse read format: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to parse read format: %v", err)
+			}
 
 			go transact(quitCtx, cl.GroupTransactSession(), w, r, destTopic, verbose, tombstone, args...)
+			return nil
 		},
 	}
 

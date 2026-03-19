@@ -175,8 +175,8 @@ SEE ALSO:
   kcl acl delete    delete ACLs
   kcl acl --help    detailed ACL documentation
 `,
-		Args:    cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
+		Args: cobra.ExactArgs(0),
+		RunE: func(_ *cobra.Command, _ []string) error {
 			var pname, pprincipal, phost *string
 			if resourceName != "" {
 				pname = &resourceName
@@ -199,9 +199,17 @@ SEE ALSO:
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to describe acls: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to describe acls: %v", err)
+			}
 			resp := kresp.(*kmsg.DescribeACLsResponse)
-			out.MaybeExitErrMsg(resp.ErrorCode, resp.ErrorMessage)
+			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+				additional := ""
+				if resp.ErrorMessage != nil {
+					additional = ": " + *resp.ErrorMessage
+				}
+				return fmt.Errorf("%s%s", err, additional)
+			}
 
 			table := out.NewFormattedTable(cl.Format(), "acl.list", 1, "acls",
 				"TYPE", "NAME", "PATTERN", "PRINCIPAL", "HOST", "OPERATION", "PERMISSION")
@@ -219,6 +227,7 @@ SEE ALSO:
 				}
 			}
 			table.Flush()
+			return nil
 		},
 	}
 
@@ -288,7 +297,7 @@ func createCommand(cl *client.Client) *cobra.Command {
 		Short:   "Create ACLs",
 		Long: `Create ACLs on a combinatorial basis (Kafka 0.11.0+).
 
-ACL creation is combinatorial: all principals × all hosts × all resources ×
+ACL creation is combinatorial: all principals x all hosts x all resources x
 all operations. Requires at least one principal, one resource, and one
 operation. Hosts default to "*" (all) if not specified.
 
@@ -307,7 +316,7 @@ SEE ALSO:
 `,
 
 		Args: cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			// Merge deprecated flags into new ones.
 			for _, p := range oldPrincipals {
 				if client.Strnorm(oldPermission) == "deny" {
@@ -359,10 +368,10 @@ SEE ALSO:
 			}
 
 			if len(resources) == 0 {
-				out.Die("at least one resource is required (--topic, --group, --cluster, --transactional-id, or --delegation-token)")
+				return fmt.Errorf("at least one resource is required (--topic, --group, --cluster, --transactional-id, or --delegation-token)")
 			}
 			if len(operations) == 0 {
-				out.Die("at least one --operation is required")
+				return fmt.Errorf("at least one --operation is required")
 			}
 
 			// Build principal/permission pairs.
@@ -378,7 +387,7 @@ SEE ALSO:
 				principals = append(principals, principalPerm{p, "deny"})
 			}
 			if len(principals) == 0 {
-				out.Die("at least one principal is required (--allow-principal or --deny-principal)")
+				return fmt.Errorf("at least one principal is required (--allow-principal or --deny-principal)")
 			}
 
 			// Default hosts to wildcard.
@@ -418,11 +427,13 @@ SEE ALSO:
 						c.Principal, c.Host, c.Operation, c.PermissionType,
 					)
 				}
-				return
+				return nil
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to create acls: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to create acls: %v", err)
+			}
 			resp := kresp.(*kmsg.CreateACLsResponse)
 
 			if len(resp.Results) != len(req.Creations) {
@@ -455,6 +466,7 @@ SEE ALSO:
 				)
 			}
 			table.Flush()
+			return nil
 		},
 	}
 
@@ -526,19 +538,19 @@ For more detailed information about ACLs, read kcl acl --help.
 		Example: `kcl acl delete --type any --pattern match --op any --perm any  # removes all
   kcl acl delete --topic foo --perm any --op any                       # delete all ACLs for topic foo
   kcl acl delete --cluster --principal User:old --op any --perm any    # delete all cluster ACLs for a user`,
-		Args:    cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
+		Args: cobra.ExactArgs(0),
+		RunE: func(_ *cobra.Command, _ []string) error {
 			if resourceType == "" {
-				out.Die("missing resource type filter")
+				return fmt.Errorf("missing resource type filter")
 			}
 			if resourcePattern == "" {
-				out.Die("missing resource pattern filter")
+				return fmt.Errorf("missing resource pattern filter")
 			}
 			if operation == "" {
-				out.Die("missing operation filter")
+				return fmt.Errorf("missing operation filter")
 			}
 			if permission == "" {
-				out.Die("missing permission filter")
+				return fmt.Errorf("missing permission filter")
 			}
 			var pname, pprincipal, phost *string
 			if resourceName != "" {
@@ -564,9 +576,17 @@ For more detailed information about ACLs, read kcl acl --help.
 				}
 
 				kresp, err := cl.Client().Request(context.Background(), descReq)
-				out.MaybeDie(err, "unable to describe acls: %v", err)
+				if err != nil {
+					return fmt.Errorf("unable to describe acls: %v", err)
+				}
 				resp := kresp.(*kmsg.DescribeACLsResponse)
-				out.MaybeExitErrMsg(resp.ErrorCode, resp.ErrorMessage)
+				if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+					additional := ""
+					if resp.ErrorMessage != nil {
+						additional = ": " + *resp.ErrorMessage
+					}
+					return fmt.Errorf("%s%s", err, additional)
+				}
 
 				if cl.Format() != "json" {
 					fmt.Println("Dry run: the following ACLs would be deleted:")
@@ -587,7 +607,7 @@ For more detailed information about ACLs, read kcl acl --help.
 					}
 				}
 				table.Flush()
-				return
+				return nil
 			}
 
 			if !noConfirm {
@@ -603,9 +623,17 @@ For more detailed information about ACLs, read kcl acl --help.
 				}
 
 				kresp, err := cl.Client().Request(context.Background(), descReq)
-				out.MaybeDie(err, "unable to describe acls: %v", err)
+				if err != nil {
+					return fmt.Errorf("unable to describe acls: %v", err)
+				}
 				resp := kresp.(*kmsg.DescribeACLsResponse)
-				out.MaybeExitErrMsg(resp.ErrorCode, resp.ErrorMessage)
+				if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+					additional := ""
+					if resp.ErrorMessage != nil {
+						additional = ": " + *resp.ErrorMessage
+					}
+					return fmt.Errorf("%s%s", err, additional)
+				}
 
 				fmt.Println("The following ACLs will be deleted:")
 				tw := out.BeginTabWrite()
@@ -630,7 +658,7 @@ For more detailed information about ACLs, read kcl acl --help.
 				fmt.Scanln(&answer)
 				if answer != "y" && answer != "Y" {
 					fmt.Println("Aborting.")
-					return
+					return nil
 				}
 			}
 
@@ -647,16 +675,23 @@ For more detailed information about ACLs, read kcl acl --help.
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to describe acls: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to describe acls: %v", err)
+			}
 			resp := kresp.(*kmsg.DeleteACLsResponse)
 
 			if len(resp.Results) != 1 {
-				out.Die("we requested one filter, but got %d responses; dumping JSON", len(resp.Results))
-				out.ExitJSON(resp)
+				return fmt.Errorf("we requested one filter, but got %d responses", len(resp.Results))
 			}
 
 			result := resp.Results[0]
-			out.MaybeExitErrMsg(result.ErrorCode, result.ErrorMessage)
+			if err := kerr.ErrorForCode(result.ErrorCode); err != nil {
+				additional := ""
+				if result.ErrorMessage != nil {
+					additional = ": " + *result.ErrorMessage
+				}
+				return fmt.Errorf("%s%s", err, additional)
+			}
 
 			table := out.NewFormattedTable(cl.Format(), "acl.delete", 1, "deleted",
 				"TYPE", "NAME", "PATTERN", "PRINCIPAL", "HOST", "OPERATION", "PERMISSION", "ERROR", "ERROR MSG")
@@ -681,6 +716,7 @@ For more detailed information about ACLs, read kcl acl --help.
 				)
 			}
 			table.Flush()
+			return nil
 		},
 	}
 

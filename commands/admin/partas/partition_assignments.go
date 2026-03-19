@@ -42,9 +42,11 @@ If a replica list is empty for a specific partition, this cancels any active
 reassignment for that partition.
 `,
 		Example: "alter 'foo:1->1,2,3' 'bar:2->3,4,5;5->3,4,5'",
-		Run: func(_ *cobra.Command, topicPartReplicas []string) {
+		RunE: func(_ *cobra.Command, topicPartReplicas []string) error {
 			tprs, err := flagutil.ParseTopicPartitionReplicas(topicPartReplicas)
-			out.MaybeDie(err, "unable to parse topic partitions replicas: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to parse topic partitions replicas: %v", err)
+			}
 
 			req := &kmsg.AlterPartitionAssignmentsRequest{
 				TimeoutMillis: cl.TimeoutMillis(),
@@ -65,12 +67,17 @@ reassignment for that partition.
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to alter partition assignments: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to alter partition assignments: %v", err)
+			}
 			resp := kresp.(*kmsg.AlterPartitionAssignmentsResponse)
 
 			if resp.ErrorCode != 0 {
-				out.ErrAndMsg(resp.ErrorCode, resp.ErrorMessage)
-				out.Exit()
+				additional := ""
+				if resp.ErrorMessage != nil {
+					additional = ": " + *resp.ErrorMessage
+				}
+				return fmt.Errorf("%s%s", kerr.ErrorForCode(resp.ErrorCode), additional)
 			}
 
 			table := out.NewFormattedTable(cl.Format(), "reassign.alter", 1, "results",
@@ -89,6 +96,7 @@ reassignment for that partition.
 				}
 			}
 			table.Flush()
+			return nil
 		},
 	}
 }
@@ -108,16 +116,18 @@ where the numbers correspond to partitions for a topic.
 
 If no topics are specified, this lists all active reassignments.
 `,
-		Run: func(_ *cobra.Command, topicParts []string) {
+		RunE: func(_ *cobra.Command, topicParts []string) error {
 			tps, err := flagutil.ParseTopicPartitions(topicParts)
-			out.MaybeDie(err, "unable to parse topic partitions: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to parse topic partitions: %v", err)
+			}
 
 			req := &kmsg.ListPartitionReassignmentsRequest{
 				TimeoutMillis: cl.TimeoutMillis(),
 			}
 			for topic, partitions := range tps {
 				if len(partitions) == 0 {
-					out.Die("topic %s has no partitions specified to list", topic)
+					return fmt.Errorf("topic %s has no partitions specified to list", topic)
 				}
 				req.Topics = append(req.Topics, kmsg.ListPartitionReassignmentsRequestTopic{
 					Topic:      topic,
@@ -126,12 +136,17 @@ If no topics are specified, this lists all active reassignments.
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to list partition reassignments: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to list partition reassignments: %v", err)
+			}
 			resp := kresp.(*kmsg.ListPartitionReassignmentsResponse)
 
 			if resp.ErrorCode != 0 {
-				out.ErrAndMsg(resp.ErrorCode, resp.ErrorMessage)
-				out.Exit()
+				additional := ""
+				if resp.ErrorMessage != nil {
+					additional = ": " + *resp.ErrorMessage
+				}
+				return fmt.Errorf("%s%s", kerr.ErrorForCode(resp.ErrorCode), additional)
 			}
 
 			table := out.NewFormattedTable(cl.Format(), "reassign.list", 1, "reassignments",
@@ -145,6 +160,7 @@ If no topics are specified, this lists all active reassignments.
 				}
 			}
 			table.Flush()
+			return nil
 		},
 	}
 }

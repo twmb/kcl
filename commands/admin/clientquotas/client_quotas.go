@@ -2,6 +2,7 @@ package clientquotas
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -54,7 +55,7 @@ filter specified by flags is returned.
 `,
 		Args: cobra.ExactArgs(0),
 
-		Run: func(_ *cobra.Command, _ []string) {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			req := &kmsg.DescribeClientQuotasRequest{
 				Strict: strict,
 			}
@@ -68,12 +69,12 @@ filter specified by flags is returned.
 			for _, name := range names {
 				split := strings.SplitN(name, "=", 2)
 				if len(split) != 2 {
-					out.Die("name %q missing value", split[0])
+					return fmt.Errorf("name %q missing value", split[0])
 				}
 				k, v := split[0], split[1]
 				k = strings.ToLower(k)
 				if !validType[k] {
-					out.Die("name type %q is invalid (allowed: user, client-id, ip)", split[0])
+					return fmt.Errorf("name type %q is invalid (allowed: user, client-id, ip)", split[0])
 				}
 				req.Components = append(req.Components, kmsg.DescribeClientQuotasRequestComponent{
 					EntityType: k,
@@ -84,7 +85,7 @@ filter specified by flags is returned.
 
 			for _, def := range defaults {
 				if !validType[def] {
-					out.Die("default type %q is invalid (allowed: user, client-id, ip)", def)
+					return fmt.Errorf("default type %q is invalid (allowed: user, client-id, ip)", def)
 				}
 				req.Components = append(req.Components, kmsg.DescribeClientQuotasRequestComponent{
 					EntityType: def,
@@ -94,7 +95,7 @@ filter specified by flags is returned.
 
 			for _, a := range any {
 				if !validType[a] {
-					out.Die("any type %q is invalid (allowed: user, client-id, ip)", a)
+					return fmt.Errorf("any type %q is invalid (allowed: user, client-id, ip)", a)
 				}
 				req.Components = append(req.Components, kmsg.DescribeClientQuotasRequestComponent{
 					EntityType: a,
@@ -103,12 +104,17 @@ filter specified by flags is returned.
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to describe client quotas: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to describe client quotas: %v", err)
+			}
 			resp := kresp.(*kmsg.DescribeClientQuotasResponse)
 
 			if resp.ErrorCode != 0 {
-				out.ErrAndMsg(resp.ErrorCode, resp.ErrorMessage)
-				out.Exit()
+				additional := ""
+				if resp.ErrorMessage != nil {
+					additional = ": " + *resp.ErrorMessage
+				}
+				return fmt.Errorf("%s%s", kerr.ErrorForCode(resp.ErrorCode), additional)
 			}
 
 			table := out.NewFormattedTable(cl.Format(), "quota.describe", 1, "quotas",
@@ -128,6 +134,7 @@ filter specified by flags is returned.
 				}
 			}
 			table.Flush()
+			return nil
 		},
 	}
 
@@ -162,17 +169,17 @@ matches, this runs an alter on anything that matches.
 `,
 		Args: cobra.ExactArgs(0),
 
-		Run: func(_ *cobra.Command, _ []string) {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			req := &kmsg.AlterClientQuotasRequest{
 				Entries:      []kmsg.AlterClientQuotasRequestEntry{{}},
 				ValidateOnly: !run,
 			}
 
 			if len(names) == 0 && len(defaults) == 0 {
-				out.Die("at least one name or default must be specified")
+				return fmt.Errorf("at least one name or default must be specified")
 			}
 			if len(adds) == 0 && len(deletes) == 0 {
-				out.Die("at least one add or delete must be specified")
+				return fmt.Errorf("at least one add or delete must be specified")
 			}
 
 			ent := &req.Entries[0]
@@ -186,12 +193,12 @@ matches, this runs an alter on anything that matches.
 			for _, name := range names {
 				split := strings.SplitN(name, "=", 2)
 				if len(split) != 2 {
-					out.Die("name %q missing value", split[0])
+					return fmt.Errorf("name %q missing value", split[0])
 				}
 				k, v := split[0], split[1]
 				k = strings.ToLower(k)
 				if !validType[k] {
-					out.Die("name type %q is invalid (allowed: user, client-id, ip)", split[0])
+					return fmt.Errorf("name type %q is invalid (allowed: user, client-id, ip)", split[0])
 				}
 				ent.Entity = append(ent.Entity, kmsg.AlterClientQuotasRequestEntryEntity{
 					Type: k,
@@ -201,7 +208,7 @@ matches, this runs an alter on anything that matches.
 
 			for _, def := range defaults {
 				if !validType[def] {
-					out.Die("default type %q is invalid (allowed: user, client-id, ip)", def)
+					return fmt.Errorf("default type %q is invalid (allowed: user, client-id, ip)", def)
 				}
 				ent.Entity = append(ent.Entity, kmsg.AlterClientQuotasRequestEntryEntity{
 					Type: def,
@@ -211,11 +218,13 @@ matches, this runs an alter on anything that matches.
 			for _, add := range adds {
 				split := strings.SplitN(add, "=", 2)
 				if len(split) != 2 {
-					out.Die("add %q missing value", split[0])
+					return fmt.Errorf("add %q missing value", split[0])
 				}
 				k, v := split[0], split[1]
 				f, err := strconv.ParseFloat(v, 64)
-				out.MaybeDie(err, "unable to parse add %q: %v", k, err)
+				if err != nil {
+					return fmt.Errorf("unable to parse add %q: %v", k, err)
+				}
 				ent.Ops = append(ent.Ops, kmsg.AlterClientQuotasRequestEntryOp{
 					Key:   k,
 					Value: f,
@@ -230,7 +239,9 @@ matches, this runs an alter on anything that matches.
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to alter client quotas: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to alter client quotas: %v", err)
+			}
 			resp := kresp.(*kmsg.AlterClientQuotasResponse)
 
 			table := out.NewFormattedTable(cl.Format(), "quota.alter", 1, "results",
@@ -258,6 +269,7 @@ matches, this runs an alter on anything that matches.
 				table.Row(entityStr, code, msg)
 			}
 			table.Flush()
+			return nil
 		},
 	}
 

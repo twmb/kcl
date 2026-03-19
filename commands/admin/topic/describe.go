@@ -53,7 +53,7 @@ SEE ALSO:
   kcl config describe    describe any resource config
 `,
 		Args: cobra.MinimumNArgs(1),
-		Run: func(_ *cobra.Command, topics []string) {
+		RunE: func(_ *cobra.Command, topics []string) error {
 			kclClient := cl.Client()
 			ctx := context.Background()
 
@@ -65,12 +65,18 @@ SEE ALSO:
 				metaReq.Topics = append(metaReq.Topics, rt)
 			}
 			metaResp, err := metaReq.RequestWith(ctx, kclClient)
-			out.MaybeDie(err, "unable to request metadata: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to request metadata: %v", err)
+			}
 
 			// Optionally fetch configs.
 			var configsByTopic map[string][]kmsg.DescribeConfigsResponseResourceConfig
 			if showConfigs || showAll || withOverrides {
-				configsByTopic = fetchTopicConfigs(ctx, kclClient, topics)
+				var err error
+				configsByTopic, err = fetchTopicConfigs(ctx, kclClient, topics)
+				if err != nil {
+					return err
+				}
 			}
 
 			// --with-overrides: filter to topics that have non-default config values.
@@ -236,6 +242,7 @@ SEE ALSO:
 					fmt.Println()
 				}
 			}
+			return nil
 		},
 	}
 
@@ -251,7 +258,7 @@ SEE ALSO:
 	return cmd
 }
 
-func fetchTopicConfigs(ctx context.Context, cl kmsg.Requestor, topics []string) map[string][]kmsg.DescribeConfigsResponseResourceConfig {
+func fetchTopicConfigs(ctx context.Context, cl kmsg.Requestor, topics []string) (map[string][]kmsg.DescribeConfigsResponseResourceConfig, error) {
 	req := kmsg.NewPtrDescribeConfigsRequest()
 	for _, t := range topics {
 		r := kmsg.NewDescribeConfigsRequestResource()
@@ -261,7 +268,9 @@ func fetchTopicConfigs(ctx context.Context, cl kmsg.Requestor, topics []string) 
 	}
 
 	resp, err := req.RequestWith(ctx, cl)
-	out.MaybeDie(err, "unable to describe configs: %v", err)
+	if err != nil {
+		return nil, fmt.Errorf("unable to describe configs: %v", err)
+	}
 
 	result := make(map[string][]kmsg.DescribeConfigsResponseResourceConfig)
 	for _, r := range resp.Resources {
@@ -278,7 +287,7 @@ func fetchTopicConfigs(ctx context.Context, cl kmsg.Requestor, topics []string) 
 		})
 		result[r.ResourceName] = r.Configs
 	}
-	return result
+	return result, nil
 }
 
 func int32sToString(vals []int32) string {

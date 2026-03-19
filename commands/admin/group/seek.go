@@ -74,7 +74,7 @@ SEE ALSO:
   kcl group list        list all groups
 `,
 		Args: cobra.ExactArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			groupName := args[0]
 
 			// Mutual exclusivity: exactly one of --to, --to-group, --to-file.
@@ -89,10 +89,10 @@ SEE ALSO:
 				nSources++
 			}
 			if nSources == 0 {
-				out.Die("one of --to, --to-group, or --to-file is required")
+				return fmt.Errorf("one of --to, --to-group, or --to-file is required")
 			}
 			if nSources > 1 {
-				out.Die("--to, --to-group, and --to-file are mutually exclusive")
+				return fmt.Errorf("--to, --to-group, and --to-file are mutually exclusive")
 			}
 
 			kclClient := cl.Client()
@@ -101,22 +101,26 @@ SEE ALSO:
 
 			// 1. Check group state.
 			described, err := adm.DescribeGroups(ctx, groupName)
-			out.MaybeDie(err, "unable to describe group: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to describe group: %v", err)
+			}
 			g, ok := described[groupName]
 			if !ok {
-				out.Die("group %q not found in describe response", groupName)
+				return fmt.Errorf("group %q not found in describe response", groupName)
 			}
 			if g.Err != nil {
-				out.Die("error describing group %q: %v", groupName, g.Err)
+				return fmt.Errorf("error describing group %q: %v", groupName, g.Err)
 			}
 			state := strings.ToLower(g.State)
 			if state != "empty" && state != "dead" {
-				out.Die("group %q is in state %q; must be Empty or Dead to seek offsets (stop all consumers first)", groupName, g.State)
+				return fmt.Errorf("group %q is in state %q; must be Empty or Dead to seek offsets (stop all consumers first)", groupName, g.State)
 			}
 
 			// 2. Fetch current committed offsets.
 			fetched, err := adm.FetchOffsets(ctx, groupName)
-			out.MaybeDie(err, "unable to fetch offsets for group %q: %v", groupName, err)
+			if err != nil {
+				return fmt.Errorf("unable to fetch offsets for group %q: %v", groupName, err)
+			}
 
 			// 3. Resolve target offsets.
 			newOffsets := make(kadm.Offsets)
@@ -125,7 +129,9 @@ SEE ALSO:
 			case toGroup != "":
 				// --to-group: fetch offsets from the source group.
 				srcFetched, err := adm.FetchOffsets(ctx, toGroup)
-				out.MaybeDie(err, "unable to fetch offsets for source group %q: %v", toGroup, err)
+				if err != nil {
+					return fmt.Errorf("unable to fetch offsets for source group %q: %v", toGroup, err)
+				}
 				srcFetched.Each(func(o kadm.OffsetResponse) {
 					if o.Err != nil {
 						return
@@ -159,10 +165,14 @@ SEE ALSO:
 					Offset    int64  `json:"offset"`
 				}
 				data, err := os.ReadFile(toFile)
-				out.MaybeDie(err, "unable to read --to-file %q: %v", toFile, err)
+				if err != nil {
+					return fmt.Errorf("unable to read --to-file %q: %v", toFile, err)
+				}
 				var entries []fileEntry
 				err = json.Unmarshal(data, &entries)
-				out.MaybeDie(err, "unable to parse --to-file %q: %v", toFile, err)
+				if err != nil {
+					return fmt.Errorf("unable to parse --to-file %q: %v", toFile, err)
+				}
 				for _, e := range entries {
 					// Filter to target topics if --topics is specified.
 					if len(topics) > 0 {
@@ -188,9 +198,11 @@ SEE ALSO:
 			default:
 				// --to: parse offset specification.
 				spec, err := offsetparse.Parse(to, time.Now())
-				out.MaybeDie(err, "unable to parse --to %q: %v", to, err)
+				if err != nil {
+					return fmt.Errorf("unable to parse --to %q: %v", to, err)
+				}
 				if spec.End != nil {
-					out.Die("--to does not accept range offsets; use a single target value")
+					return fmt.Errorf("--to does not accept range offsets; use a single target value")
 				}
 
 				// Determine target topics: either from --topics flag or from existing commits.
@@ -207,13 +219,15 @@ SEE ALSO:
 					})
 				}
 				if len(targetTopics) == 0 {
-					out.Die("no topics to seek; the group has no committed offsets and --topics was not specified")
+					return fmt.Errorf("no topics to seek; the group has no committed offsets and --topics was not specified")
 				}
 
 				switch spec.Start.Kind {
 				case offsetparse.KindStart:
 					listed, err := adm.ListStartOffsets(ctx, targetTopics...)
-					out.MaybeDie(err, "unable to list start offsets: %v", err)
+					if err != nil {
+						return fmt.Errorf("unable to list start offsets: %v", err)
+					}
 					listed.Each(func(lo kadm.ListedOffset) {
 						if lo.Err == nil {
 							newOffsets.Add(kadm.Offset{
@@ -227,7 +241,9 @@ SEE ALSO:
 
 				case offsetparse.KindEnd:
 					listed, err := adm.ListEndOffsets(ctx, targetTopics...)
-					out.MaybeDie(err, "unable to list end offsets: %v", err)
+					if err != nil {
+						return fmt.Errorf("unable to list end offsets: %v", err)
+					}
 					listed.Each(func(lo kadm.ListedOffset) {
 						if lo.Err == nil {
 							newOffsets.Add(kadm.Offset{
@@ -242,7 +258,9 @@ SEE ALSO:
 				case offsetparse.KindExact:
 					// Need to know partitions. List end offsets to discover them.
 					listed, err := adm.ListEndOffsets(ctx, targetTopics...)
-					out.MaybeDie(err, "unable to list offsets: %v", err)
+					if err != nil {
+						return fmt.Errorf("unable to list offsets: %v", err)
+					}
 					listed.Each(func(lo kadm.ListedOffset) {
 						if lo.Err == nil {
 							newOffsets.Add(kadm.Offset{
@@ -256,7 +274,9 @@ SEE ALSO:
 
 				case offsetparse.KindTimestamp:
 					listed, err := adm.ListOffsetsAfterMilli(ctx, spec.Start.Value, targetTopics...)
-					out.MaybeDie(err, "unable to resolve timestamp to offsets: %v", err)
+					if err != nil {
+						return fmt.Errorf("unable to resolve timestamp to offsets: %v", err)
+					}
 					listed.Each(func(lo kadm.ListedOffset) {
 						if lo.Err == nil {
 							newOffsets.Add(kadm.Offset{
@@ -300,7 +320,7 @@ SEE ALSO:
 					})
 
 				default:
-					out.Die("unsupported seek target kind: %v", spec.Start.Kind)
+					return fmt.Errorf("unsupported seek target kind: %v", spec.Start.Kind)
 				}
 			}
 
@@ -325,7 +345,7 @@ SEE ALSO:
 
 			if len(newOffsets) == 0 {
 				fmt.Println("No offsets to change.")
-				return
+				return nil
 			}
 
 			// 4. Build preview rows.
@@ -369,7 +389,7 @@ SEE ALSO:
 
 			// 6. Approval phase.
 			if dryRun {
-				return
+				return nil
 			}
 			if !execute {
 				fmt.Print("\nApply these offset changes? [y/N] ")
@@ -378,14 +398,16 @@ SEE ALSO:
 				answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
 				if answer != "y" && answer != "yes" {
 					fmt.Println("Aborted.")
-					return
+					return nil
 				}
 			}
 
 			// 7. Commit offsets.
 			fmt.Println()
 			committed, err := adm.CommitOffsets(ctx, groupName, newOffsets)
-			out.MaybeDie(err, "unable to commit offsets: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to commit offsets: %v", err)
+			}
 
 			// 8. Print results.
 			resultTw := out.NewTable("TOPIC", "PARTITION", "PRIOR-OFFSET", "NEW-OFFSET", "ERROR")
@@ -405,6 +427,7 @@ SEE ALSO:
 				resultTw.Print(r.topic, r.partition, priorStr, r.newAt, errStr)
 			}
 			resultTw.Flush()
+			return nil
 		},
 	}
 

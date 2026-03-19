@@ -47,7 +47,7 @@ This is equivalent to "group list --type-filter share". It lists share groups
 by issuing a ListGroups request with a type filter of "share".
 `,
 		Args: cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			for i, f := range statesFilter {
 				switch client.Strnorm(f) {
 				case "stable":
@@ -82,6 +82,7 @@ by issuing a ListGroups request with a type filter of "share".
 					fmt.Fprintf(tw, "%d\t%s\t%s\n", kresp.Meta.NodeID, group.Group, group.GroupState)
 				}
 			}
+			return nil
 		},
 	}
 	cmd.Flags().StringArrayVarP(&statesFilter, "filter", "f", nil, "filter groups by state (Stable, Dead, Empty; repeatable)")
@@ -103,15 +104,23 @@ with lag.
 
 Use --summary to show only aggregate information (total lag, member count).
 `,
-		Run: func(_ *cobra.Command, groups []string) {
+		RunE: func(_ *cobra.Command, groups []string) error {
 			if regex {
-				groups = filterShareGroupsByRegex(cl, groups)
+				var err error
+				groups, err = filterShareGroupsByRegex(cl, groups)
+				if err != nil {
+					return err
+				}
 			}
 			if len(groups) == 0 {
-				groups = listShareGroups(cl)
+				var err error
+				groups, err = listShareGroups(cl)
+				if err != nil {
+					return err
+				}
 			}
 			if len(groups) == 0 {
-				out.Die("no share groups to describe")
+				return fmt.Errorf("no share groups to describe")
 			}
 
 			req := kmsg.NewPtrShareGroupDescribeRequest()
@@ -286,6 +295,7 @@ Use --summary to show only aggregate information (total lag, member count).
 					}
 				}
 			}
+			return nil
 		},
 	}
 	cmd.Flags().BoolVarP(&summary, "summary", "s", false, "show only summary (total lag) instead of per-partition detail")
@@ -391,12 +401,16 @@ any pattern will be deleted. Use --dry-run to see which groups would be deleted
 without actually deleting them.
 `,
 		Args: cobra.MinimumNArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			if useRegex {
-				args = filterShareGroupsByRegex(cl, args)
+				var err error
+				args, err = filterShareGroupsByRegex(cl, args)
+				if err != nil {
+					return err
+				}
 				if len(args) == 0 {
 					fmt.Println("No share groups matched the provided regex patterns.")
-					return
+					return nil
 				}
 			}
 			if dryRun {
@@ -404,7 +418,7 @@ without actually deleting them.
 				for _, g := range args {
 					fmt.Printf("  %s\n", g)
 				}
-				return
+				return nil
 			}
 			brokerResps := cl.Client().RequestSharded(context.Background(), &kmsg.DeleteGroupsRequest{
 				Groups: args,
@@ -431,6 +445,7 @@ without actually deleting them.
 					fmt.Fprintf(tw, "%d\t%s\t%s\n", brokerResp.Meta.NodeID, r.Group, msg)
 				}
 			}
+			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&ifExists, "if-exists", false, "suppress error if group does not exist")
@@ -439,7 +454,7 @@ without actually deleting them.
 	return cmd
 }
 
-func listShareGroups(cl *client.Client) []string {
+func listShareGroups(cl *client.Client) ([]string, error) {
 	kresps := cl.Client().RequestSharded(context.Background(), &kmsg.ListGroupsRequest{
 		TypesFilter: []string{"share"},
 	})
@@ -461,27 +476,30 @@ func listShareGroups(cl *client.Client) []string {
 		}
 	}
 	if failures == len(kresps) {
-		out.Die("all %d ListGroups requests failed", failures)
+		return nil, fmt.Errorf("all %d ListGroups requests failed", failures)
 	}
-	return groups
+	return groups, nil
 }
 
 // filterShareGroupsByRegex lists all share groups, compiles each pattern
 // argument as a regex, and returns only groups matching at least one pattern.
-func filterShareGroupsByRegex(cl *client.Client, patterns []string) []string {
+func filterShareGroupsByRegex(cl *client.Client, patterns []string) ([]string, error) {
 	if len(patterns) == 0 {
-		out.Die("--regex requires at least one pattern argument")
+		return nil, fmt.Errorf("--regex requires at least one pattern argument")
 	}
 	var compiled []*regexp.Regexp
 	for _, p := range patterns {
 		re, err := regexp.Compile(p)
 		if err != nil {
-			out.Die("invalid regex %q: %v", p, err)
+			return nil, fmt.Errorf("invalid regex %q: %v", p, err)
 		}
 		compiled = append(compiled, re)
 	}
 
-	all := listShareGroups(cl)
+	all, err := listShareGroups(cl)
+	if err != nil {
+		return nil, err
+	}
 	var matched []string
 	for _, g := range all {
 		for _, re := range compiled {
@@ -491,5 +509,5 @@ func filterShareGroupsByRegex(cl *client.Client, patterns []string) []string {
 			}
 		}
 	}
-	return matched
+	return matched, nil
 }

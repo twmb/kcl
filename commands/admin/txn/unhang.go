@@ -38,13 +38,13 @@ anyway).
 		Example: "unstick-lso",
 		Args:    cobra.ExactArgs(1),
 
-		Run: func(_ *cobra.Command, topics []string) {
-			unstick(kcl, topics[0])
+		RunE: func(_ *cobra.Command, topics []string) error {
+			return unstick(kcl, topics[0])
 		},
 	}
 }
 
-func unstick(kcl *client.Client, topic string) {
+func unstick(kcl *client.Client, topic string) error {
 	cl := kcl.Client()
 	defer cl.Close()
 
@@ -57,14 +57,16 @@ func unstick(kcl *client.Client, topic string) {
 		req.Topics = append(req.Topics, reqTopic)
 
 		resp, err := req.RequestWith(context.Background(), cl)
-		out.MaybeDie(err, "unable to issue metadata request: %v", err)
+		if err != nil {
+			return fmt.Errorf("unable to issue metadata request: %v", err)
+		}
 
 		if len(resp.Topics) != 1 {
-			out.Die("metadata response unexpectedly returned %d topics when we asked for 1", len(resp.Topics))
+			return fmt.Errorf("metadata response unexpectedly returned %d topics when we asked for 1", len(resp.Topics))
 		}
 		t := resp.Topics[0]
 		if err := kerr.ErrorForCode(t.ErrorCode); err != nil {
-			out.Die("metadata for topic %s has error, unable to determine the number of partitions in the topic. error: %v", err)
+			return fmt.Errorf("metadata for topic %s has error, unable to determine the number of partitions in the topic. error: %v", topic, err)
 		}
 		nparts = len(t.Partitions)
 	}
@@ -86,16 +88,16 @@ func unstick(kcl *client.Client, topic string) {
 		// First get the end offsets,
 		for _, shard := range cl.RequestSharded(context.Background(), req) {
 			if shard.Err != nil {
-				out.Die("unable to issue ListOffsets request to broker %d: %v", shard.Meta.NodeID, shard.Err)
+				return fmt.Errorf("unable to issue ListOffsets request to broker %d: %v", shard.Meta.NodeID, shard.Err)
 			}
 			resp := shard.Resp.(*kmsg.ListOffsetsResponse)
 			if len(resp.Topics) != 1 {
-				out.Die("ListOffsets response unexpectedly returned %d topics when we asked for 1", len(resp.Topics))
+				return fmt.Errorf("ListOffsets response unexpectedly returned %d topics when we asked for 1", len(resp.Topics))
 			}
 			t := resp.Topics[0]
 			for _, p := range t.Partitions {
 				if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
-					out.Die("unable to list offsets for partition %d: %v", p.Partition, err)
+					return fmt.Errorf("unable to list offsets for partition %d: %v", p.Partition, err)
 				}
 				possibleParts[p.Partition] = p.Offset
 			}
@@ -108,16 +110,16 @@ func unstick(kcl *client.Client, topic string) {
 		// now subtract out the beginning offsets,
 		for _, shard := range cl.RequestSharded(context.Background(), req) {
 			if shard.Err != nil {
-				out.Die("unable to issue ListOffsets request to broker %d: %v", shard.Meta.NodeID, shard.Err)
+				return fmt.Errorf("unable to issue ListOffsets request to broker %d: %v", shard.Meta.NodeID, shard.Err)
 			}
 			resp := shard.Resp.(*kmsg.ListOffsetsResponse)
 			if len(resp.Topics) != 1 {
-				out.Die("ListOffsets response unexpectedly returned %d topics when we asked for 1", len(resp.Topics))
+				return fmt.Errorf("ListOffsets response unexpectedly returned %d topics when we asked for 1", len(resp.Topics))
 			}
 			t := resp.Topics[0]
 			for _, p := range t.Partitions {
 				if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
-					out.Die("unable to list offsets for partition %d: %v", p.Partition, err)
+					return fmt.Errorf("unable to list offsets for partition %d: %v", p.Partition, err)
 				}
 				possibleParts[p.Partition] -= p.Offset
 			}
@@ -132,7 +134,7 @@ func unstick(kcl *client.Client, topic string) {
 
 		if len(possibleParts) == 0 {
 			fmt.Printf("No partition in the topic has records; thus nothing can be stuck.\nExiting\n")
-			return
+			return nil
 		}
 	}
 
@@ -146,7 +148,7 @@ func unstick(kcl *client.Client, topic string) {
 		for !found && len(possibleParts) > 0 {
 			fetches := cl.PollFetches(context.Background())
 			if errs := fetches.Errors(); len(errs) > 0 {
-				out.Die("fetch errors while looking for stuck partition: %v", errs)
+				return fmt.Errorf("fetch errors while looking for stuck partition: %v", errs)
 			}
 			fetches.EachPartition(func(tp kgo.FetchTopicPartition) {
 				delete(possibleParts, tp.Partition)
@@ -161,7 +163,7 @@ func unstick(kcl *client.Client, topic string) {
 
 		if !found && len(possibleParts) == 0 {
 			fmt.Printf("There do not appear to be any stuck partitions on topic %s; all partitions have a HighWatermark equal to the LastStableOffset.\nExiting.\n", topic)
-			return
+			return nil
 		}
 	}
 
@@ -180,7 +182,7 @@ func unstick(kcl *client.Client, topic string) {
 		for !found {
 			fetches := cl.PollFetches(context.Background())
 			if errs := fetches.Errors(); len(errs) > 0 {
-				out.Die("fetch errors while looking for stuck producer ID: %v", errs)
+				return fmt.Errorf("fetch errors while looking for stuck producer ID: %v", errs)
 			}
 			fetches.EachRecord(func(r *kgo.Record) {
 				if !found { // the first record is culprit
@@ -237,7 +239,7 @@ func unstick(kcl *client.Client, topic string) {
 			fmt.Printf("Proceeding to unstick...\n\n")
 		default:
 			fmt.Printf("Saw %s, not yes, exiting.\n", s)
-			return
+			return nil
 		}
 	}
 
@@ -258,7 +260,9 @@ func unstick(kcl *client.Client, topic string) {
 		req.Topics = append(req.Topics, reqTopic)
 
 		resp, err := req.RequestWith(context.Background(), cl)
-		out.MaybeDie(err, "unable to issue AddPartitionsToTxn request: %v", err)
+		if err != nil {
+			return fmt.Errorf("unable to issue AddPartitionsToTxn request: %v", err)
+		}
 
 		for _, topic := range resp.Topics {
 			for _, partition := range topic.Partitions {
@@ -272,13 +276,13 @@ func unstick(kcl *client.Client, topic string) {
 							epoch++
 						default:
 							fmt.Printf("Saw %s, not yes, exiting.\n", s)
-							return
+							return nil
 						}
 
 						goto start
 					}
 
-					out.Die("partition in AddPartitionsToTxn had error: %v", err)
+					return fmt.Errorf("partition in AddPartitionsToTxn had error: %v", err)
 				}
 			}
 		}
@@ -292,11 +296,14 @@ func unstick(kcl *client.Client, topic string) {
 		req.ProducerEpoch = epoch
 
 		resp, err := req.RequestWith(context.Background(), cl)
-		out.MaybeDie(err, "unable to issue EndTxn request: %v", err)
+		if err != nil {
+			return fmt.Errorf("unable to issue EndTxn request: %v", err)
+		}
 		if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
-			out.Die("EndTxn request had error: %v", err)
+			return fmt.Errorf("EndTxn request had error: %v", err)
 		}
 	}
 
 	fmt.Println("Complete.")
+	return nil
 }

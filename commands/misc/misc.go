@@ -54,17 +54,18 @@ func errcodeCommand() *cobra.Command {
 		Use:   "errcode CODE",
 		Short: "Print the name and description for an error code",
 		Args:  cobra.ExactArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			code, err := strconv.Atoi(args[0])
 			if err != nil {
-				out.Die("unable to parse error code: %v", err)
+				return fmt.Errorf("unable to parse error code: %v", err)
 			}
 			if code == 0 {
 				fmt.Println("NONE")
-				return
+				return nil
 			}
 			kerr := kerr.ErrorForCode(int16(code)).(*kerr.Error)
 			fmt.Printf("%s\n%s\n", kerr.Message, kerr.Description)
+			return nil
 		},
 	}
 }
@@ -75,15 +76,15 @@ func errtextCommand() *cobra.Command {
 		Use:   "errtext [ERROR_NAME]",
 		Short: "Print the name, code and description for an error name or all errors",
 		Args:  cobra.MaximumNArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			var text string
 			if list {
 				if len(args) != 0 {
-					out.Die("invalid extra args while list is set")
+					return fmt.Errorf("invalid extra args while list is set")
 				}
 			} else {
 				if len(args) != 1 {
-					out.Die("missing error text to search for")
+					return fmt.Errorf("missing error text to search for")
 				} else {
 					text = client.Strnorm(args[0])
 				}
@@ -103,12 +104,13 @@ func errtextCommand() *cobra.Command {
 				}
 				if client.Strnorm(kerr.Message) == text {
 					fmt.Printf("%s (%d)\n%s\n", kerr.Message, kerr.Code, kerr.Description)
-					return
+					return nil
 				}
 			}
 			if !list {
-				out.Die("Unknown error text.")
+				return fmt.Errorf("Unknown error text.")
 			}
+			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&list, "list", false, "rather than comparing, list all errors and their descriptions")
@@ -138,7 +140,7 @@ fi
 This command supports completion for bash, zsh, fish, and powershell.
 `,
 		Args: cobra.ExactArgs(0),
-		Run: func(cmd *cobra.Command, _ []string) {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			switch kind {
 			case "bash":
 				cmd.Root().GenBashCompletion(os.Stdout)
@@ -149,8 +151,9 @@ This command supports completion for bash, zsh, fish, and powershell.
 			case "powershell":
 				cmd.Root().GenPowerShellCompletion(os.Stdout)
 			default:
-				out.Die("unrecognized autocomplete kind %q", kind)
+				return fmt.Errorf("unrecognized autocomplete kind %q", kind)
 			}
+			return nil
 		},
 	}
 
@@ -167,17 +170,19 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 		Use:   "api-versions",
 		Short: "Print broker API versions for each Kafka request type (Kafka 0.10.0+).",
 		Args:  cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			var v *kversion.Versions
 			if version == "" {
 				kresp, err := cl.Client().Request(context.Background(), apiVersionsRequest())
-				out.MaybeDie(err, "unable to request API versions: %v", err)
+				if err != nil {
+					return fmt.Errorf("unable to request API versions: %v", err)
+				}
 				resp := kresp.(*kmsg.ApiVersionsResponse)
 				v = kversion.FromApiVersionsResponse(resp)
 			} else {
 				v = kversion.FromString(version)
 				if v == nil {
-					out.Die("unknown version %q", version)
+					return fmt.Errorf("unknown version %q", version)
 				}
 			}
 
@@ -204,6 +209,7 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 				})
 				table.Flush()
 			}
+			return nil
 		},
 	}
 
@@ -267,14 +273,16 @@ func rawCommand(cl *client.Client) *cobra.Command {
 		Use:   "raw-req",
 		Short: "Issue an arbitrary request parsed from JSON read from STDIN.",
 		Args:  cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			req := kmsg.RequestForKey(key)
 			if req == nil {
-				out.Die("request key %d unknown", key)
+				return fmt.Errorf("request key %d unknown", key)
 			}
 			req.SetVersion(-1)
 			raw, err := io.ReadAll(os.Stdin)
-			out.MaybeDie(err, "unable to read stdin: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to read stdin: %v", err)
+			}
 			err = json.Unmarshal(raw, req)
 			// If the raw json specified a Version field, it
 			// overwrote our -1. We want to pin the version to
@@ -285,7 +293,9 @@ func rawCommand(cl *client.Client) *cobra.Command {
 				cl.AddOpt(kgo.MinVersions(vers))
 				cl.AddOpt(kgo.MaxVersions(vers))
 			}
-			out.MaybeDie(err, "unable to unmarshal stdin: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to unmarshal stdin: %v", err)
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			var r interface {
@@ -296,8 +306,11 @@ func rawCommand(cl *client.Client) *cobra.Command {
 				r = cl.Client().Broker(b)
 			}
 			kresp, err := r.Request(ctx, req)
-			out.MaybeDie(err, "response error: %v", err)
+			if err != nil {
+				return fmt.Errorf("response error: %v", err)
+			}
 			out.ExitJSON(kresp)
+			return nil
 		},
 	}
 	cmd.Flags().Int16VarP(&key, "key", "k", -1, "request key")
@@ -329,8 +342,11 @@ the offset number, where ### corresponds to the broker epoch at that given
 offset.
 `,
 		Example: "list-offsets foo:1,2,3 bar:0",
-		Run: func(_ *cobra.Command, topicParts []string) {
-			tps := loadTopicParts(cl, topicParts)
+		RunE: func(_ *cobra.Command, topicParts []string) error {
+			tps, err := loadTopicParts(cl, topicParts)
+			if err != nil {
+				return err
+			}
 
 			reqStart := &kmsg.ListOffsetsRequest{
 				ReplicaID:      -1,
@@ -544,6 +560,7 @@ offset.
 					}
 				}
 			}
+			return nil
 		},
 	}
 
@@ -567,8 +584,11 @@ it does, read the documentation for kmsg.OffsetForLeaderEpochRequest.
 `,
 
 		Example: "offset-for-leader-epoch foo bar biz:0,1,2",
-		Run: func(_ *cobra.Command, topicParts []string) {
-			tps := loadTopicParts(cl, topicParts)
+		RunE: func(_ *cobra.Command, topicParts []string) error {
+			tps, err := loadTopicParts(cl, topicParts)
+			if err != nil {
+				return err
+			}
 
 			req := &kmsg.OffsetForLeaderEpochRequest{
 				ReplicaID: -1,
@@ -620,6 +640,7 @@ it does, read the documentation for kmsg.OffsetForLeaderEpochRequest.
 					}
 				}
 			}
+			return nil
 		},
 	}
 
@@ -629,9 +650,11 @@ it does, read the documentation for kmsg.OffsetForLeaderEpochRequest.
 	return cmd
 }
 
-func loadTopicParts(cl *client.Client, topicParts []string) map[string][]int32 {
+func loadTopicParts(cl *client.Client, topicParts []string) (map[string][]int32, error) {
 	tps, err := flagutil.ParseTopicPartitions(topicParts)
-	out.MaybeDie(err, "unable to parse topic partitions: %v", err)
+	if err != nil {
+		return nil, fmt.Errorf("unable to parse topic partitions: %v", err)
+	}
 
 	var metaTopics []kmsg.MetadataRequestTopic
 	for topic, partitions := range tps {
@@ -646,11 +669,13 @@ func loadTopicParts(cl *client.Client, topicParts []string) map[string][]int32 {
 			req.Topics = nil
 		}
 		kresp, err := cl.Client().Request(context.Background(), req)
-		out.MaybeDie(err, "unable to get metadata: %v", err)
+		if err != nil {
+			return nil, fmt.Errorf("unable to get metadata: %v", err)
+		}
 		resp := kresp.(*kmsg.MetadataResponse)
 		for _, topic := range resp.Topics {
 			if topic.Topic == nil {
-				out.Die("metadata returned nil topic when we did not fetch with topic IDs")
+				return nil, fmt.Errorf("metadata returned nil topic when we did not fetch with topic IDs")
 			}
 			if req.Topics == nil && topic.IsInternal {
 				continue
@@ -660,5 +685,5 @@ func loadTopicParts(cl *client.Client, topicParts []string) map[string][]int32 {
 			}
 		}
 	}
-	return tps
+	return tps, nil
 }

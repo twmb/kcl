@@ -2,6 +2,7 @@ package sharegroup
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/spf13/cobra"
 
@@ -23,7 +24,7 @@ for the specified topics within the share group.
 `,
 		Example: "offset-delete mygroup foo bar",
 		Args:    cobra.MinimumNArgs(2),
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			group := args[0]
 			topics := args[1:]
 
@@ -36,14 +37,16 @@ for the specified topics within the share group.
 			}
 
 			kresp, err := req.RequestWith(context.Background(), cl.Client())
-			out.MaybeDie(err, "unable to delete share group offsets: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to delete share group offsets: %v", err)
+			}
 
 			if err := kerr.ErrorForCode(kresp.ErrorCode); err != nil {
 				msg := err.Error()
 				if kresp.ErrorMessage != nil {
 					msg += ": " + *kresp.ErrorMessage
 				}
-				out.Die(msg)
+				return fmt.Errorf("%s", msg)
 			}
 
 			table := out.NewFormattedTable(cl.Format(), "share-group.offset-delete", 1, "results",
@@ -59,6 +62,7 @@ for the specified topics within the share group.
 				table.Row(topic.Topic, errMsg)
 			}
 			table.Flush()
+			return nil
 		},
 	}
 	return cmd

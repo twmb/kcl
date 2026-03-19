@@ -95,11 +95,13 @@ describe foo
 
 describe // describes all`,
 
-		Run: func(_ *cobra.Command, topics []string) {
+		RunE: func(_ *cobra.Command, topics []string) error {
 			var req kmsg.DescribeLogDirsRequest
 			if topics != nil {
 				tps, err := flagutil.ParseTopicPartitions(topics)
-				out.MaybeDie(err, "improper topic partitions format on: %v", err)
+				if err != nil {
+					return fmt.Errorf("improper topic partitions format on: %v", err)
+				}
 
 				// For any topic that has no partitions
 				// specified, we describe *all* partitions.
@@ -114,10 +116,12 @@ describe // describes all`,
 				}
 				if len(metaReq.Topics) > 0 {
 					metaResp, err := metaReq.RequestWith(context.Background(), cl.Client())
-					out.MaybeDie(err, "unable to request metadata: %v", err)
+					if err != nil {
+						return fmt.Errorf("unable to request metadata: %v", err)
+					}
 					for _, topic := range metaResp.Topics {
 						if topic.Topic == nil {
-							out.Die("metadata returned nil topic when we did not fetch with topic IDs")
+							return fmt.Errorf("metadata returned nil topic when we did not fetch with topic IDs")
 						}
 						for _, partition := range topic.Partitions {
 							tps[*topic.Topic] = append(tps[*topic.Topic], partition.Partition)
@@ -211,7 +215,7 @@ describe // describes all`,
 					case "topic":
 						key = r.topic
 					default:
-						out.Die("--aggregate-into must be broker, dir, or topic")
+						return fmt.Errorf("--aggregate-into must be broker, dir, or topic")
 					}
 					agg[key] += r.size
 				}
@@ -236,7 +240,7 @@ describe // describes all`,
 					}
 					fmt.Fprintf(tw, "%s\t%s\n", e.key, sizeStr)
 				}
-				return
+				return nil
 			}
 
 			tw := out.BeginTabWrite()
@@ -254,6 +258,7 @@ describe // describes all`,
 				fmt.Fprintf(tw, "%d\t\t%s\t%s\t%d\t%s\t%d\t%v\n",
 					r.broker, r.dir, r.topic, r.partition, sizeStr, r.offsetLag, r.isFuture)
 			}
+			return nil
 		},
 	}
 
@@ -283,15 +288,17 @@ which allows you to alter replicas.
 
 		Example: `alter foo:1,2,3=/dir bar:6=/dir2 baz:9=/dir`,
 
-		Run: func(_ *cobra.Command, topics []string) {
+		RunE: func(_ *cobra.Command, topics []string) error {
 			dests := make(map[string]map[string][]int32)
 			for _, topic := range topics {
 				parts := strings.Split(topic, "=")
 				if len(parts) != 2 {
-					out.Die("improper format for dest-dir = split (expected two strings after split, got %d)", len(parts))
+					return fmt.Errorf("improper format for dest-dir = split (expected two strings after split, got %d)", len(parts))
 				}
 				tps, err := flagutil.ParseTopicPartitions([]string{parts[0]})
-				out.MaybeDie(err, "improper topic partitions format on %q: %v", parts[0], err)
+				if err != nil {
+					return fmt.Errorf("improper topic partitions format on %q: %v", parts[0], err)
+				}
 				dest := parts[1]
 				existing := dests[dest]
 				if existing == nil {
@@ -323,7 +330,9 @@ which allows you to alter replicas.
 			} else {
 				kresp, err = cl.Client().Request(context.Background(), &req)
 			}
-			out.MaybeDie(err, "unable to alter replica log dirs: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to alter replica log dirs: %v", err)
+			}
 
 			resp := kresp.(*kmsg.AlterReplicaLogDirsResponse)
 			table := out.NewFormattedTable(cl.Format(), "logdirs.alter", 1, "results",
@@ -338,6 +347,7 @@ which allows you to alter replicas.
 				}
 			}
 			table.Flush()
+			return nil
 		},
 	}
 	cmd.Flags().Int32VarP(&broker, "broker", "b", -1, "a specific broker to direct the request to")

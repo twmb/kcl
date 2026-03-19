@@ -57,9 +57,11 @@ The information printed:
 		Example: "describe-producers foo:1,2,3 bar:0",
 		Args:    cobra.MinimumNArgs(1),
 
-		Run: func(_ *cobra.Command, _ []string) {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			tps, err := flagutil.ParseTopicPartitions(topicParts)
-			out.MaybeDie(err, "unable to parse topic partitions: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to parse topic partitions: %v", err)
+			}
 
 			var metaTopics []kmsg.MetadataRequestTopic
 			for topic, partitions := range tps {
@@ -69,10 +71,12 @@ The information printed:
 			}
 			if len(metaTopics) > 0 {
 				resp, err := (&kmsg.MetadataRequest{Topics: metaTopics}).RequestWith(context.Background(), cl.Client())
-				out.MaybeDie(err, "unable to get metadata: %v", err)
+				if err != nil {
+					return fmt.Errorf("unable to get metadata: %v", err)
+				}
 				for _, topic := range resp.Topics {
 					if topic.Topic == nil {
-						out.Die("metadata returned nil topic when we did not fetch with topic IDs")
+						return fmt.Errorf("metadata returned nil topic when we did not fetch with topic IDs")
 					}
 					for _, partition := range topic.Partitions {
 						tps[*topic.Topic] = append(tps[*topic.Topic], partition.Partition)
@@ -89,7 +93,9 @@ The information printed:
 			}
 
 			resp, err := req.RequestWith(context.Background(), cl.Client())
-			out.MaybeDie(err, "unable to describe producers: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to describe producers: %v", err)
+			}
 
 			table := out.NewFormattedTable(cl.Format(), "txn.describe-producers", 1, "producers",
 				"TOPIC", "PARTITION", "ERROR", "ID", "EPOCH", "LAST SEQUENCE", "LAST TIMESTAMP", "COORDINATOR EPOCH", "TXN START OFFSET")
@@ -119,6 +125,7 @@ The information printed:
 				}
 			}
 			table.Flush()
+			return nil
 		},
 	}
 
@@ -139,7 +146,7 @@ This command lists all ongoing transactions. You can optionally filter by
 transaction state or producer ID.
 `,
 		Args: cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			kresps := cl.Client().RequestSharded(context.Background(), &kmsg.ListTransactionsRequest{
 				StateFilters:      stateFilter,
 				ProducerIDFilters: producerIDFilter,
@@ -162,6 +169,7 @@ transaction state or producer ID.
 				}
 			}
 			table.Flush()
+			return nil
 		},
 	}
 
@@ -180,12 +188,14 @@ This command describes the state of one or more transactions, including
 the producer ID, epoch, timeout, and the topics/partitions involved.
 `,
 		Args: cobra.MinimumNArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			req := kmsg.NewDescribeTransactionsRequest()
 			req.TransactionalIDs = args
 
 			resp, err := req.RequestWith(context.Background(), cl.Client())
-			out.MaybeDie(err, "unable to describe transactions: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to describe transactions: %v", err)
+			}
 
 			table := out.NewFormattedTable(cl.Format(), "txn.describe", 1, "transactions",
 				"TRANSACTIONAL-ID", "STATE", "PRODUCER-ID", "PRODUCER-EPOCH", "TIMEOUT-MS", "START-TIMESTAMP", "TOPICS", "ERROR")
@@ -211,6 +221,7 @@ the producer ID, epoch, timeout, and the topics/partitions involved.
 				)
 			}
 			table.Flush()
+			return nil
 		},
 	}
 }

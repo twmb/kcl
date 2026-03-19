@@ -35,17 +35,19 @@ This command uses the ApiVersions response to print supported feature
 version ranges and finalized feature version ranges.
 `,
 		Args: cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			req := &kmsg.ApiVersionsRequest{
 				ClientSoftwareName:    "kcl",
 				ClientSoftwareVersion: "v0.0.0",
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to request api versions: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to request api versions: %v", err)
+			}
 			resp := kresp.(*kmsg.ApiVersionsResponse)
 			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-				out.Die("%v", err)
+				return fmt.Errorf("%v", err)
 			}
 
 			table := out.NewFormattedTable(cl.Format(), "features.describe", 1, "features",
@@ -61,6 +63,7 @@ version ranges and finalized feature version ranges.
 			if len(resp.SupportedFeatures) == 0 && len(resp.FinalizedFeatures) == 0 {
 				fmt.Println("No feature flags found.")
 			}
+			return nil
 		},
 	}
 }
@@ -81,9 +84,9 @@ To avoid accidental updates, this command requires a --run flag to run.
 `,
 		Example: "update --run metadata.version=17",
 		Args:    cobra.MinimumNArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			if !run {
-				out.Die("use --run to actually run this command")
+				return fmt.Errorf("use --run to actually run this command")
 			}
 
 			req := kmsg.NewPtrUpdateFeaturesRequest()
@@ -93,10 +96,12 @@ To avoid accidental updates, this command requires a --run flag to run.
 			for _, arg := range args {
 				parts := strings.SplitN(arg, "=", 2)
 				if len(parts) != 2 {
-					out.Die("invalid argument %q: expected FEATURE=VERSION", arg)
+					return fmt.Errorf("invalid argument %q: expected FEATURE=VERSION", arg)
 				}
 				version, err := strconv.ParseInt(parts[1], 10, 16)
-				out.MaybeDie(err, "invalid version in %q: %v", arg, err)
+				if err != nil {
+					return fmt.Errorf("invalid version in %q: %v", arg, err)
+				}
 				req.FeatureUpdates = append(req.FeatureUpdates, kmsg.UpdateFeaturesRequestFeatureUpdate{
 					Feature:         parts[0],
 					MaxVersionLevel: int16(version),
@@ -104,11 +109,16 @@ To avoid accidental updates, this command requires a --run flag to run.
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to update features: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to update features: %v", err)
+			}
 			resp := kresp.(*kmsg.UpdateFeaturesResponse)
 			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-				out.ErrAndMsg(resp.ErrorCode, resp.ErrorMessage)
-				out.Exit()
+				additional := ""
+				if resp.ErrorMessage != nil {
+					additional = ": " + *resp.ErrorMessage
+				}
+				return fmt.Errorf("%s%s", err, additional)
 			}
 
 			table := out.NewFormattedTable(cl.Format(), "features.update", 1, "results",
@@ -124,6 +134,7 @@ To avoid accidental updates, this command requires a --run flag to run.
 				table.Row(result.Feature, errStr, msg)
 			}
 			table.Flush()
+			return nil
 		},
 	}
 

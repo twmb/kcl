@@ -57,27 +57,43 @@ SEE ALSO:
   kcl group seek       reset group offsets
   kcl consume -g       consume as a group member
 `,
-		Run: func(_ *cobra.Command, groups []string) {
+		RunE: func(_ *cobra.Command, groups []string) error {
 			if regex {
-				groups = filterGroupsByRegex(cl, groups, listGroups)
+				var err error
+				groups, err = filterGroupsByRegex(cl, groups, listGroups)
+				if err != nil {
+					return err
+				}
 			}
 
 			if useConsumerDescribe {
-				describeConsumerGroups(cl, groups, readCommitted, showSummary, showMembers, showLag, lagPerTopic, lagFilter)
-				return
+				return describeConsumerGroups(cl, groups, readCommitted, showSummary, showMembers, showLag, lagPerTopic, lagFilter)
 			}
 
 			if len(groups) == 0 {
-				groups = listGroups(cl)
+				var err error
+				groups, err = listGroups(cl)
+				if err != nil {
+					return err
+				}
 			}
 			if len(groups) == 0 {
-				out.Die("no groups to describe")
+				return fmt.Errorf("no groups to describe")
 			}
 
-			described := describeClassicGroups(cl, groups)
-			fetchedOffsets := fetchOffsets(cl, groups)
-			listedOffsets := listOffsets(cl, described, fetchedOffsets, readCommitted)
-			printDescribed(described, fetchedOffsets, listedOffsets, showSummary, showMembers, showLag, lagPerTopic, lagFilter)
+			described, err := describeClassicGroups(cl, groups)
+			if err != nil {
+				return err
+			}
+			fetchedOffsets, err := fetchOffsets(cl, groups)
+			if err != nil {
+				return err
+			}
+			listedOffsets, err := listOffsets(cl, described, fetchedOffsets, readCommitted)
+			if err != nil {
+				return err
+			}
+			return printDescribed(described, fetchedOffsets, listedOffsets, showSummary, showMembers, showLag, lagPerTopic, lagFilter)
 		},
 	}
 
@@ -138,12 +154,16 @@ func parseLagFilter(expr string) (func(lag int64) bool, error) {
 // anySection returns true if any section flag is set; false means show all.
 func anySection(s, m, l bool) bool { return s || m || l }
 
-func describeConsumerGroups(cl *client.Client, groups []string, readCommitted, showSummary, showMembers, showLag bool, lagPerTopic bool, lagFilter string) {
+func describeConsumerGroups(cl *client.Client, groups []string, readCommitted, showSummary, showMembers, showLag bool, lagPerTopic bool, lagFilter string) error {
 	if len(groups) == 0 {
-		groups = listGroupsByType(cl, []string{"consumer"})
+		var err error
+		groups, err = listGroupsByType(cl, []string{"consumer"})
+		if err != nil {
+			return err
+		}
 	}
 	if len(groups) == 0 {
-		out.Die("no consumer groups to describe")
+		return fmt.Errorf("no consumer groups to describe")
 	}
 
 	req := kmsg.NewPtrConsumerGroupDescribeRequest()
@@ -200,6 +220,7 @@ func describeConsumerGroups(cl *client.Client, groups []string, readCommitted, s
 			}
 		}
 	}
+	return nil
 }
 
 func printConsumerGroup(broker int32, group kmsg.ConsumerGroupDescribeResponseGroup) {
@@ -276,7 +297,7 @@ func formatAssignment(a kmsg.Assignment) string {
 	return strings.Join(parts, " ")
 }
 
-func listGroupsByType(cl *client.Client, types []string) []string {
+func listGroupsByType(cl *client.Client, types []string) ([]string, error) {
 	req := kmsg.NewPtrListGroupsRequest()
 	req.TypesFilter = types
 
@@ -298,9 +319,9 @@ func listGroupsByType(cl *client.Client, types []string) []string {
 		}
 	}
 	if failures == len(shards) {
-		out.Die("all %d ListGroups requests failed", failures)
+		return nil, fmt.Errorf("all %d ListGroups requests failed", failures)
 	}
-	return groups
+	return groups, nil
 }
 
 func shardFail(name string, shard kgo.ResponseShard, failures *int) {
@@ -312,11 +333,11 @@ func shardErr(name string, shard kgo.ResponseShard, err error) {
 	fmt.Printf("%s request error to broker %d (%s:%d): %v\n", name, shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, err)
 }
 
-func listGroups(cl *client.Client) []string {
+func listGroups(cl *client.Client) ([]string, error) {
 	return listGroupsByType(cl, []string{"classic", "consumer"})
 }
 
-func describeClassicGroups(cl *client.Client, groups []string) []describedGroup {
+func describeClassicGroups(cl *client.Client, groups []string) ([]describedGroup, error) {
 	req := kmsg.NewPtrDescribeGroupsRequest()
 	req.Groups = groups
 
@@ -333,9 +354,9 @@ func describeClassicGroups(cl *client.Client, groups []string) []describedGroup 
 		described = append(described, resp.Groups...)
 	}
 	if failures == len(shards) {
-		out.Die("all %d DescribeGroups requests failed", failures)
+		return nil, fmt.Errorf("all %d DescribeGroups requests failed", failures)
 	}
-	return described
+	return described, nil
 }
 
 type offset struct {
@@ -343,7 +364,7 @@ type offset struct {
 	err error
 }
 
-func fetchOffsets(cl *client.Client, groups []string) map[string]map[int32]offset {
+func fetchOffsets(cl *client.Client, groups []string) (map[string]map[int32]offset, error) {
 	fetched := make(map[string]map[int32]offset)
 	var failures int
 	for i := range groups {
@@ -371,14 +392,14 @@ func fetchOffsets(cl *client.Client, groups []string) map[string]map[int32]offse
 		}
 	}
 	if failures == len(groups) {
-		out.Die("all %d OffsetFetch requests failed", failures)
+		return nil, fmt.Errorf("all %d OffsetFetch requests failed", failures)
 	}
-	return fetched
+	return fetched, nil
 }
 
 // listOffsets lists end offsets for all topic-partitions that have committed
 // offsets or member assignments.
-func listOffsets(cl *client.Client, described []describedGroup, fetched map[string]map[int32]offset, readCommitted bool) map[string]map[int32]offset {
+func listOffsets(cl *client.Client, described []describedGroup, fetched map[string]map[int32]offset, readCommitted bool) (map[string]map[int32]offset, error) {
 	tps := make(map[string]map[int32]struct{})
 
 	// Include partitions from member assignments.
@@ -407,7 +428,7 @@ func listOffsets(cl *client.Client, described []describedGroup, fetched map[stri
 	}
 
 	if len(tps) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	req := kmsg.NewPtrListOffsetsRequest()
@@ -451,9 +472,9 @@ func listOffsets(cl *client.Client, described []describedGroup, fetched map[stri
 		}
 	}
 	if failures == len(shards) {
-		out.Die("all %d ListOffsets requests failed", failures)
+		return nil, fmt.Errorf("all %d ListOffsets requests failed", failures)
 	}
-	return listed
+	return listed, nil
 }
 
 type describeRow struct {
@@ -477,10 +498,10 @@ func printDescribed(
 	showSummary, showMembers, showLag bool,
 	lagPerTopic bool,
 	lagFilterExpr string,
-) {
+) error {
 	lagFn, err := parseLagFilter(lagFilterExpr)
 	if err != nil {
-		out.Die("%v", err)
+		return fmt.Errorf("%v", err)
 	}
 
 	showAll := !anySection(showSummary, showMembers, showLag)
@@ -678,6 +699,7 @@ func printDescribed(
 			fmt.Println()
 		}
 	}
+	return nil
 }
 
 type describedGroupMember struct {
@@ -743,20 +765,23 @@ func unmarshalGroupDescribeMembers(
 
 // filterGroupsByRegex lists all groups using listFn, compiles each pattern
 // argument as a regex, and returns only groups matching at least one pattern.
-func filterGroupsByRegex(cl *client.Client, patterns []string, listFn func(*client.Client) []string) []string {
+func filterGroupsByRegex(cl *client.Client, patterns []string, listFn func(*client.Client) ([]string, error)) ([]string, error) {
 	if len(patterns) == 0 {
-		out.Die("--regex requires at least one pattern argument")
+		return nil, fmt.Errorf("--regex requires at least one pattern argument")
 	}
 	var compiled []*regexp.Regexp
 	for _, p := range patterns {
 		re, err := regexp.Compile(p)
 		if err != nil {
-			out.Die("invalid regex %q: %v", p, err)
+			return nil, fmt.Errorf("invalid regex %q: %v", p, err)
 		}
 		compiled = append(compiled, re)
 	}
 
-	all := listFn(cl)
+	all, err := listFn(cl)
+	if err != nil {
+		return nil, err
+	}
 	var matched []string
 	for _, g := range all {
 		for _, re := range compiled {
@@ -766,5 +791,5 @@ func filterGroupsByRegex(cl *client.Client, patterns []string, listFn func(*clie
 			}
 		}
 	}
-	return matched
+	return matched, nil
 }

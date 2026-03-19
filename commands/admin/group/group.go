@@ -49,7 +49,7 @@ This command simply lists groups and their protocol types; it does not describe
 the groups listed. This prints all of the information from a ListGroups request.
 `,
 		Args: cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			for i, f := range statesFilter {
 				switch client.Strnorm(f) {
 				case "preparing":
@@ -89,6 +89,7 @@ the groups listed. This prints all of the information from a ListGroups request.
 				}
 			}
 			table.Flush()
+			return nil
 		},
 	}
 	cmd.Flags().StringArrayVarP(&statesFilter, "filter", "f", nil, "filter groups listed by state (Preparing, PreparingRebalance, CompletingRebalance, Stable, Dead, Empty; Kafka 2.6.0+; repeatable)")
@@ -104,9 +105,13 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 		Use:   "delete GROUPS...",
 		Short: "Delete all listed Kafka groups (Kafka 1.1.0+).",
 		Args:  cobra.MinimumNArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			if regex {
-				args = filterGroupsByRegex(cl, args, listGroups)
+				var err error
+				args, err = filterGroupsByRegex(cl, args, listGroups)
+				if err != nil {
+					return err
+				}
 			}
 
 			if dryRun {
@@ -114,11 +119,11 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 				for _, group := range args {
 					fmt.Printf("  %s\n", group)
 				}
-				return
+				return nil
 			}
 
 			if len(args) == 0 {
-				out.Die("no groups matched")
+				return fmt.Errorf("no groups matched")
 			}
 
 			brokerResps := cl.Client().RequestSharded(context.Background(), &kmsg.DeleteGroupsRequest{
@@ -146,6 +151,7 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 					fmt.Fprintf(tw, "%d\t%s\t%s\n", brokerResp.Meta.NodeID, resp.Group, msg)
 				}
 			}
+			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print groups that would be deleted without actually deleting them")
@@ -179,9 +185,11 @@ with a JSON file:
 		Example: "offset-delete mygroup -t foo:1,2,3 -t bar:9",
 		Args:    cobra.ExactArgs(1),
 
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			tps, err := flagutil.ParseTopicPartitions(topicParts)
-			out.MaybeDie(err, "unable to parse topic partitions: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to parse topic partitions: %v", err)
+			}
 
 			if fromFile != "" {
 				type fileEntry struct {
@@ -190,9 +198,13 @@ with a JSON file:
 				}
 				var entries []fileEntry
 				raw, err := os.ReadFile(fromFile)
-				out.MaybeDie(err, "unable to read --from-file: %v", err)
+				if err != nil {
+					return fmt.Errorf("unable to read --from-file: %v", err)
+				}
 				err = json.Unmarshal(raw, &entries)
-				out.MaybeDie(err, "unable to parse --from-file JSON: %v", err)
+				if err != nil {
+					return fmt.Errorf("unable to parse --from-file JSON: %v", err)
+				}
 				for _, e := range entries {
 					tps[e.Topic] = append(tps[e.Topic], e.Partition)
 				}
@@ -212,11 +224,13 @@ with a JSON file:
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to delete offsets: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to delete offsets: %v", err)
+			}
 			resp := kresp.(*kmsg.OffsetDeleteResponse)
 
 			if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
-				out.Die(err.Error())
+				return fmt.Errorf("%s", err.Error())
 			}
 
 			table := out.NewFormattedTable(cl.Format(), "group.offset-delete", 1, "results",
@@ -231,6 +245,7 @@ with a JSON file:
 				}
 			}
 			table.Flush()
+			return nil
 		},
 	}
 

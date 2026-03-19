@@ -60,16 +60,16 @@ EXAMPLES:
   kcl share-group seek mygroup --to-file offsets.json
 `,
 		Args: cobra.ExactArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			groupName := args[0]
 
 			hasTo := to != ""
 			hasToFile := toFile != ""
 			if !hasTo && !hasToFile {
-				out.Die("one of --to or --to-file is required")
+				return fmt.Errorf("one of --to or --to-file is required")
 			}
 			if hasTo && hasToFile {
-				out.Die("--to and --to-file are mutually exclusive")
+				return fmt.Errorf("--to and --to-file are mutually exclusive")
 			}
 
 			kclClient := cl.Client()
@@ -90,10 +90,14 @@ EXAMPLES:
 					Offset    int64  `json:"offset"`
 				}
 				data, err := os.ReadFile(toFile)
-				out.MaybeDie(err, "unable to read --to-file %q: %v", toFile, err)
+				if err != nil {
+					return fmt.Errorf("unable to read --to-file %q: %v", toFile, err)
+				}
 				var entries []fileEntry
 				err = json.Unmarshal(data, &entries)
-				out.MaybeDie(err, "unable to parse --to-file %q: %v", toFile, err)
+				if err != nil {
+					return fmt.Errorf("unable to parse --to-file %q: %v", toFile, err)
+				}
 				for _, e := range entries {
 					if len(topics) > 0 {
 						found := false
@@ -111,22 +115,26 @@ EXAMPLES:
 				}
 			} else {
 				spec, err := offsetparse.Parse(to, time.Now())
-				out.MaybeDie(err, "unable to parse --to %q: %v", to, err)
+				if err != nil {
+					return fmt.Errorf("unable to parse --to %q: %v", to, err)
+				}
 				if spec.End != nil {
-					out.Die("--to does not accept range offsets; use a single target value")
+					return fmt.Errorf("--to does not accept range offsets; use a single target value")
 				}
 				if spec.Start.Kind == offsetparse.KindRelative {
-					out.Die("+N/-N relative offsets are not supported for share groups (use start, end, N, or @timestamp)")
+					return fmt.Errorf("+N/-N relative offsets are not supported for share groups (use start, end, N, or @timestamp)")
 				}
 
 				if len(topics) == 0 {
-					out.Die("--topics is required when using --to")
+					return fmt.Errorf("--topics is required when using --to")
 				}
 
 				switch spec.Start.Kind {
 				case offsetparse.KindStart:
 					listed, err := adm.ListStartOffsets(ctx, topics...)
-					out.MaybeDie(err, "unable to list start offsets: %v", err)
+					if err != nil {
+						return fmt.Errorf("unable to list start offsets: %v", err)
+					}
 					listed.Each(func(lo kadm.ListedOffset) {
 						if lo.Err == nil {
 							targets = append(targets, targetOffset{lo.Topic, lo.Partition, lo.Offset})
@@ -135,7 +143,9 @@ EXAMPLES:
 
 				case offsetparse.KindEnd:
 					listed, err := adm.ListEndOffsets(ctx, topics...)
-					out.MaybeDie(err, "unable to list end offsets: %v", err)
+					if err != nil {
+						return fmt.Errorf("unable to list end offsets: %v", err)
+					}
 					listed.Each(func(lo kadm.ListedOffset) {
 						if lo.Err == nil {
 							targets = append(targets, targetOffset{lo.Topic, lo.Partition, lo.Offset})
@@ -144,7 +154,9 @@ EXAMPLES:
 
 				case offsetparse.KindExact:
 					listed, err := adm.ListEndOffsets(ctx, topics...)
-					out.MaybeDie(err, "unable to list offsets: %v", err)
+					if err != nil {
+						return fmt.Errorf("unable to list offsets: %v", err)
+					}
 					listed.Each(func(lo kadm.ListedOffset) {
 						if lo.Err == nil {
 							targets = append(targets, targetOffset{lo.Topic, lo.Partition, spec.Start.Value})
@@ -153,7 +165,9 @@ EXAMPLES:
 
 				case offsetparse.KindTimestamp:
 					listed, err := adm.ListOffsetsAfterMilli(ctx, spec.Start.Value, topics...)
-					out.MaybeDie(err, "unable to resolve timestamp to offsets: %v", err)
+					if err != nil {
+						return fmt.Errorf("unable to resolve timestamp to offsets: %v", err)
+					}
 					listed.Each(func(lo kadm.ListedOffset) {
 						if lo.Err == nil {
 							targets = append(targets, targetOffset{lo.Topic, lo.Partition, lo.Offset})
@@ -161,13 +175,13 @@ EXAMPLES:
 					})
 
 				default:
-					out.Die("unsupported seek target kind: %v", spec.Start.Kind)
+					return fmt.Errorf("unsupported seek target kind: %v", spec.Start.Kind)
 				}
 			}
 
 			if len(targets) == 0 {
 				fmt.Println("No offsets to change.")
-				return
+				return nil
 			}
 
 			sort.Slice(targets, func(i, j int) bool {
@@ -187,7 +201,7 @@ EXAMPLES:
 
 			// Approval phase.
 			if dryRun {
-				return
+				return nil
 			}
 			if !execute {
 				fmt.Print("\nApply these offset changes? [y/N] ")
@@ -196,7 +210,7 @@ EXAMPLES:
 				answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
 				if answer != "y" && answer != "yes" {
 					fmt.Println("Aborted.")
-					return
+					return nil
 				}
 			}
 
@@ -224,14 +238,16 @@ EXAMPLES:
 			}
 
 			kresp, err := req.RequestWith(ctx, kclClient)
-			out.MaybeDie(err, "unable to alter share group offsets: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to alter share group offsets: %v", err)
+			}
 
 			if err := kerr.ErrorForCode(kresp.ErrorCode); err != nil {
 				msg := err.Error()
 				if kresp.ErrorMessage != nil {
 					msg += ": " + *kresp.ErrorMessage
 				}
-				out.Die(msg)
+				return fmt.Errorf("%s", msg)
 			}
 
 			// Print results.
@@ -249,6 +265,7 @@ EXAMPLES:
 				}
 			}
 			resultTw.Flush()
+			return nil
 		},
 	}
 

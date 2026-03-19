@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"strings"
 
@@ -31,6 +30,7 @@ import (
 	"github.com/twmb/kcl/commands/myconfig"
 	"github.com/twmb/kcl/commands/produce"
 	"github.com/twmb/kcl/commands/transact"
+	"github.com/twmb/kcl/out"
 )
 
 // TODO remove cobra to remove ridiculous implicit "help" command from everything.
@@ -132,8 +132,7 @@ Command completion is available at:
 	}
 
 	if err := root.Execute(); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		out.HandleError(err, cl.Format())
 	}
 }
 

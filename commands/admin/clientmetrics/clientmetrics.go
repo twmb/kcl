@@ -3,6 +3,7 @@ package clientmetrics
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -37,7 +38,7 @@ func listCommand(cl *client.Client) *cobra.Command {
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List client metrics subscription resources.",
-		Run: func(_ *cobra.Command, _ []string) {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			// ListClientMetricsResources was renamed to ListConfigResources in Kafka 4.1.
 			// Use DescribeConfigs with an empty resource name to list all.
 			req := kmsg.NewPtrDescribeConfigsRequest()
@@ -47,7 +48,9 @@ func listCommand(cl *client.Client) *cobra.Command {
 			req.Resources = append(req.Resources, r)
 
 			kresp, err := req.RequestWith(context.Background(), cl.Client())
-			out.MaybeDie(err, "unable to list client metrics: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to list client metrics: %v", err)
+			}
 
 			table := out.NewFormattedTable(cl.Format(), "client-metrics.list", 1, "subscriptions",
 				"NAME", "CONFIGS")
@@ -59,6 +62,7 @@ func listCommand(cl *client.Client) *cobra.Command {
 				table.Row(r.ResourceName, len(r.Configs))
 			}
 			table.Flush()
+			return nil
 		},
 	}
 }
@@ -69,7 +73,7 @@ func describeCommand(cl *client.Client) *cobra.Command {
 		Aliases: []string{"d"},
 		Short:   "Describe a client metrics subscription.",
 		Args:    cobra.ExactArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			req := kmsg.NewPtrDescribeConfigsRequest()
 			r := kmsg.NewDescribeConfigsRequestResource()
 			r.ResourceType = resourceTypeClientMetrics
@@ -77,7 +81,9 @@ func describeCommand(cl *client.Client) *cobra.Command {
 			req.Resources = append(req.Resources, r)
 
 			kresp, err := req.RequestWith(context.Background(), cl.Client())
-			out.MaybeDie(err, "unable to describe client metrics: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to describe client metrics: %v", err)
+			}
 
 			for _, r := range kresp.Resources {
 				if err := kerr.ErrorForCode(r.ErrorCode); err != nil {
@@ -85,7 +91,7 @@ func describeCommand(cl *client.Client) *cobra.Command {
 					if r.ErrorMessage != nil {
 						msg += ": " + *r.ErrorMessage
 					}
-					out.Die(msg)
+					return fmt.Errorf("%s", msg)
 				}
 
 				table := out.NewFormattedTable(cl.Format(), "client-metrics.describe", 1, "configs",
@@ -99,6 +105,7 @@ func describeCommand(cl *client.Client) *cobra.Command {
 				}
 				table.Flush()
 			}
+			return nil
 		},
 	}
 }
@@ -124,7 +131,7 @@ EXAMPLES:
   kcl client-metrics alter my-sub --set match=client_software_name=apache-kafka-java
 `,
 		Args: cobra.ExactArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			req := kmsg.NewPtrIncrementalAlterConfigsRequest()
 			r := kmsg.NewIncrementalAlterConfigsRequestResource()
 			r.ResourceType = resourceTypeClientMetrics
@@ -133,7 +140,7 @@ EXAMPLES:
 			for _, kv := range setKVs {
 				k, v, ok := strings.Cut(kv, "=")
 				if !ok {
-					out.Die("--set value %q must be key=value", kv)
+					return fmt.Errorf("--set value %q must be key=value", kv)
 				}
 				c := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
 				c.Name = k
@@ -150,7 +157,9 @@ EXAMPLES:
 
 			req.Resources = append(req.Resources, r)
 			kresp, err := req.RequestWith(context.Background(), cl.Client())
-			out.MaybeDie(err, "unable to alter client metrics: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to alter client metrics: %v", err)
+			}
 
 			table := out.NewFormattedTable(cl.Format(), "client-metrics.alter", 1, "results",
 				"NAME", "STATUS")
@@ -166,6 +175,7 @@ EXAMPLES:
 				table.Row(r.ResourceName, "OK")
 			}
 			table.Flush()
+			return nil
 		},
 	}
 
@@ -180,7 +190,7 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 		Use:   "delete NAME",
 		Short: "Delete a client metrics subscription.",
 		Args:  cobra.ExactArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			// Delete all configs for the resource to effectively delete the subscription.
 			req := kmsg.NewPtrDescribeConfigsRequest()
 			r := kmsg.NewDescribeConfigsRequestResource()
@@ -189,7 +199,9 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 			req.Resources = append(req.Resources, r)
 
 			kresp, err := req.RequestWith(context.Background(), cl.Client())
-			out.MaybeDie(err, "unable to describe client metrics for deletion: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to describe client metrics for deletion: %v", err)
+			}
 
 			alterReq := kmsg.NewPtrIncrementalAlterConfigsRequest()
 			ar := kmsg.NewIncrementalAlterConfigsRequestResource()
@@ -207,7 +219,9 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 
 			alterReq.Resources = append(alterReq.Resources, ar)
 			alterResp, err := alterReq.RequestWith(context.Background(), cl.Client())
-			out.MaybeDie(err, "unable to delete client metrics: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to delete client metrics: %v", err)
+			}
 
 			table := out.NewFormattedTable(cl.Format(), "client-metrics.delete", 1, "results",
 				"NAME", "STATUS")
@@ -223,6 +237,7 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 				table.Row(res.ResourceName, "deleted")
 			}
 			table.Flush()
+			return nil
 		},
 	}
 }

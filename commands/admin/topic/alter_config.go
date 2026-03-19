@@ -2,6 +2,7 @@ package topic
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -40,7 +41,7 @@ SEE ALSO:
   kcl config describe    describe configs
 `,
 		Args: cobra.ExactArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			topicName := args[0]
 
 			req := kmsg.NewPtrIncrementalAlterConfigsRequest()
@@ -55,7 +56,7 @@ SEE ALSO:
 			for _, kv := range setKVs {
 				k, v, ok := strings.Cut(kv, "=")
 				if !ok {
-					out.Die("--set value %q must be key=value", kv)
+					return fmt.Errorf("--set value %q must be key=value", kv)
 				}
 				c := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
 				c.Name = k
@@ -72,7 +73,7 @@ SEE ALSO:
 			for _, kv := range appendKVs {
 				k, v, ok := strings.Cut(kv, "=")
 				if !ok {
-					out.Die("--append value %q must be key=value", kv)
+					return fmt.Errorf("--append value %q must be key=value", kv)
 				}
 				c := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
 				c.Name = k
@@ -83,7 +84,7 @@ SEE ALSO:
 			for _, kv := range subtKVs {
 				k, v, ok := strings.Cut(kv, "=")
 				if !ok {
-					out.Die("--subtract value %q must be key=value", kv)
+					return fmt.Errorf("--subtract value %q must be key=value", kv)
 				}
 				c := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
 				c.Name = k
@@ -93,13 +94,15 @@ SEE ALSO:
 			}
 
 			if len(r.Configs) == 0 {
-				out.Die("no config changes specified; use --set, --delete, --append, or --subtract")
+				return fmt.Errorf("no config changes specified; use --set, --delete, --append, or --subtract")
 			}
 
 			req.Resources = append(req.Resources, r)
 
 			kresp, err := req.RequestWith(context.Background(), cl.Client())
-			out.MaybeDie(err, "unable to alter configs: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to alter configs: %v", err)
+			}
 
 			table := out.NewFormattedTable(cl.Format(), "topic.alter-config", 1, "topics",
 				"NAME", "MESSAGE")
@@ -119,6 +122,7 @@ SEE ALSO:
 				}
 			}
 			table.Flush()
+			return nil
 		},
 	}
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
@@ -51,7 +52,7 @@ type querier struct {
 
 // parseEntity parses the entity and then, using that, sets resourceName and
 // the requestor.
-func (q *querier) parseEntity(args []string) {
+func (q *querier) parseEntity(args []string) error {
 	switch q.rawEntity {
 	case "t", "topic":
 		q.entity = entityTopic
@@ -64,13 +65,13 @@ func (q *querier) parseEntity(args []string) {
 	case "g", "group":
 		q.entity = entityGroup
 	default:
-		out.Die("unrecognized entity type %q (allowed: t, topic, b, broker, bl, broker logger, cm, client-metrics, g, group)", q.rawEntity)
+		return fmt.Errorf("unrecognized entity type %q (allowed: t, topic, b, broker, bl, broker logger, cm, client-metrics, g, group)", q.rawEntity)
 	}
 
 	switch q.entity {
 	case entityTopic, entityClientMetrics, entityGroup:
 		if len(args) == 0 {
-			out.Die("missing entity name")
+			return fmt.Errorf("missing entity name")
 		}
 	}
 	if len(args) > 0 {
@@ -80,9 +81,12 @@ func (q *querier) parseEntity(args []string) {
 	q.requestor = q.cl.Client()
 	if q.entity == entityBroker && len(args) > 0 {
 		bid, err := strconv.Atoi(args[0])
-		out.MaybeDie(err, "unable to parse broker ID: %v", err)
+		if err != nil {
+			return fmt.Errorf("unable to parse broker ID: %v", err)
+		}
 		q.requestor = q.cl.Client().Broker(bid)
 	}
+	return nil
 }
 
 func alterCommand(cl *client.Client) *cobra.Command {
@@ -131,8 +135,8 @@ alter my-share-group -tg -s share.auto.offset.reset=earliest
 
 alter my-subscription -tcm -s match=[client_software_name=kcl]`,
 
-		Run: func(_ *cobra.Command, args []string) {
-			cfger.alter(args)
+		RunE: func(_ *cobra.Command, args []string) error {
+			return cfger.alter(args)
 		},
 	}
 
@@ -174,7 +178,7 @@ type cfger struct {
 	dryRun      bool
 }
 
-func (c *cfger) parseKVs() {
+func (c *cfger) parseKVs() error {
 	// If any clean flags are used, auto-enable incremental mode and
 	// prepend them to rawKVs with the appropriate prefix.
 	if len(c.setKVs) > 0 || len(c.deleteKeys) > 0 || len(c.appendKVs) > 0 || len(c.subtractKVs) > 0 {
@@ -198,7 +202,7 @@ func (c *cfger) parseKVs() {
 		if c.incremental {
 			colon := strings.IndexByte(split[0], ':')
 			if colon == -1 {
-				out.Die("missing op: prefix on key %q", split[0])
+				return fmt.Errorf("missing op: prefix on key %q", split[0])
 			}
 
 			rawOp := split[0][:colon]
@@ -214,13 +218,13 @@ func (c *cfger) parseKVs() {
 			case "-":
 				op = 3
 			default:
-				out.Die("unrecognized incremental op %q; not in set [s, set, d, del, +, -]", rawOp)
+				return fmt.Errorf("unrecognized incremental op %q; not in set [s, set, d, del, +, -]", rawOp)
 			}
 
 			var v *string
 			if op == 0 || op == 2 {
 				if len(split) != 2 {
-					out.Die("set or append key %q missing value", split[0])
+					return fmt.Errorf("set or append key %q missing value", split[0])
 				}
 				v = &split[1]
 			}
@@ -229,29 +233,33 @@ func (c *cfger) parseKVs() {
 
 		} else {
 			if len(split) != 2 {
-				out.Die("key %q missing value", split[0])
+				return fmt.Errorf("key %q missing value", split[0])
 			}
 			if strings.Contains(split[0], ":") {
-				out.Die("invalid incremental syntax on key %q", split[0])
+				return fmt.Errorf("invalid incremental syntax on key %q", split[0])
 			}
 			c.parsedKVs = append(c.parsedKVs, kv{k: split[0], v: &split[1]})
 		}
 	}
+	return nil
 }
 
 // alter actually issues an alter config command, where args can contain
 // either nothing or a single topic or broker name.
-func (c *cfger) alter(args []string) {
-	c.parseEntity(args)
-	c.parseKVs()
-	if c.incremental {
-		c.alterIncremental()
-	} else {
-		c.alterOld()
+func (c *cfger) alter(args []string) error {
+	if err := c.parseEntity(args); err != nil {
+		return err
 	}
+	if err := c.parseKVs(); err != nil {
+		return err
+	}
+	if c.incremental {
+		return c.alterIncremental()
+	}
+	return c.alterOld()
 }
 
-func (c *cfger) alterIncremental() {
+func (c *cfger) alterIncremental() error {
 	req := kmsg.IncrementalAlterConfigsRequest{
 		ValidateOnly: c.dryRun,
 		Resources: []kmsg.IncrementalAlterConfigsRequestResource{{
@@ -269,7 +277,9 @@ func (c *cfger) alterIncremental() {
 	}
 
 	kresp, err := c.requestor.Request(context.Background(), &req)
-	out.MaybeDie(err, "unable to alter config: %v", err)
+	if err != nil {
+		return fmt.Errorf("unable to alter config: %v", err)
+	}
 	resp := kresp.(*kmsg.IncrementalAlterConfigsResponse)
 
 	table := out.NewFormattedTable(c.cl.Format(), "config.alter", 1, "results",
@@ -282,9 +292,10 @@ func (c *cfger) alterIncremental() {
 		table.Row(resource.ResourceName, resource.ErrorCode, errMsg)
 	}
 	table.Flush()
+	return nil
 }
 
-func (c *cfger) alterOld() {
+func (c *cfger) alterOld() error {
 	req := kmsg.AlterConfigsRequest{
 		ValidateOnly: c.dryRun,
 		Resources: []kmsg.AlterConfigsRequestResource{{
@@ -294,7 +305,9 @@ func (c *cfger) alterOld() {
 	}
 
 	if !c.noConfirm {
-		c.confirmAlterLoss()
+		if err := c.confirmAlterLoss(); err != nil {
+			return err
+		}
 	}
 
 	for _, kv := range c.parsedKVs {
@@ -305,7 +318,9 @@ func (c *cfger) alterOld() {
 	}
 
 	kresp, err := c.requestor.Request(context.Background(), &req)
-	out.MaybeDie(err, "unable to alter config: %v", err)
+	if err != nil {
+		return fmt.Errorf("unable to alter config: %v", err)
+	}
 	resp := kresp.(*kmsg.AlterConfigsResponse)
 
 	table := out.NewFormattedTable(c.cl.Format(), "config.alter", 1, "results",
@@ -318,13 +333,17 @@ func (c *cfger) alterOld() {
 		table.Row(resource.ResourceName, resource.ErrorCode, errMsg)
 	}
 	table.Flush()
+	return nil
 }
 
 // confirmAlterLoss prompts for yes or no when issuing alter configs
 // for all config options that will be lost.
-func (c *cfger) confirmAlterLoss() {
+func (c *cfger) confirmAlterLoss() error {
 	existing := make(map[string]string, 10)
-	_, describeResource := c.querier.issueDescribeConfig(false)
+	_, describeResource, err := c.querier.issueDescribeConfig(false)
+	if err != nil {
+		return err
+	}
 	for _, entry := range describeResource.Configs {
 		switch entry.Source {
 		case 4, 5: // static, default
@@ -368,14 +387,15 @@ func (c *cfger) confirmAlterLoss() {
 			fmt.Scanf("%s", &s)
 			switch s {
 			case "y", "yes":
-				return
+				return nil
 			case "n", "no":
-				out.Die("aborting.")
+				return fmt.Errorf("aborting.")
 			default:
 				fmt.Printf("unrecognized input %q, valid options are y, yes, n, no\n", s)
 			}
 		}
 	}
+	return nil
 }
 
 // issues a describe config for a single resource and returns
@@ -383,6 +403,7 @@ func (c *cfger) confirmAlterLoss() {
 func (q querier) issueDescribeConfig(withDocs bool) (
 	*kmsg.DescribeConfigsResponse,
 	*kmsg.DescribeConfigsResponseResource,
+	error,
 ) {
 	req := kmsg.DescribeConfigsRequest{
 		Resources: []kmsg.DescribeConfigsRequestResource{{
@@ -393,18 +414,23 @@ func (q querier) issueDescribeConfig(withDocs bool) (
 	}
 
 	kresp, err := q.requestor.Request(context.Background(), &req)
-	out.MaybeDie(err, "unable to describe config: %v", err)
+	if err != nil {
+		return nil, nil, fmt.Errorf("unable to describe config: %v", err)
+	}
 	resp := kresp.(*kmsg.DescribeConfigsResponse)
 
 	if len(resp.Resources) != 1 {
-		out.Die("quitting; one resource requested but received %d", len(resp.Resources))
+		return nil, nil, fmt.Errorf("quitting; one resource requested but received %d", len(resp.Resources))
 	}
 	resource := resp.Resources[0]
-	if resource.ErrorCode != 0 {
-		out.ErrAndMsg(resource.ErrorCode, resource.ErrorMessage)
-		out.Exit()
+	if err := kerr.ErrorForCode(resource.ErrorCode); err != nil {
+		additional := ""
+		if resource.ErrorMessage != nil {
+			additional = ": " + *resource.ErrorMessage
+		}
+		return nil, nil, fmt.Errorf("%s%s", err, additional)
 	}
-	return resp, &resource
+	return resp, &resource, nil
 }
 
 func describeCommand(cl *client.Client) *cobra.Command {
@@ -442,10 +468,15 @@ describe my-share-group -tg
 
 describe my-subscription -tcm`,
 
-		Run: func(_ *cobra.Command, args []string) {
-			q.parseEntity(args)
+		RunE: func(_ *cobra.Command, args []string) error {
+			if err := q.parseEntity(args); err != nil {
+				return err
+			}
 
-			resp, resource := q.issueDescribeConfig(withDocs)
+			resp, resource, err := q.issueDescribeConfig(withDocs)
+			if err != nil {
+				return err
+			}
 
 			kvs := resource.Configs
 			sort.Slice(kvs, func(i, j int) bool {
@@ -482,7 +513,7 @@ describe my-subscription -tcm`,
 			table.Flush()
 
 			if !withDocs || resp.Version < 3 {
-				return
+				return nil
 			}
 
 			fmt.Println()
@@ -496,6 +527,7 @@ describe my-subscription -tcm`,
 				fmt.Println(*docs)
 				fmt.Println()
 			}
+			return nil
 		},
 	}
 

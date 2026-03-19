@@ -1,8 +1,9 @@
-// Package out contains simple functions to print messages out and maybe die.
+// Package out contains output formatting and error handling for kcl commands.
 package out
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -32,6 +33,43 @@ const (
 	ExitTimeout  = 5 // timeout
 )
 
+// ExitError is an error with a specific exit code. Commands should return
+// these to indicate non-default exit codes.
+type ExitCodeError struct {
+	Code int
+	Err  error
+}
+
+func (e *ExitCodeError) Error() string { return e.Err.Error() }
+func (e *ExitCodeError) Unwrap() error { return e.Err }
+
+// Errf returns an error that, when handled by HandleError, exits with the
+// given code.
+func Errf(code int, format string, args ...any) error {
+	return &ExitCodeError{Code: code, Err: fmt.Errorf(format, args...)}
+}
+
+// HandleError formats an error for output and calls os.Exit. If format is
+// "json", the error is written as JSON to stdout. Otherwise it is written
+// as plain text to stderr. The exit code is extracted from ExitCodeError
+// if present, otherwise defaults to 1.
+func HandleError(err error, format string) {
+	code := ExitError
+	var ce *ExitCodeError
+	if errors.As(err, &ce) {
+		code = ce.Code
+	}
+	if format == FormatJSON {
+		writeJSON(map[string]any{
+			"error":   err.Error(),
+			"code":    code,
+		})
+	} else {
+		fmt.Fprintln(os.Stderr, err)
+	}
+	os.Exit(code)
+}
+
 // Exit calls os.Exit(1).
 func Exit() {
 	os.Exit(ExitError)
@@ -43,6 +81,9 @@ func ExitCode(code int) {
 }
 
 // MaybeDie, if err is non-nil, prints the message and exits with 1.
+//
+// Deprecated: Commands should return errors instead. This remains for use
+// in goroutines and callbacks where returning an error is not possible.
 func MaybeDie(err error, msg string, args ...any) {
 	if err != nil {
 		Die(msg, args...)
@@ -50,6 +91,9 @@ func MaybeDie(err error, msg string, args ...any) {
 }
 
 // Die prints a message to stderr and exits with 1.
+//
+// Deprecated: Commands should return errors instead. This remains for use
+// in goroutines and callbacks where returning an error is not possible.
 func Die(msg string, args ...any) {
 	fmt.Fprintf(os.Stderr, msg+"\n", args...)
 	os.Exit(1)

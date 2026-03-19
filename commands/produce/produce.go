@@ -2,6 +2,7 @@ package produce
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"time"
@@ -162,22 +163,26 @@ To show partition and offset for each produced record:
   -o 'produced to %t[%p]@%o\n'
 `,
 		Args: cobra.MaximumNArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			if topicFlag != "" {
 				if len(args) > 0 {
-					out.Die("topic specified both as -t flag and positional argument")
+					return fmt.Errorf("topic specified both as -t flag and positional argument")
 				}
 				args = []string{topicFlag}
 			}
 
 			reader, err := kgo.NewRecordReader(os.Stdin, informat)
-			out.MaybeDie(err, "unable to parse in format: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to parse in format: %v", err)
+			}
 
 			var verboseFormatter *kgo.RecordFormatter
 			var verboseBuf []byte
 			if verboseFormat != "" {
 				verboseFormatter, err = kgo.NewRecordFormatter(verboseFormat)
-				out.MaybeDie(err, "unable to parse output-format: %v", err)
+				if err != nil {
+					return fmt.Errorf("unable to parse output-format: %v", err)
+				}
 			}
 
 			var codec kgo.CompressionCodec
@@ -193,7 +198,7 @@ To show partition and offset for each produced record:
 			case "zstd":
 				codec = kgo.ZstdCompression()
 			default:
-				out.Die("invalid compression codec %q", codec)
+				return fmt.Errorf("invalid compression codec %q", codec)
 			}
 			cl.AddOpt(kgo.ProducerBatchCompression(codec))
 
@@ -206,7 +211,7 @@ To show partition and offset for each produced record:
 			case 1:
 				cl.AddOpt(kgo.RequiredAcks(kgo.LeaderAck()))
 			default:
-				out.Die("invalid acks %d not in allowed -1, 0, 1", acks)
+				return fmt.Errorf("invalid acks %d not in allowed -1, 0, 1", acks)
 			}
 
 			if partition > -1 {
@@ -230,7 +235,7 @@ To show partition and offset for each produced record:
 				r, err := reader.ReadRecord()
 				if err != nil {
 					if err != io.EOF {
-						out.Die("final error: %v", err)
+						return fmt.Errorf("final error: %v", err)
 					}
 					break
 				}
@@ -239,7 +244,7 @@ To show partition and offset for each produced record:
 				}
 				if r.Topic == "" {
 					if len(args) == 0 {
-						out.Die("topic missing from both produce line and from parse format")
+						return fmt.Errorf("topic missing from both produce line and from parse format")
 					}
 					r.Topic = args[0]
 				}
@@ -257,6 +262,7 @@ To show partition and offset for each produced record:
 			}
 
 			cl.Client().Flush(context.Background())
+			return nil
 		},
 	}
 

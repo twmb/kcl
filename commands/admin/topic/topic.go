@@ -95,9 +95,11 @@ replicas each. When using --replica-assignment, do not use --num-partitions or
 --replication-factor.
 `,
 		Args: cobra.MinimumNArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			kvs, err := kv.Parse(configKVs)
-			out.MaybeDie(err, "unable to parse KVs: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to parse KVs: %v", err)
+			}
 			req := kmsg.CreateTopicsRequest{TimeoutMillis: cl.TimeoutMillis()}
 			req.ValidateOnly = validateOnly
 			var configs []kmsg.CreateTopicsRequestTopicConfig
@@ -111,9 +113,11 @@ replicas each. When using --replica-assignment, do not use --num-partitions or
 			var assignments []kmsg.CreateTopicsRequestTopicReplicaAssignment
 			if replicaAssignment != "" {
 				assignments, err = parseReplicaAssignment(replicaAssignment)
-				out.MaybeDie(err, "unable to parse replica assignment: %v", err)
+				if err != nil {
+					return fmt.Errorf("unable to parse replica assignment: %v", err)
+				}
 				if len(assignments) == 0 {
-					out.Die("--replica-assignment specified but no partitions parsed")
+					return fmt.Errorf("--replica-assignment specified but no partitions parsed")
 				}
 				numPartitions = -1
 				replicationFactor = -1
@@ -130,7 +134,9 @@ replicas each. When using --replica-assignment, do not use --num-partitions or
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), &req)
-			out.MaybeDie(err, "unable to create topic %q: %v", args[0], err)
+			if err != nil {
+				return fmt.Errorf("unable to create topic %q: %v", args[0], err)
+			}
 
 			resp := kresp.(*kmsg.CreateTopicsResponse)
 			var table *out.FormattedTable
@@ -160,6 +166,7 @@ replicas each. When using --replica-assignment, do not use --num-partitions or
 				}
 			}
 			table.Flush()
+			return nil
 		},
 	}
 
@@ -191,10 +198,12 @@ EXAMPLES:
   kcl topic list -i                 # include internal topics
   kcl topic list --regex 'logs\.'   # filter by regex
 `,
-		Run: func(_ *cobra.Command, _ []string) {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			req := kmsg.NewPtrMetadataRequest()
 			resp, err := req.RequestWith(context.Background(), cl.Client())
-			out.MaybeDie(err, "unable to list topics: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to list topics: %v", err)
+			}
 
 			var topics []kmsg.MetadataResponseTopic
 			for _, t := range resp.Topics {
@@ -203,7 +212,9 @@ EXAMPLES:
 				}
 				if regexFilter != "" {
 					re, err := regexp.Compile(regexFilter)
-					out.MaybeDie(err, "invalid --regex: %v", err)
+					if err != nil {
+						return fmt.Errorf("invalid --regex: %v", err)
+					}
 					name := ""
 					if t.Topic != nil {
 						name = *t.Topic
@@ -215,6 +226,7 @@ EXAMPLES:
 				topics = append(topics, t)
 			}
 			metadata.PrintTopics(resp.Version, topics, false, detailed)
+			return nil
 		},
 	}
 	cmd.Flags().BoolVarP(&detailed, "detailed", "d", false, "include detailed information about all topic partitions")
@@ -237,23 +249,27 @@ Use --regex to treat arguments as regex patterns: all topics matching any
 pattern will be deleted. Use --dry-run to see which topics would be deleted
 without actually deleting them.
 `,
-		Run: func(_ *cobra.Command, topics []string) {
+		RunE: func(_ *cobra.Command, topics []string) error {
 			if useRegex {
 				if ids {
-					out.Die("--regex and --ids cannot be used together")
+					return fmt.Errorf("--regex and --ids cannot be used together")
 				}
 				// Compile all patterns first.
 				var patterns []*regexp.Regexp
 				for _, pat := range topics {
 					re, err := regexp.Compile(pat)
-					out.MaybeDie(err, "invalid regex %q: %v", pat, err)
+					if err != nil {
+						return fmt.Errorf("invalid regex %q: %v", pat, err)
+					}
 					patterns = append(patterns, re)
 				}
 
 				// Fetch all topic names via metadata.
 				metaReq := kmsg.NewPtrMetadataRequest()
 				metaResp, err := metaReq.RequestWith(context.Background(), cl.Client())
-				out.MaybeDie(err, "unable to list topics: %v", err)
+				if err != nil {
+					return fmt.Errorf("unable to list topics: %v", err)
+				}
 
 				topics = nil
 				for _, t := range metaResp.Topics {
@@ -270,7 +286,7 @@ without actually deleting them.
 				}
 				if len(topics) == 0 {
 					fmt.Println("No topics matched the provided regex patterns.")
-					return
+					return nil
 				}
 			}
 
@@ -279,7 +295,7 @@ without actually deleting them.
 				for _, topic := range topics {
 					fmt.Printf("  %s\n", topic)
 				}
-				return
+				return nil
 			}
 
 			req := &kmsg.DeleteTopicsRequest{
@@ -290,10 +306,12 @@ without actually deleting them.
 				t := kmsg.NewDeleteTopicsRequestTopic()
 				if ids {
 					if len(topic) != 32 {
-						out.Die("topic id %s is not a 32 byte hex string")
+						return fmt.Errorf("topic id %s is not a 32 byte hex string", topic)
 					}
 					raw, err := hex.DecodeString(topic)
-					out.MaybeDie(err, "topic id %s is not a hex string")
+					if err != nil {
+						return fmt.Errorf("topic id %s is not a hex string", topic)
+					}
 					copy(t.TopicID[:], raw)
 				} else {
 					t.Topic = kmsg.StringPtr(topic)
@@ -302,7 +320,9 @@ without actually deleting them.
 			}
 
 			resp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to delete topics: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to delete topics: %v", err)
+			}
 
 			resps := resp.(*kmsg.DeleteTopicsResponse).Topics
 			table := out.NewFormattedTable(cl.Format(), "topic.delete", 1, "topics",
@@ -328,6 +348,7 @@ without actually deleting them.
 				table.Row(topic, msg)
 			}
 			table.Flush()
+			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&ids, "ids", false, "whether the input topics should be parsed as topic IDs")
@@ -372,14 +393,14 @@ To add a single partition with three replicas to two topics,
 add-partitions -t bar -t baz 1, 2, 3`,
 
 		Args: cobra.MinimumNArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			if len(topics) == 0 {
-				out.Die("missing topics to add partitions to")
+				return fmt.Errorf("missing topics to add partitions to")
 			}
 
 			for _, topic := range topics {
 				if strings.HasPrefix(topic, "__") && !force {
-					out.Die("topic %q is an internal topic (starts with \"__\"); use --force to modify internal topics", topic)
+					return fmt.Errorf("topic %q is an internal topic (starts with \"__\"); use --force to modify internal topics", topic)
 				}
 				if strings.HasPrefix(topic, "__") && force {
 					fmt.Fprintf(os.Stderr, "WARNING: modifying internal topic %q; this can cause system instability\n", topic)
@@ -387,9 +408,11 @@ add-partitions -t bar -t baz 1, 2, 3`,
 			}
 
 			assignments, err := parseAssignments(strings.Join(args, ""))
-			out.MaybeDie(err, "parse assignments failure: %v", err)
+			if err != nil {
+				return fmt.Errorf("parse assignments failure: %v", err)
+			}
 			if len(assignments) == 0 {
-				out.Die("no new partitions requested")
+				return fmt.Errorf("no new partitions requested")
 			}
 
 			// Get the metadata so we can determine the final partition count.
@@ -399,7 +422,9 @@ add-partitions -t bar -t baz 1, 2, 3`,
 				metaReq.Topics = append(metaReq.Topics, kmsg.MetadataRequestTopic{Topic: &t})
 			}
 			kmetaResp, err := cl.Client().Request(context.Background(), metaReq)
-			out.MaybeDie(err, "unable to get topic metadata: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to get topic metadata: %v", err)
+			}
 			metaResp := kmetaResp.(*kmsg.MetadataResponse)
 
 			createReq := kmsg.CreatePartitionsRequest{
@@ -407,7 +432,7 @@ add-partitions -t bar -t baz 1, 2, 3`,
 			}
 			for _, topic := range metaResp.Topics {
 				if topic.Topic == nil {
-					out.Die("metadata returned nil topic, unknown topic ID!")
+					return fmt.Errorf("metadata returned nil topic, unknown topic ID!")
 				}
 				currentPartitionCount := len(topic.Partitions)
 				if currentPartitionCount > 0 {
@@ -426,7 +451,9 @@ add-partitions -t bar -t baz 1, 2, 3`,
 			}
 
 			createResp, err := cl.Client().Request(context.Background(), &createReq)
-			out.MaybeDie(err, "unable to create topic partitions: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to create topic partitions: %v", err)
+			}
 
 			resps := createResp.(*kmsg.CreatePartitionsResponse).Topics
 			table := out.NewFormattedTable(cl.Format(), "topic.add-partitions", 1, "topics",
@@ -443,6 +470,7 @@ add-partitions -t bar -t baz 1, 2, 3`,
 				table.Row(topic.Topic, errKind, errMsg)
 			}
 			table.Flush()
+			return nil
 		},
 	}
 

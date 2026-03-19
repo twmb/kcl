@@ -39,7 +39,7 @@ topics to list metadata for; by default, all topics are listed.
 If the brokers section is printed, the controller broker is marked with *.
 `,
 
-		Run: func(_ *cobra.Command, topics []string) {
+		RunE: func(_ *cobra.Command, topics []string) error {
 			if len(topics) > 0 {
 				ptopics = true
 			}
@@ -53,7 +53,7 @@ If the brokers section is printed, the controller broker is marked with *.
 				}
 			}
 			if sections == 0 && cl.Format() == "text" {
-				out.Die("no metadata section requested")
+				return fmt.Errorf("no metadata section requested")
 			}
 
 			includeHeader := sections > 1
@@ -65,10 +65,12 @@ If the brokers section is printed, the controller broker is marked with *.
 					t := kmsg.NewMetadataRequestTopic()
 					if ids {
 						if len(topic) != 32 {
-							out.Die("topic id %s is not a 32 byte hex string")
+							return fmt.Errorf("topic id %s is not a 32 byte hex string", topic)
 						}
 						raw, err := hex.DecodeString(topic)
-						out.MaybeDie(err, "topic id %s is not a hex string")
+						if err != nil {
+							return fmt.Errorf("topic id %s is not a hex string", topic)
+						}
 						copy(t.TopicID[:], raw)
 					} else {
 						t.Topic = kmsg.StringPtr(topic)
@@ -78,7 +80,9 @@ If the brokers section is printed, the controller broker is marked with *.
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), &req)
-			out.MaybeDie(err, "unable to get metadata: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to get metadata: %v", err)
+			}
 			resp := kresp.(*kmsg.MetadataResponse)
 
 			switch cl.Format() {
@@ -175,6 +179,7 @@ If the brokers section is printed, the controller broker is marked with *.
 					PrintTopics(resp.Version, resp.Topics, pinternal, detailed)
 				}
 			}
+			return nil
 		},
 	}
 

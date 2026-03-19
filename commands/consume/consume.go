@@ -17,7 +17,6 @@ import (
 
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/offsetparse"
-	"github.com/twmb/kcl/out"
 )
 
 type consumption struct {
@@ -63,13 +62,15 @@ func Command(cl *client.Client) *cobra.Command {
 	return (&consumption{cl: cl}).command()
 }
 
-func (c *consumption) run(topics []string) {
+func (c *consumption) run(topics []string) error {
 	// Compile grep filters.
 	var grepFilters []grepFilter
 	if len(c.grepPatterns) > 0 {
 		var err error
 		grepFilters, err = parseGrepFilters(c.grepPatterns)
-		out.MaybeDie(err, "%v", err)
+		if err != nil {
+			return fmt.Errorf("%v", err)
+		}
 	}
 
 	var isConsumerOffsets, isTransactionState bool
@@ -78,20 +79,23 @@ func (c *consumption) run(topics []string) {
 		isTransactionState = isTransactionState || topic == "__transaction_state"
 	}
 	if (isConsumerOffsets || isTransactionState) && len(topics) != 1 {
-		out.Die("__consumer_offsets or __transaction_state must be the only topic listed when trying to consume it")
+		return fmt.Errorf("__consumer_offsets or __transaction_state must be the only topic listed when trying to consume it")
 	}
 
 	if c.group != "" && c.shareGroup != "" {
-		out.Die("--group and --share-group are mutually exclusive")
+		return fmt.Errorf("--group and --share-group are mutually exclusive")
 	}
 
-	offset := c.parseOffset()
+	offset, err := c.parseOffset()
+	if err != nil {
+		return err
+	}
 	c.cl.AddOpt(kgo.ConsumeResetOffset(offset))
 	if len(c.partitions) == 0 {
 		c.cl.AddOpt(kgo.ConsumeTopics(topics...))
 	} else {
 		if c.group != "" || c.shareGroup != "" {
-			out.Die("incompatible flag assignment: group consuming cannot be used with direct partition consuming")
+			return fmt.Errorf("incompatible flag assignment: group consuming cannot be used with direct partition consuming")
 		}
 		offsets := make(map[string]map[int32]kgo.Offset)
 		for _, topic := range topics {
@@ -118,7 +122,7 @@ func (c *consumption) run(topics []string) {
 	case "cooperative-sticky":
 		balancer = kgo.CooperativeStickyBalancer()
 	default:
-		out.Die("unrecognized group balancer %q", c.groupAlg)
+		return fmt.Errorf("unrecognized group balancer %q", c.groupAlg)
 	}
 	c.cl.AddOpt(kgo.Balancers(balancer))
 
@@ -163,7 +167,9 @@ func (c *consumption) run(topics []string) {
 	if c.startTimestampMillis >= 0 {
 		adm := kadm.NewClient(cl)
 		tsOffsets, err := adm.ListOffsetsAfterMilli(ctx, c.startTimestampMillis, topics...)
-		out.MaybeDie(err, "unable to resolve timestamp to offsets: %v", err)
+		if err != nil {
+			return fmt.Errorf("unable to resolve timestamp to offsets: %v", err)
+		}
 
 		setMap := make(map[string]map[int32]kgo.EpochOffset)
 		for topic, parts := range tsOffsets {
@@ -195,14 +201,18 @@ func (c *consumption) run(topics []string) {
 	if c.protoFile != "" {
 		var err error
 		co.pbd, err = newPBDecoder(c.protoFile, c.protoMessage)
-		out.MaybeDie(err, "unable to unmarshal pb: %v", err)
+		if err != nil {
+			return fmt.Errorf("unable to unmarshal pb: %v", err)
+		}
 	}
 
 	// Resolve timestamp-based end offsets.
 	if c.endTimestampMillis >= 0 {
 		adm := kadm.NewClient(cl)
 		endTsOffsets, err := adm.ListOffsetsAfterMilli(ctx, c.endTimestampMillis, topics...)
-		out.MaybeDie(err, "unable to resolve end timestamp to offsets: %v", err)
+		if err != nil {
+			return fmt.Errorf("unable to resolve end timestamp to offsets: %v", err)
+		}
 
 		// Filter to requested partitions if specified.
 		if len(c.partitions) > 0 {
@@ -226,7 +236,9 @@ func (c *consumption) run(topics []string) {
 		if c.startTimestampMillis >= 0 {
 			startAdm := kadm.NewClient(cl)
 			startOffsets, err := startAdm.ListOffsetsAfterMilli(ctx, c.startTimestampMillis, topics...)
-			out.MaybeDie(err, "unable to resolve start timestamp for filtering: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to resolve start timestamp for filtering: %v", err)
+			}
 			for t, ps := range startOffsets {
 				for p, so := range ps {
 					if eo, ok := endTsOffsets[t][p]; ok {
@@ -258,7 +270,9 @@ func (c *consumption) run(topics []string) {
 	if c.untilOffset > -1 {
 		adm := kadm.NewClient(cl)
 		offsets, err := adm.ListEndOffsets(ctx, topics...)
-		out.MaybeDie(err, "unable to list end offsets: %v", err)
+		if err != nil {
+			return fmt.Errorf("unable to list end offsets: %v", err)
+		}
 
 		// Remove any partitions that are not being consumed.
 		if len(c.partitions) > 0 {
@@ -280,7 +294,9 @@ func (c *consumption) run(topics []string) {
 		}
 
 		startOffsets, err := adm.ListStartOffsets(ctx, topics...)
-		out.MaybeDie(err, "unable to list start offsets: %v", err)
+		if err != nil {
+			return fmt.Errorf("unable to list start offsets: %v", err)
+		}
 
 		for t, ps := range startOffsets {
 			for p := range ps {
@@ -329,7 +345,9 @@ func (c *consumption) run(topics []string) {
 		co.buildTransactionStateFormatFn()
 	} else {
 		f, err := kgo.NewRecordFormatter(c.format)
-		out.MaybeDie(err, "%v", err)
+		if err != nil {
+			return fmt.Errorf("%v", err)
+		}
 		var buf []byte
 		co.format = func(r *kgo.Record, p *kgo.FetchPartition) {
 			buf = f.AppendPartitionRecord(buf[:0], p, r)
@@ -352,11 +370,14 @@ func (c *consumption) run(topics []string) {
 	case <-sigs:
 	case <-done:
 	}
+	return nil
 }
 
-func (c *consumption) parseOffset() kgo.Offset {
+func (c *consumption) parseOffset() (kgo.Offset, error) {
 	spec, err := offsetparse.Parse(c.offset, time.Now())
-	out.MaybeDie(err, "unable to parse offset %q: %v", c.offset, err)
+	if err != nil {
+		return kgo.Offset{}, fmt.Errorf("unable to parse offset %q: %v", c.offset, err)
+	}
 
 	c.end = -1
 	c.untilOffset = -1
@@ -408,7 +429,7 @@ func (c *consumption) parseOffset() kgo.Offset {
 		}
 	}
 
-	return o
+	return o, nil
 }
 
 type consumeOutput struct {

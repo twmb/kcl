@@ -12,7 +12,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/twmb/kcl/client"
-	"github.com/twmb/kcl/out"
 )
 
 // Command returns the "profile" command (the primary config interface).
@@ -66,25 +65,28 @@ func useCommand(cl *client.Client) *cobra.Command {
 		Use:   "use NAME",
 		Short: "Switch the active profile",
 		Args:  cobra.ExactArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			name := args[0]
 			cfgPath := cl.CfgFilePath()
 
 			var cfgFile client.CfgFile
 			if _, err := toml.DecodeFile(cfgPath, &cfgFile); err != nil {
-				out.Die("unable to read config: %v", err)
+				return fmt.Errorf("unable to read config: %v", err)
 			}
 
 			if len(cfgFile.Profiles) == 0 {
-				out.Die("config file has no profiles; add [profiles.NAME] sections to your config first")
+				return fmt.Errorf("config file has no profiles; add [profiles.NAME] sections to your config first")
 			}
 			if _, ok := cfgFile.Profiles[name]; !ok {
-				out.Die("profile %q not found; available: %v", name, profileNames(cfgFile))
+				return fmt.Errorf("profile %q not found; available: %v", name, profileNames(cfgFile))
 			}
 
 			cfgFile.CurrentProfile = name
-			writeCfgFile(cfgPath, cfgFile)
+			if err := writeCfgFile(cfgPath, cfgFile); err != nil {
+				return err
+			}
 			fmt.Printf("Switched to profile %q\n", name)
+			return nil
 		},
 	}
 }
@@ -95,17 +97,17 @@ func listCommand(cl *client.Client) *cobra.Command {
 		Aliases: []string{"ls"},
 		Short:   "List all profiles",
 		Args:    cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			cfgPath := cl.CfgFilePath()
 
 			var cfgFile client.CfgFile
 			if _, err := toml.DecodeFile(cfgPath, &cfgFile); err != nil {
-				out.Die("unable to read config: %v", err)
+				return fmt.Errorf("unable to read config: %v", err)
 			}
 
 			if len(cfgFile.Profiles) == 0 {
 				fmt.Println("No profiles configured. Config uses flat format.")
-				return
+				return nil
 			}
 
 			for _, n := range profileNames(cfgFile) {
@@ -115,6 +117,7 @@ func listCommand(cl *client.Client) *cobra.Command {
 					fmt.Println("  " + n)
 				}
 			}
+			return nil
 		},
 	}
 }
@@ -124,12 +127,12 @@ func currentCommand(cl *client.Client) *cobra.Command {
 		Use:   "current",
 		Short: "Print the active profile name",
 		Args:  cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			cfgPath := cl.CfgFilePath()
 
 			var cfgFile client.CfgFile
 			if _, err := toml.DecodeFile(cfgPath, &cfgFile); err != nil {
-				out.Die("unable to read config: %v", err)
+				return fmt.Errorf("unable to read config: %v", err)
 			}
 
 			if cfgFile.CurrentProfile == "" {
@@ -137,6 +140,7 @@ func currentCommand(cl *client.Client) *cobra.Command {
 			} else {
 				fmt.Println(cfgFile.CurrentProfile)
 			}
+			return nil
 		},
 	}
 }
@@ -172,21 +176,21 @@ func renameCommand(cl *client.Client) *cobra.Command {
 		Use:   "rename OLD NEW",
 		Short: "Rename a profile",
 		Args:  cobra.ExactArgs(2),
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			oldName, newName := args[0], args[1]
 			cfgPath := cl.CfgFilePath()
 
 			var cfgFile client.CfgFile
 			if _, err := toml.DecodeFile(cfgPath, &cfgFile); err != nil {
-				out.Die("unable to read config: %v", err)
+				return fmt.Errorf("unable to read config: %v", err)
 			}
 
 			cfg, ok := cfgFile.Profiles[oldName]
 			if !ok {
-				out.Die("profile %q not found", oldName)
+				return fmt.Errorf("profile %q not found", oldName)
 			}
 			if _, exists := cfgFile.Profiles[newName]; exists {
-				out.Die("profile %q already exists", newName)
+				return fmt.Errorf("profile %q already exists", newName)
 			}
 
 			delete(cfgFile.Profiles, oldName)
@@ -195,8 +199,11 @@ func renameCommand(cl *client.Client) *cobra.Command {
 				cfgFile.CurrentProfile = newName
 			}
 
-			writeCfgFile(cfgPath, cfgFile)
+			if err := writeCfgFile(cfgPath, cfgFile); err != nil {
+				return err
+			}
 			fmt.Printf("Renamed profile %q to %q\n", oldName, newName)
+			return nil
 		},
 	}
 }
@@ -206,17 +213,17 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 		Use:   "delete NAME",
 		Short: "Delete a profile",
 		Args:  cobra.ExactArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			name := args[0]
 			cfgPath := cl.CfgFilePath()
 
 			var cfgFile client.CfgFile
 			if _, err := toml.DecodeFile(cfgPath, &cfgFile); err != nil {
-				out.Die("unable to read config: %v", err)
+				return fmt.Errorf("unable to read config: %v", err)
 			}
 
 			if _, ok := cfgFile.Profiles[name]; !ok {
-				out.Die("profile %q not found", name)
+				return fmt.Errorf("profile %q not found", name)
 			}
 
 			delete(cfgFile.Profiles, name)
@@ -224,8 +231,11 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 				cfgFile.CurrentProfile = ""
 			}
 
-			writeCfgFile(cfgPath, cfgFile)
+			if err := writeCfgFile(cfgPath, cfgFile); err != nil {
+				return err
+			}
 			fmt.Printf("Deleted profile %q\n", name)
+			return nil
 		},
 	}
 }
@@ -279,13 +289,16 @@ func profileNames(cfgFile client.CfgFile) []string {
 	return names
 }
 
-func writeCfgFile(path string, cfgFile client.CfgFile) {
+func writeCfgFile(path string, cfgFile client.CfgFile) error {
 	f, err := os.Create(path)
-	out.MaybeDie(err, "unable to write config: %v", err)
+	if err != nil {
+		return fmt.Errorf("unable to write config: %v", err)
+	}
 	defer f.Close()
 	if err := toml.NewEncoder(f).Encode(cfgFile); err != nil {
-		out.Die("unable to encode config: %v", err)
+		return fmt.Errorf("unable to encode config: %v", err)
 	}
+	return nil
 }
 
 // linkCommand is the legacy symlink-based context switching.
@@ -297,20 +310,22 @@ func linkCommand(cl *client.Client) *cobra.Command {
 		Deprecated: "use 'kcl profile use' instead",
 		Hidden:     true,
 		Args:       cobra.ExactArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			if cl.DefaultCfgPath() == "" {
-				out.Die("cannot link config; unable to determine home dir")
+				return fmt.Errorf("cannot link config; unable to determine home dir")
 			}
 			existing, err := os.Lstat(cl.DefaultCfgPath())
 			if err != nil {
 				if !os.IsNotExist(err) {
-					out.Die("stat err for existing config path %q: %v", cl.DefaultCfgPath(), err)
+					return fmt.Errorf("stat err for existing config path %q: %v", cl.DefaultCfgPath(), err)
 				}
 			} else if existing.Mode()&os.ModeSymlink == 0 {
-				out.Die("existing config at %q is not a symlink", cl.DefaultCfgPath())
+				return fmt.Errorf("existing config at %q is not a symlink", cl.DefaultCfgPath())
 			}
 			dirents, err := os.ReadDir(dir)
-			out.MaybeDie(err, "unable to read config dir %q: %v", dir, err)
+			if err != nil {
+				return fmt.Errorf("unable to read config dir %q: %v", dir, err)
+			}
 			use := args[0]
 			exact := strings.HasSuffix(use, ".toml")
 			found := false
@@ -327,14 +342,17 @@ func linkCommand(cl *client.Client) *cobra.Command {
 				}
 			}
 			if !found {
-				out.Die("could not find requested config %q", args[0])
+				return fmt.Errorf("could not find requested config %q", args[0])
 			}
 			if existing != nil {
 				os.Remove(cl.DefaultCfgPath())
 			}
 			src := filepath.Join(dir, use)
-			out.MaybeDie(os.Symlink(src, cl.DefaultCfgPath()), "unable to symlink: %v", err)
+			if err := os.Symlink(src, cl.DefaultCfgPath()); err != nil {
+				return fmt.Errorf("unable to symlink: %v", err)
+			}
 			fmt.Printf("linked %q to %q\n", src, cl.DefaultCfgPath())
+			return nil
 		},
 	}
 }
@@ -346,20 +364,23 @@ func unlinkCommand(cl *client.Client) *cobra.Command {
 		Deprecated: "use 'kcl profile use' instead",
 		Hidden:     true,
 		Args:       cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			existing, err := os.Lstat(cl.DefaultCfgPath())
 			if err != nil {
 				if os.IsNotExist(err) {
 					fmt.Printf("no symlink found at %q\n", cl.DefaultCfgPath())
-					return
+					return nil
 				}
-				out.Die("stat err: %v", err)
+				return fmt.Errorf("stat err: %v", err)
 			}
 			if existing.Mode()&os.ModeSymlink == 0 {
-				out.Die("existing config at %q is not a symlink", cl.DefaultCfgPath())
+				return fmt.Errorf("existing config at %q is not a symlink", cl.DefaultCfgPath())
 			}
-			out.MaybeDie(os.Remove(cl.DefaultCfgPath()), "unable to remove symlink: %v", err)
+			if err := os.Remove(cl.DefaultCfgPath()); err != nil {
+				return fmt.Errorf("unable to remove symlink: %v", err)
+			}
 			fmt.Printf("unlinked config symlink %q\n", cl.DefaultCfgPath())
+			return nil
 		},
 	}
 }

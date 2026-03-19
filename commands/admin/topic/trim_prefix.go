@@ -54,7 +54,7 @@ SEE ALSO:
   kcl topic list         list topics
 `,
 		Args: cobra.ExactArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			topicName := args[0]
 
 			kclClient := cl.Client()
@@ -69,7 +69,7 @@ SEE ALSO:
 
 			if fromFile != "" {
 				if offsetFlag != "" {
-					out.Die("--offset and --from-file are mutually exclusive")
+					return fmt.Errorf("--offset and --from-file are mutually exclusive")
 				}
 				type fileEntry struct {
 					Topic     string `json:"topic"`
@@ -77,9 +77,13 @@ SEE ALSO:
 					Offset    int64  `json:"offset"`
 				}
 				raw, err := os.ReadFile(fromFile)
-				out.MaybeDie(err, "unable to read --from-file: %v", err)
+				if err != nil {
+					return fmt.Errorf("unable to read --from-file: %v", err)
+				}
 				var entries []fileEntry
-				out.MaybeDie(json.Unmarshal(raw, &entries), "unable to parse --from-file: %v", err)
+				if err := json.Unmarshal(raw, &entries); err != nil {
+					return fmt.Errorf("unable to parse --from-file: %v", err)
+				}
 				for _, e := range entries {
 					if e.Topic != topicName {
 						continue
@@ -88,18 +92,22 @@ SEE ALSO:
 				}
 			} else {
 				if offsetFlag == "" {
-					out.Die("one of --offset or --from-file is required")
+					return fmt.Errorf("one of --offset or --from-file is required")
 				}
 				spec, err := offsetparse.Parse(offsetFlag, time.Now())
-				out.MaybeDie(err, "unable to parse --offset %q: %v", offsetFlag, err)
+				if err != nil {
+					return fmt.Errorf("unable to parse --offset %q: %v", offsetFlag, err)
+				}
 				if spec.End != nil {
-					out.Die("--offset does not accept range syntax for trim-prefix")
+					return fmt.Errorf("--offset does not accept range syntax for trim-prefix")
 				}
 
 				switch spec.Start.Kind {
 				case offsetparse.KindExact:
 					listed, err := adm.ListEndOffsets(ctx, topicName)
-					out.MaybeDie(err, "unable to list offsets: %v", err)
+					if err != nil {
+						return fmt.Errorf("unable to list offsets: %v", err)
+					}
 					listed.Each(func(lo kadm.ListedOffset) {
 						if lo.Err == nil && filterPartition(lo.Partition, partitions) {
 							targets = append(targets, trimTarget{lo.Partition, spec.Start.Value})
@@ -107,7 +115,9 @@ SEE ALSO:
 					})
 				case offsetparse.KindEnd:
 					listed, err := adm.ListEndOffsets(ctx, topicName)
-					out.MaybeDie(err, "unable to list end offsets: %v", err)
+					if err != nil {
+						return fmt.Errorf("unable to list end offsets: %v", err)
+					}
 					listed.Each(func(lo kadm.ListedOffset) {
 						if lo.Err == nil && filterPartition(lo.Partition, partitions) {
 							targets = append(targets, trimTarget{lo.Partition, lo.Offset})
@@ -115,7 +125,9 @@ SEE ALSO:
 					})
 				case offsetparse.KindTimestamp:
 					listed, err := adm.ListOffsetsAfterMilli(ctx, spec.Start.Value, topicName)
-					out.MaybeDie(err, "unable to resolve timestamp: %v", err)
+					if err != nil {
+						return fmt.Errorf("unable to resolve timestamp: %v", err)
+					}
 					listed.Each(func(lo kadm.ListedOffset) {
 						if lo.Err == nil && filterPartition(lo.Partition, partitions) {
 							targets = append(targets, trimTarget{lo.Partition, lo.Offset})
@@ -123,15 +135,15 @@ SEE ALSO:
 					})
 				case offsetparse.KindStart:
 					fmt.Println("Nothing to trim: offset is already at start.")
-					return
+					return nil
 				default:
-					out.Die("unsupported offset kind for trim-prefix: %v", spec.Start.Kind)
+					return fmt.Errorf("unsupported offset kind for trim-prefix: %v", spec.Start.Kind)
 				}
 			}
 
 			if len(targets) == 0 {
 				fmt.Println("No partitions to trim.")
-				return
+				return nil
 			}
 
 			sort.Slice(targets, func(i, j int) bool {
@@ -152,7 +164,7 @@ SEE ALSO:
 				answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
 				if answer != "y" && answer != "yes" {
 					fmt.Println("Aborted.")
-					return
+					return nil
 				}
 			}
 
@@ -190,6 +202,7 @@ SEE ALSO:
 				}
 			}
 			resultTw.Flush()
+			return nil
 		},
 	}
 
