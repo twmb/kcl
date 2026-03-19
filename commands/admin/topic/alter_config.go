@@ -56,7 +56,7 @@ SEE ALSO:
 			for _, kv := range setKVs {
 				k, v, ok := strings.Cut(kv, "=")
 				if !ok {
-					return fmt.Errorf("--set value %q must be key=value", kv)
+					return out.Errf(out.ExitUsage, "--set value %q must be key=value", kv)
 				}
 				c := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
 				c.Name = k
@@ -73,7 +73,7 @@ SEE ALSO:
 			for _, kv := range appendKVs {
 				k, v, ok := strings.Cut(kv, "=")
 				if !ok {
-					return fmt.Errorf("--append value %q must be key=value", kv)
+					return out.Errf(out.ExitUsage, "--append value %q must be key=value", kv)
 				}
 				c := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
 				c.Name = k
@@ -84,7 +84,7 @@ SEE ALSO:
 			for _, kv := range subtKVs {
 				k, v, ok := strings.Cut(kv, "=")
 				if !ok {
-					return fmt.Errorf("--subtract value %q must be key=value", kv)
+					return out.Errf(out.ExitUsage, "--subtract value %q must be key=value", kv)
 				}
 				c := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
 				c.Name = k
@@ -94,7 +94,7 @@ SEE ALSO:
 			}
 
 			if len(r.Configs) == 0 {
-				return fmt.Errorf("no config changes specified; use --set, --delete, --append, or --subtract")
+				return out.Errf(out.ExitUsage, "no config changes specified; use --set, --delete, --append, or --subtract")
 			}
 
 			req.Resources = append(req.Resources, r)

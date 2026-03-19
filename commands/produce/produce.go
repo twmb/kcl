@@ -166,7 +166,7 @@ To show partition and offset for each produced record:
 		RunE: func(_ *cobra.Command, args []string) error {
 			if topicFlag != "" {
 				if len(args) > 0 {
-					return fmt.Errorf("topic specified both as -t flag and positional argument")
+					return out.Errf(out.ExitUsage, "topic specified both as -t flag and positional argument")
 				}
 				args = []string{topicFlag}
 			}
@@ -198,7 +198,7 @@ To show partition and offset for each produced record:
 			case "zstd":
 				codec = kgo.ZstdCompression()
 			default:
-				return fmt.Errorf("invalid compression codec %q", codec)
+				return out.Errf(out.ExitUsage, "invalid compression codec %q", codec)
 			}
 			cl.AddOpt(kgo.ProducerBatchCompression(codec))
 
@@ -211,7 +211,7 @@ To show partition and offset for each produced record:
 			case 1:
 				cl.AddOpt(kgo.RequiredAcks(kgo.LeaderAck()))
 			default:
-				return fmt.Errorf("invalid acks %d not in allowed -1, 0, 1", acks)
+				return out.Errf(out.ExitUsage, "invalid acks %d not in allowed -1, 0, 1", acks)
 			}
 
 			if partition > -1 {
@@ -244,7 +244,7 @@ To show partition and offset for each produced record:
 				}
 				if r.Topic == "" {
 					if len(args) == 0 {
-						return fmt.Errorf("topic missing from both produce line and from parse format")
+						return out.Errf(out.ExitUsage, "topic missing from both produce line and from parse format")
 					}
 					r.Topic = args[0]
 				}

@@ -66,10 +66,10 @@ EXAMPLES:
 			hasTo := to != ""
 			hasToFile := toFile != ""
 			if !hasTo && !hasToFile {
-				return fmt.Errorf("one of --to or --to-file is required")
+				return out.Errf(out.ExitUsage, "one of --to or --to-file is required")
 			}
 			if hasTo && hasToFile {
-				return fmt.Errorf("--to and --to-file are mutually exclusive")
+				return out.Errf(out.ExitUsage, "--to and --to-file are mutually exclusive")
 			}
 
 			kclClient := cl.Client()
@@ -119,14 +119,14 @@ EXAMPLES:
 					return fmt.Errorf("unable to parse --to %q: %v", to, err)
 				}
 				if spec.End != nil {
-					return fmt.Errorf("--to does not accept range offsets; use a single target value")
+					return out.Errf(out.ExitUsage, "--to does not accept range offsets; use a single target value")
 				}
 				if spec.Start.Kind == offsetparse.KindRelative {
-					return fmt.Errorf("+N/-N relative offsets are not supported for share groups (use start, end, N, or @timestamp)")
+					return out.Errf(out.ExitUsage, "+N/-N relative offsets are not supported for share groups (use start, end, N, or @timestamp)")
 				}
 
 				if len(topics) == 0 {
-					return fmt.Errorf("--topics is required when using --to")
+					return out.Errf(out.ExitUsage, "--topics is required when using --to")
 				}
 
 				switch spec.Start.Kind {
@@ -175,7 +175,7 @@ EXAMPLES:
 					})
 
 				default:
-					return fmt.Errorf("unsupported seek target kind: %v", spec.Start.Kind)
+					return out.Errf(out.ExitUsage, "unsupported seek target kind: %v", spec.Start.Kind)
 				}
 			}
 

@@ -65,13 +65,13 @@ func (q *querier) parseEntity(args []string) error {
 	case "g", "group":
 		q.entity = entityGroup
 	default:
-		return fmt.Errorf("unrecognized entity type %q (allowed: t, topic, b, broker, bl, broker logger, cm, client-metrics, g, group)", q.rawEntity)
+		return out.Errf(out.ExitUsage, "unrecognized entity type %q (allowed: t, topic, b, broker, bl, broker logger, cm, client-metrics, g, group)", q.rawEntity)
 	}
 
 	switch q.entity {
 	case entityTopic, entityClientMetrics, entityGroup:
 		if len(args) == 0 {
-			return fmt.Errorf("missing entity name")
+			return out.Errf(out.ExitUsage, "missing entity name")
 		}
 	}
 	if len(args) > 0 {
@@ -202,7 +202,7 @@ func (c *cfger) parseKVs() error {
 		if c.incremental {
 			colon := strings.IndexByte(split[0], ':')
 			if colon == -1 {
-				return fmt.Errorf("missing op: prefix on key %q", split[0])
+				return out.Errf(out.ExitUsage, "missing op: prefix on key %q", split[0])
 			}
 
 			rawOp := split[0][:colon]
@@ -218,13 +218,13 @@ func (c *cfger) parseKVs() error {
 			case "-":
 				op = 3
 			default:
-				return fmt.Errorf("unrecognized incremental op %q; not in set [s, set, d, del, +, -]", rawOp)
+				return out.Errf(out.ExitUsage, "unrecognized incremental op %q; not in set [s, set, d, del, +, -]", rawOp)
 			}
 
 			var v *string
 			if op == 0 || op == 2 {
 				if len(split) != 2 {
-					return fmt.Errorf("set or append key %q missing value", split[0])
+					return out.Errf(out.ExitUsage, "set or append key %q missing value", split[0])
 				}
 				v = &split[1]
 			}
@@ -233,10 +233,10 @@ func (c *cfger) parseKVs() error {
 
 		} else {
 			if len(split) != 2 {
-				return fmt.Errorf("key %q missing value", split[0])
+				return out.Errf(out.ExitUsage, "key %q missing value", split[0])
 			}
 			if strings.Contains(split[0], ":") {
-				return fmt.Errorf("invalid incremental syntax on key %q", split[0])
+				return out.Errf(out.ExitUsage, "invalid incremental syntax on key %q", split[0])
 			}
 			c.parsedKVs = append(c.parsedKVs, kv{k: split[0], v: &split[1]})
 		}

@@ -69,12 +69,12 @@ filter specified by flags is returned.
 			for _, name := range names {
 				split := strings.SplitN(name, "=", 2)
 				if len(split) != 2 {
-					return fmt.Errorf("name %q missing value", split[0])
+					return out.Errf(out.ExitUsage, "name %q missing value", split[0])
 				}
 				k, v := split[0], split[1]
 				k = strings.ToLower(k)
 				if !validType[k] {
-					return fmt.Errorf("name type %q is invalid (allowed: user, client-id, ip)", split[0])
+					return out.Errf(out.ExitUsage, "name type %q is invalid (allowed: user, client-id, ip)", split[0])
 				}
 				req.Components = append(req.Components, kmsg.DescribeClientQuotasRequestComponent{
 					EntityType: k,
@@ -85,7 +85,7 @@ filter specified by flags is returned.
 
 			for _, def := range defaults {
 				if !validType[def] {
-					return fmt.Errorf("default type %q is invalid (allowed: user, client-id, ip)", def)
+					return out.Errf(out.ExitUsage, "default type %q is invalid (allowed: user, client-id, ip)", def)
 				}
 				req.Components = append(req.Components, kmsg.DescribeClientQuotasRequestComponent{
 					EntityType: def,
@@ -95,7 +95,7 @@ filter specified by flags is returned.
 
 			for _, a := range any {
 				if !validType[a] {
-					return fmt.Errorf("any type %q is invalid (allowed: user, client-id, ip)", a)
+					return out.Errf(out.ExitUsage, "any type %q is invalid (allowed: user, client-id, ip)", a)
 				}
 				req.Components = append(req.Components, kmsg.DescribeClientQuotasRequestComponent{
 					EntityType: a,
@@ -176,10 +176,10 @@ matches, this runs an alter on anything that matches.
 			}
 
 			if len(names) == 0 && len(defaults) == 0 {
-				return fmt.Errorf("at least one name or default must be specified")
+				return out.Errf(out.ExitUsage, "at least one name or default must be specified")
 			}
 			if len(adds) == 0 && len(deletes) == 0 {
-				return fmt.Errorf("at least one add or delete must be specified")
+				return out.Errf(out.ExitUsage, "at least one add or delete must be specified")
 			}
 
 			ent := &req.Entries[0]
@@ -193,12 +193,12 @@ matches, this runs an alter on anything that matches.
 			for _, name := range names {
 				split := strings.SplitN(name, "=", 2)
 				if len(split) != 2 {
-					return fmt.Errorf("name %q missing value", split[0])
+					return out.Errf(out.ExitUsage, "name %q missing value", split[0])
 				}
 				k, v := split[0], split[1]
 				k = strings.ToLower(k)
 				if !validType[k] {
-					return fmt.Errorf("name type %q is invalid (allowed: user, client-id, ip)", split[0])
+					return out.Errf(out.ExitUsage, "name type %q is invalid (allowed: user, client-id, ip)", split[0])
 				}
 				ent.Entity = append(ent.Entity, kmsg.AlterClientQuotasRequestEntryEntity{
 					Type: k,
@@ -208,7 +208,7 @@ matches, this runs an alter on anything that matches.
 
 			for _, def := range defaults {
 				if !validType[def] {
-					return fmt.Errorf("default type %q is invalid (allowed: user, client-id, ip)", def)
+					return out.Errf(out.ExitUsage, "default type %q is invalid (allowed: user, client-id, ip)", def)
 				}
 				ent.Entity = append(ent.Entity, kmsg.AlterClientQuotasRequestEntryEntity{
 					Type: def,
@@ -218,7 +218,7 @@ matches, this runs an alter on anything that matches.
 			for _, add := range adds {
 				split := strings.SplitN(add, "=", 2)
 				if len(split) != 2 {
-					return fmt.Errorf("add %q missing value", split[0])
+					return out.Errf(out.ExitUsage, "add %q missing value", split[0])
 				}
 				k, v := split[0], split[1]
 				f, err := strconv.ParseFloat(v, 64)

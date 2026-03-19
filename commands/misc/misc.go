@@ -80,11 +80,11 @@ func errtextCommand() *cobra.Command {
 			var text string
 			if list {
 				if len(args) != 0 {
-					return fmt.Errorf("invalid extra args while list is set")
+					return out.Errf(out.ExitUsage, "invalid extra args while list is set")
 				}
 			} else {
 				if len(args) != 1 {
-					return fmt.Errorf("missing error text to search for")
+					return out.Errf(out.ExitUsage, "missing error text to search for")
 				} else {
 					text = client.Strnorm(args[0])
 				}
@@ -108,7 +108,7 @@ func errtextCommand() *cobra.Command {
 				}
 			}
 			if !list {
-				return fmt.Errorf("Unknown error text.")
+				return out.Errf(out.ExitNotFound, "Unknown error text.")
 			}
 			return nil
 		},
@@ -151,7 +151,7 @@ This command supports completion for bash, zsh, fish, and powershell.
 			case "powershell":
 				cmd.Root().GenPowerShellCompletion(os.Stdout)
 			default:
-				return fmt.Errorf("unrecognized autocomplete kind %q", kind)
+				return out.Errf(out.ExitUsage, "unrecognized autocomplete kind %q", kind)
 			}
 			return nil
 		},
@@ -182,7 +182,7 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 			} else {
 				v = kversion.FromString(version)
 				if v == nil {
-					return fmt.Errorf("unknown version %q", version)
+					return out.Errf(out.ExitUsage, "unknown version %q", version)
 				}
 			}
 
@@ -276,7 +276,7 @@ func rawCommand(cl *client.Client) *cobra.Command {
 		RunE: func(_ *cobra.Command, _ []string) error {
 			req := kmsg.RequestForKey(key)
 			if req == nil {
-				return fmt.Errorf("request key %d unknown", key)
+				return out.Errf(out.ExitUsage, "request key %d unknown", key)
 			}
 			req.SetVersion(-1)
 			raw, err := io.ReadAll(os.Stdin)

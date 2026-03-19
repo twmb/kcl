@@ -17,6 +17,7 @@ import (
 
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/offsetparse"
+	"github.com/twmb/kcl/out"
 )
 
 type consumption struct {
@@ -79,11 +80,11 @@ func (c *consumption) run(topics []string) error {
 		isTransactionState = isTransactionState || topic == "__transaction_state"
 	}
 	if (isConsumerOffsets || isTransactionState) && len(topics) != 1 {
-		return fmt.Errorf("__consumer_offsets or __transaction_state must be the only topic listed when trying to consume it")
+		return out.Errf(out.ExitUsage, "__consumer_offsets or __transaction_state must be the only topic listed when trying to consume it")
 	}
 
 	if c.group != "" && c.shareGroup != "" {
-		return fmt.Errorf("--group and --share-group are mutually exclusive")
+		return out.Errf(out.ExitUsage, "--group and --share-group are mutually exclusive")
 	}
 
 	offset, err := c.parseOffset()
@@ -95,7 +96,7 @@ func (c *consumption) run(topics []string) error {
 		c.cl.AddOpt(kgo.ConsumeTopics(topics...))
 	} else {
 		if c.group != "" || c.shareGroup != "" {
-			return fmt.Errorf("incompatible flag assignment: group consuming cannot be used with direct partition consuming")
+			return out.Errf(out.ExitUsage, "incompatible flag assignment: group consuming cannot be used with direct partition consuming")
 		}
 		offsets := make(map[string]map[int32]kgo.Offset)
 		for _, topic := range topics {
@@ -122,7 +123,7 @@ func (c *consumption) run(topics []string) error {
 	case "cooperative-sticky":
 		balancer = kgo.CooperativeStickyBalancer()
 	default:
-		return fmt.Errorf("unrecognized group balancer %q", c.groupAlg)
+		return out.Errf(out.ExitUsage, "unrecognized group balancer %q", c.groupAlg)
 	}
 	c.cl.AddOpt(kgo.Balancers(balancer))
 

@@ -368,10 +368,10 @@ SEE ALSO:
 			}
 
 			if len(resources) == 0 {
-				return fmt.Errorf("at least one resource is required (--topic, --group, --cluster, --transactional-id, or --delegation-token)")
+				return out.Errf(out.ExitUsage, "at least one resource is required (--topic, --group, --cluster, --transactional-id, or --delegation-token)")
 			}
 			if len(operations) == 0 {
-				return fmt.Errorf("at least one --operation is required")
+				return out.Errf(out.ExitUsage, "at least one --operation is required")
 			}
 
 			// Build principal/permission pairs.
@@ -387,7 +387,7 @@ SEE ALSO:
 				principals = append(principals, principalPerm{p, "deny"})
 			}
 			if len(principals) == 0 {
-				return fmt.Errorf("at least one principal is required (--allow-principal or --deny-principal)")
+				return out.Errf(out.ExitUsage, "at least one principal is required (--allow-principal or --deny-principal)")
 			}
 
 			// Default hosts to wildcard.
@@ -541,16 +541,16 @@ For more detailed information about ACLs, read kcl acl --help.
 		Args: cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
 			if resourceType == "" {
-				return fmt.Errorf("missing resource type filter")
+				return out.Errf(out.ExitUsage, "missing resource type filter")
 			}
 			if resourcePattern == "" {
-				return fmt.Errorf("missing resource pattern filter")
+				return out.Errf(out.ExitUsage, "missing resource pattern filter")
 			}
 			if operation == "" {
-				return fmt.Errorf("missing operation filter")
+				return out.Errf(out.ExitUsage, "missing operation filter")
 			}
 			if permission == "" {
-				return fmt.Errorf("missing permission filter")
+				return out.Errf(out.ExitUsage, "missing permission filter")
 			}
 			var pname, pprincipal, phost *string
 			if resourceName != "" {

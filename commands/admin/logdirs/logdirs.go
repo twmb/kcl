@@ -215,7 +215,7 @@ describe // describes all`,
 					case "topic":
 						key = r.topic
 					default:
-						return fmt.Errorf("--aggregate-into must be broker, dir, or topic")
+						return out.Errf(out.ExitUsage, "--aggregate-into must be broker, dir, or topic")
 					}
 					agg[key] += r.size
 				}

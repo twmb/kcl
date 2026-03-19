@@ -120,7 +120,7 @@ Use --summary to show only aggregate information (total lag, member count).
 				}
 			}
 			if len(groups) == 0 {
-				return fmt.Errorf("no share groups to describe")
+				return out.Errf(out.ExitNotFound, "no share groups to describe")
 			}
 
 			req := kmsg.NewPtrShareGroupDescribeRequest()
@@ -485,13 +485,13 @@ func listShareGroups(cl *client.Client) ([]string, error) {
 // argument as a regex, and returns only groups matching at least one pattern.
 func filterShareGroupsByRegex(cl *client.Client, patterns []string) ([]string, error) {
 	if len(patterns) == 0 {
-		return nil, fmt.Errorf("--regex requires at least one pattern argument")
+		return nil, out.Errf(out.ExitUsage, "--regex requires at least one pattern argument")
 	}
 	var compiled []*regexp.Regexp
 	for _, p := range patterns {
 		re, err := regexp.Compile(p)
 		if err != nil {
-			return nil, fmt.Errorf("invalid regex %q: %v", p, err)
+			return nil, out.Errf(out.ExitUsage, "invalid regex %q: %v", p, err)
 		}
 		compiled = append(compiled, re)
 	}

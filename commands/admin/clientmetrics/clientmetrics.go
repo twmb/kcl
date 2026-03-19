@@ -140,7 +140,7 @@ EXAMPLES:
 			for _, kv := range setKVs {
 				k, v, ok := strings.Cut(kv, "=")
 				if !ok {
-					return fmt.Errorf("--set value %q must be key=value", kv)
+					return out.Errf(out.ExitUsage, "--set value %q must be key=value", kv)
 				}
 				c := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
 				c.Name = k

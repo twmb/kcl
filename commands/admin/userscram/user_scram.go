@@ -49,7 +49,7 @@ func mech2str(mech int8) string {
 func str2mech(str string) (int8, error) {
 	switch client.Strnorm(str) {
 	default:
-		return 0, fmt.Errorf("unknown mechanism %s", str)
+		return 0, out.Errf(out.ExitUsage, "unknown mechanism %s", str)
 	case "scramsha256":
 		return 1, nil
 	case "scramsha512":
@@ -160,12 +160,12 @@ Both --set and --del can be specified many times.
 				for _, kv := range strings.Split(del, ",") {
 					split := strings.SplitN(kv, "=", 2)
 					if len(split) != 2 {
-						return fmt.Errorf("delete kv %q missing value", kv)
+						return out.Errf(out.ExitUsage, "delete kv %q missing value", kv)
 					}
 					k, v := split[0], split[1]
 					k = strings.ToLower(k)
 					if !allowed[k] {
-						return fmt.Errorf("delete key %q is invalid (allowed: name, mechanism)", split[0])
+						return out.Errf(out.ExitUsage, "delete key %q is invalid (allowed: name, mechanism)", split[0])
 					}
 					delete(allowed, k)
 					switch k {
@@ -181,7 +181,7 @@ Both --set and --del can be specified many times.
 				}
 
 				if len(allowed) > 0 {
-					return fmt.Errorf("deletions require both user and mechanism specified")
+					return out.Errf(out.ExitUsage, "deletions require both user and mechanism specified")
 				}
 
 				req.Deletions = append(req.Deletions, d)
@@ -204,12 +204,12 @@ Both --set and --del can be specified many times.
 				for _, kv := range strings.Split(set, ",") {
 					split := strings.SplitN(kv, "=", 2)
 					if len(split) != 2 {
-						return fmt.Errorf("set kv %q missing value", kv)
+						return out.Errf(out.ExitUsage, "set kv %q missing value", kv)
 					}
 					k, v := split[0], split[1]
 					k = strings.ToLower(k)
 					if !allowed[k] {
-						return fmt.Errorf("set key %q is invalid (allowed: user, mechanism, password, iterations, salt)", split[0])
+						return out.Errf(out.ExitUsage, "set key %q is invalid (allowed: user, mechanism, password, iterations, salt)", split[0])
 					}
 					delete(allowed, k)
 					switch k {
@@ -229,7 +229,7 @@ Both --set and --del can be specified many times.
 							return fmt.Errorf("set iterations is not a number: %v", err)
 						}
 						if i < 4092 || i > 16<<10 {
-							return fmt.Errorf("invalid iterations %d: min allowed 4k, max 16k", i)
+							return out.Errf(out.ExitUsage, "invalid iterations %d: min allowed 4k, max 16k", i)
 						}
 						u.Iterations = int32(i)
 					case "salt":
@@ -245,7 +245,7 @@ Both --set and --del can be specified many times.
 				delete(allowed, "salt")       // optional
 
 				if len(allowed) > 0 {
-					return fmt.Errorf("sets require user, mechanism, and password")
+					return out.Errf(out.ExitUsage, "sets require user, mechanism, and password")
 				}
 
 				if len(u.Salt) == 0 {
@@ -263,7 +263,7 @@ Both --set and --del can be specified many times.
 				case 2:
 					h = sha512.New
 				default:
-					return fmt.Errorf("unknown mechanism %d", u.Mechanism)
+					return out.Errf(out.ExitUsage, "unknown mechanism %d", u.Mechanism)
 				}
 
 				u.SaltedPassword = pbkdf2.Key([]byte(password), u.Salt, int(u.Iterations), h().Size(), h) // SaltedPassword := Hi(Normalize(password), salt, i)

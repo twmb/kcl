@@ -69,7 +69,7 @@ SEE ALSO:
 
 			if fromFile != "" {
 				if offsetFlag != "" {
-					return fmt.Errorf("--offset and --from-file are mutually exclusive")
+					return out.Errf(out.ExitUsage, "--offset and --from-file are mutually exclusive")
 				}
 				type fileEntry struct {
 					Topic     string `json:"topic"`
@@ -92,14 +92,14 @@ SEE ALSO:
 				}
 			} else {
 				if offsetFlag == "" {
-					return fmt.Errorf("one of --offset or --from-file is required")
+					return out.Errf(out.ExitUsage, "one of --offset or --from-file is required")
 				}
 				spec, err := offsetparse.Parse(offsetFlag, time.Now())
 				if err != nil {
 					return fmt.Errorf("unable to parse --offset %q: %v", offsetFlag, err)
 				}
 				if spec.End != nil {
-					return fmt.Errorf("--offset does not accept range syntax for trim-prefix")
+					return out.Errf(out.ExitUsage, "--offset does not accept range syntax for trim-prefix")
 				}
 
 				switch spec.Start.Kind {
@@ -137,7 +137,7 @@ SEE ALSO:
 					fmt.Println("Nothing to trim: offset is already at start.")
 					return nil
 				default:
-					return fmt.Errorf("unsupported offset kind for trim-prefix: %v", spec.Start.Kind)
+					return out.Errf(out.ExitUsage, "unsupported offset kind for trim-prefix: %v", spec.Start.Kind)
 				}
 			}
 

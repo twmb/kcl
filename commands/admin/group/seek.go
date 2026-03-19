@@ -89,10 +89,10 @@ SEE ALSO:
 				nSources++
 			}
 			if nSources == 0 {
-				return fmt.Errorf("one of --to, --to-group, or --to-file is required")
+				return out.Errf(out.ExitUsage, "one of --to, --to-group, or --to-file is required")
 			}
 			if nSources > 1 {
-				return fmt.Errorf("--to, --to-group, and --to-file are mutually exclusive")
+				return out.Errf(out.ExitUsage, "--to, --to-group, and --to-file are mutually exclusive")
 			}
 
 			kclClient := cl.Client()
@@ -106,7 +106,7 @@ SEE ALSO:
 			}
 			g, ok := described[groupName]
 			if !ok {
-				return fmt.Errorf("group %q not found in describe response", groupName)
+				return out.Errf(out.ExitNotFound, "group %q not found in describe response", groupName)
 			}
 			if g.Err != nil {
 				return fmt.Errorf("error describing group %q: %v", groupName, g.Err)
@@ -202,7 +202,7 @@ SEE ALSO:
 					return fmt.Errorf("unable to parse --to %q: %v", to, err)
 				}
 				if spec.End != nil {
-					return fmt.Errorf("--to does not accept range offsets; use a single target value")
+					return out.Errf(out.ExitUsage, "--to does not accept range offsets; use a single target value")
 				}
 
 				// Determine target topics: either from --topics flag or from existing commits.
@@ -219,7 +219,7 @@ SEE ALSO:
 					})
 				}
 				if len(targetTopics) == 0 {
-					return fmt.Errorf("no topics to seek; the group has no committed offsets and --topics was not specified")
+					return out.Errf(out.ExitNotFound, "no topics to seek; the group has no committed offsets and --topics was not specified")
 				}
 
 				switch spec.Start.Kind {
@@ -320,7 +320,7 @@ SEE ALSO:
 					})
 
 				default:
-					return fmt.Errorf("unsupported seek target kind: %v", spec.Start.Kind)
+					return out.Errf(out.ExitUsage, "unsupported seek target kind: %v", spec.Start.Kind)
 				}
 			}
 

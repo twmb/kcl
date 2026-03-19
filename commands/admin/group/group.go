@@ -123,7 +123,7 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 			}
 
 			if len(args) == 0 {
-				return fmt.Errorf("no groups matched")
+				return out.Errf(out.ExitNotFound, "no groups matched")
 			}
 
 			brokerResps := cl.Client().RequestSharded(context.Background(), &kmsg.DeleteGroupsRequest{

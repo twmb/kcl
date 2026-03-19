@@ -53,7 +53,7 @@ If the brokers section is printed, the controller broker is marked with *.
 				}
 			}
 			if sections == 0 && cl.Format() == "text" {
-				return fmt.Errorf("no metadata section requested")
+				return out.Errf(out.ExitUsage, "no metadata section requested")
 			}
 
 			includeHeader := sections > 1
@@ -65,11 +65,11 @@ If the brokers section is printed, the controller broker is marked with *.
 					t := kmsg.NewMetadataRequestTopic()
 					if ids {
 						if len(topic) != 32 {
-							return fmt.Errorf("topic id %s is not a 32 byte hex string", topic)
+							return out.Errf(out.ExitUsage, "topic id %s is not a 32 byte hex string", topic)
 						}
 						raw, err := hex.DecodeString(topic)
 						if err != nil {
-							return fmt.Errorf("topic id %s is not a hex string", topic)
+							return out.Errf(out.ExitUsage, "topic id %s is not a hex string", topic)
 						}
 						copy(t.TopicID[:], raw)
 					} else {

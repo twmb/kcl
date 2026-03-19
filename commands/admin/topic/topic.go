@@ -117,7 +117,7 @@ replicas each. When using --replica-assignment, do not use --num-partitions or
 					return fmt.Errorf("unable to parse replica assignment: %v", err)
 				}
 				if len(assignments) == 0 {
-					return fmt.Errorf("--replica-assignment specified but no partitions parsed")
+					return out.Errf(out.ExitUsage, "--replica-assignment specified but no partitions parsed")
 				}
 				numPartitions = -1
 				replicationFactor = -1
@@ -213,7 +213,7 @@ EXAMPLES:
 				if regexFilter != "" {
 					re, err := regexp.Compile(regexFilter)
 					if err != nil {
-						return fmt.Errorf("invalid --regex: %v", err)
+						return out.Errf(out.ExitUsage, "invalid --regex: %v", err)
 					}
 					name := ""
 					if t.Topic != nil {
@@ -252,14 +252,14 @@ without actually deleting them.
 		RunE: func(_ *cobra.Command, topics []string) error {
 			if useRegex {
 				if ids {
-					return fmt.Errorf("--regex and --ids cannot be used together")
+					return out.Errf(out.ExitUsage, "--regex and --ids cannot be used together")
 				}
 				// Compile all patterns first.
 				var patterns []*regexp.Regexp
 				for _, pat := range topics {
 					re, err := regexp.Compile(pat)
 					if err != nil {
-						return fmt.Errorf("invalid regex %q: %v", pat, err)
+						return out.Errf(out.ExitUsage, "invalid regex %q: %v", pat, err)
 					}
 					patterns = append(patterns, re)
 				}
@@ -306,11 +306,11 @@ without actually deleting them.
 				t := kmsg.NewDeleteTopicsRequestTopic()
 				if ids {
 					if len(topic) != 32 {
-						return fmt.Errorf("topic id %s is not a 32 byte hex string", topic)
+						return out.Errf(out.ExitUsage, "topic id %s is not a 32 byte hex string", topic)
 					}
 					raw, err := hex.DecodeString(topic)
 					if err != nil {
-						return fmt.Errorf("topic id %s is not a hex string", topic)
+						return out.Errf(out.ExitUsage, "topic id %s is not a hex string", topic)
 					}
 					copy(t.TopicID[:], raw)
 				} else {
@@ -395,12 +395,12 @@ add-partitions -t bar -t baz 1, 2, 3`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			if len(topics) == 0 {
-				return fmt.Errorf("missing topics to add partitions to")
+				return out.Errf(out.ExitUsage, "missing topics to add partitions to")
 			}
 
 			for _, topic := range topics {
 				if strings.HasPrefix(topic, "__") && !force {
-					return fmt.Errorf("topic %q is an internal topic (starts with \"__\"); use --force to modify internal topics", topic)
+					return out.Errf(out.ExitUsage, "topic %q is an internal topic (starts with \"__\"); use --force to modify internal topics", topic)
 				}
 				if strings.HasPrefix(topic, "__") && force {
 					fmt.Fprintf(os.Stderr, "WARNING: modifying internal topic %q; this can cause system instability\n", topic)
@@ -412,7 +412,7 @@ add-partitions -t bar -t baz 1, 2, 3`,
 				return fmt.Errorf("parse assignments failure: %v", err)
 			}
 			if len(assignments) == 0 {
-				return fmt.Errorf("no new partitions requested")
+				return out.Errf(out.ExitUsage, "no new partitions requested")
 			}
 
 			// Get the metadata so we can determine the final partition count.

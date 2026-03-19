@@ -78,7 +78,7 @@ SEE ALSO:
 				}
 			}
 			if len(groups) == 0 {
-				return fmt.Errorf("no groups to describe")
+				return out.Errf(out.ExitNotFound, "no groups to describe")
 			}
 
 			described, err := describeClassicGroups(cl, groups)
@@ -163,7 +163,7 @@ func describeConsumerGroups(cl *client.Client, groups []string, readCommitted, s
 		}
 	}
 	if len(groups) == 0 {
-		return fmt.Errorf("no consumer groups to describe")
+		return out.Errf(out.ExitNotFound, "no consumer groups to describe")
 	}
 
 	req := kmsg.NewPtrConsumerGroupDescribeRequest()
@@ -767,13 +767,13 @@ func unmarshalGroupDescribeMembers(
 // argument as a regex, and returns only groups matching at least one pattern.
 func filterGroupsByRegex(cl *client.Client, patterns []string, listFn func(*client.Client) ([]string, error)) ([]string, error) {
 	if len(patterns) == 0 {
-		return nil, fmt.Errorf("--regex requires at least one pattern argument")
+		return nil, out.Errf(out.ExitUsage, "--regex requires at least one pattern argument")
 	}
 	var compiled []*regexp.Regexp
 	for _, p := range patterns {
 		re, err := regexp.Compile(p)
 		if err != nil {
-			return nil, fmt.Errorf("invalid regex %q: %v", p, err)
+			return nil, out.Errf(out.ExitUsage, "invalid regex %q: %v", p, err)
 		}
 		compiled = append(compiled, re)
 	}

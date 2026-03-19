@@ -67,7 +67,7 @@ func Command(cl *client.Client) *cobra.Command {
 		Args:  cobra.MinimumNArgs(1), // exec
 		RunE: func(_ *cobra.Command, args []string) error {
 			if len(txnID) == 0 {
-				return fmt.Errorf("invalid empty transactional id")
+				return out.Errf(out.ExitUsage, "invalid empty transactional id")
 			}
 
 			///////////////
@@ -94,7 +94,7 @@ func Command(cl *client.Client) *cobra.Command {
 			case "cooperative-sticky":
 				balancer = kgo.CooperativeStickyBalancer()
 			default:
-				return fmt.Errorf("unrecognized group balancer %q", groupAlg)
+				return out.Errf(out.ExitUsage, "unrecognized group balancer %q", groupAlg)
 			}
 			cl.AddOpt(kgo.Balancers(balancer))
 			if instanceID != "" {
@@ -121,7 +121,7 @@ func Command(cl *client.Client) *cobra.Command {
 			case "zstd":
 				codec = kgo.ZstdCompression()
 			default:
-				return fmt.Errorf("invalid compression codec %q", codec)
+				return out.Errf(out.ExitUsage, "invalid compression codec %q", codec)
 			}
 			cl.AddOpt(kgo.TransactionalID(txnID))
 			cl.AddOpt(kgo.ProducerBatchCompression(codec))
@@ -145,10 +145,10 @@ func Command(cl *client.Client) *cobra.Command {
 
 			if len(args) == 1 && args[0] == "mirror" {
 				if readFormat != "" || writeFormat != "" || rwFormat != "" {
-					return fmt.Errorf("formats must not be specified when mirroring")
+					return out.Errf(out.ExitUsage, "formats must not be specified when mirroring")
 				}
 				if len(destTopic) == 0 {
-					return fmt.Errorf("destiniation topic is missing (required for mirroring)")
+					return out.Errf(out.ExitUsage, "destiniation topic is missing (required for mirroring)")
 				}
 				go transactMirror(quitCtx, cl.GroupTransactSession(), destTopic, verbose)
 				return nil
