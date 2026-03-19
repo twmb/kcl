@@ -311,17 +311,21 @@ func listOffsetsCommand(cl *client.Client) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "list-offsets",
-		Short: "List start and end offsets for partitions.",
-		Long: `List start and end offsets for topics or partitions (Kafka 0.8.0+).
+		Short: "List start, stable, and end offsets for partitions.",
+		Long: `List start, stable, and end offsets for topics or partitions (Kafka 0.10.0+).
 
 The input format is topic:#,#,# or just topic. If a topic is given without
 partitions, a metadata request is issued to figure out all partitions for the
-topic and the output will include the start and end offsets for all partitions.
+topic and the output will include the offsets for all partitions.
 
 Multiple topics can be listed, and multiple partitions per topic can be listed.
 
+The STABLE column shows the last stable offset (the offset up to which consumers
+with read_committed isolation can read). If STABLE differs from END, there is an
+open transaction on that partition.
+
 If --with-epochs is true, the start and end offsets will have /### following
-the offset number, where ### corresponds to the broker epoch at at that given
+the offset number, where ### corresponds to the broker epoch at that given
 offset.
 `,
 		Example: "list-offsets foo:1,2,3 bar:0",
@@ -336,17 +340,18 @@ offset.
 				ReplicaID:      -1,
 				IsolationLevel: 0,
 			}
+			reqStable := &kmsg.ListOffsetsRequest{
+				ReplicaID:      -1,
+				IsolationLevel: 1, // read_committed => last stable offset
+			}
 			if readCommitted {
 				reqStart.IsolationLevel = 1
 				reqEnd.IsolationLevel = 1
 			}
 			for topic, partitions := range tps {
-				topicReqStart := kmsg.ListOffsetsRequestTopic{
-					Topic: topic,
-				}
-				topicReqEnd := kmsg.ListOffsetsRequestTopic{
-					Topic: topic,
-				}
+				topicReqStart := kmsg.ListOffsetsRequestTopic{Topic: topic}
+				topicReqEnd := kmsg.ListOffsetsRequestTopic{Topic: topic}
+				topicReqStable := kmsg.ListOffsetsRequestTopic{Topic: topic}
 				for _, partition := range partitions {
 					topicReqStart.Partitions = append(topicReqStart.Partitions, kmsg.ListOffsetsRequestTopicPartition{
 						Partition:          partition,
@@ -360,14 +365,21 @@ offset.
 						Timestamp:          -1, // latest
 						MaxNumOffsets:      1,
 					})
+					topicReqStable.Partitions = append(topicReqStable.Partitions, kmsg.ListOffsetsRequestTopicPartition{
+						Partition:          partition,
+						CurrentLeaderEpoch: -1,
+						Timestamp:          -1, // latest with read_committed = last stable
+						MaxNumOffsets:      1,
+					})
 				}
 				reqStart.Topics = append(reqStart.Topics, topicReqStart)
 				reqEnd.Topics = append(reqEnd.Topics, topicReqEnd)
+				reqStable.Topics = append(reqStable.Topics, topicReqStable)
 			}
 
-			var startResps, endResps []kgo.ResponseShard
+			var startResps, endResps, stableResps []kgo.ResponseShard
 			var wg sync.WaitGroup
-			wg.Add(2)
+			wg.Add(3)
 			go func() {
 				defer wg.Done()
 				startResps = cl.Client().RequestSharded(context.Background(), reqStart)
@@ -376,6 +388,10 @@ offset.
 				defer wg.Done()
 				endResps = cl.Client().RequestSharded(context.Background(), reqEnd)
 			}()
+			go func() {
+				defer wg.Done()
+				stableResps = cl.Client().RequestSharded(context.Background(), reqStable)
+			}()
 			wg.Wait()
 
 			type startEnd struct {
@@ -383,6 +399,7 @@ offset.
 				broker           int32
 				startOffset      int64
 				startLeaderEpoch int32
+				stableOffset     int64
 				endOffset        int64
 				endLeaderEpoch   int32
 			}
@@ -452,6 +469,28 @@ offset.
 				}
 			}
 
+			for _, brokerResp := range stableResps {
+				if brokerResp.Err != nil {
+					fmt.Printf("unable to list stable offsets from broker %d (%s:%d): %v\n", brokerResp.Meta.NodeID, brokerResp.Meta.Host, brokerResp.Meta.Port, brokerResp.Err)
+					continue
+				}
+				stableResp := brokerResp.Resp.(*kmsg.ListOffsetsResponse)
+				for _, topic := range stableResp.Topics {
+					topicStartEnds := startEnds[topic.Topic]
+					if topicStartEnds == nil {
+						continue
+					}
+					for _, partition := range topic.Partitions {
+						partStartEnd, ok := topicStartEnds[partition.Partition]
+						if !ok {
+							continue
+						}
+						partStartEnd.stableOffset = partition.Offset
+						topicStartEnds[partition.Partition] = partStartEnd
+					}
+				}
+			}
+
 			type partStartEnd struct {
 				part int32
 				startEnd
@@ -474,30 +513,32 @@ offset.
 			tw := out.BeginTabWrite()
 			defer tw.Flush()
 
-			fmt.Fprintf(tw, "BROKER\tTOPIC\tPARTITION\tSTART\tEND\tERROR\n")
+			fmt.Fprintf(tw, "BROKER\tTOPIC\tPARTITION\tSTART\tSTABLE\tEND\tERROR\n")
 
 			for _, topic := range sorted {
 				for _, part := range topic.parts {
 					if part.err != nil {
-						fmt.Fprintf(tw, "%d\t%s\t%d\t\t\t%v\n", part.broker, topic.topic, part.part, part.err)
+						fmt.Fprintf(tw, "%d\t%s\t%d\t\t\t\t%v\n", part.broker, topic.topic, part.part, part.err)
 						continue
 					}
 					if withEpochs {
-						fmt.Fprintf(tw, "%d\t%s\t%d\t%d/%d\t%d/%d\t\n",
+						fmt.Fprintf(tw, "%d\t%s\t%d\t%d/%d\t%d\t%d/%d\t\n",
 							part.broker,
 							topic.topic,
 							part.part,
 							part.startOffset,
 							part.startLeaderEpoch,
+							part.stableOffset,
 							part.endOffset,
 							part.endLeaderEpoch,
 						)
 					} else {
-						fmt.Fprintf(tw, "%d\t%s\t%d\t%d\t%d\t\n",
+						fmt.Fprintf(tw, "%d\t%s\t%d\t%d\t%d\t%d\t\n",
 							part.broker,
 							topic.topic,
 							part.part,
 							part.startOffset,
+							part.stableOffset,
 							part.endOffset,
 						)
 					}
