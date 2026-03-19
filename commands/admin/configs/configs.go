@@ -20,7 +20,7 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "config",
 		Aliases: []string{"configs"},
-		Short:   "Alter or describe topic, broker, or broker logger configs.",
+		Short:   "Alter or describe configs (topic, broker, broker logger, client-metrics, group).",
 	}
 	cmd.AddCommand(alterCommand(cl))
 	cmd.AddCommand(describeCommand(cl))
@@ -30,10 +30,12 @@ func Command(cl *client.Client) *cobra.Command {
 type entity int8
 
 const (
-	entityUnknown      = 0
-	entityTopic        = 2
-	entityBroker       = 4
-	entityBrokerLogger = 8
+	entityUnknown       = 0
+	entityTopic         = 2
+	entityBroker        = 4
+	entityBrokerLogger  = 8
+	entityClientMetrics = 16
+	entityGroup         = 32
 )
 
 // querier wraps a client with an entity and a requestor.
@@ -57,12 +59,19 @@ func (q *querier) parseEntity(args []string) {
 		q.entity = entityBroker
 	case "bl", "broker logger":
 		q.entity = entityBrokerLogger
+	case "cm", "client-metrics":
+		q.entity = entityClientMetrics
+	case "g", "group":
+		q.entity = entityGroup
 	default:
-		out.Die("unrecognized entity type %q (allowed: t, topic, b, broker, bl, broker logger)", q.rawEntity)
+		out.Die("unrecognized entity type %q (allowed: t, topic, b, broker, bl, broker logger, cm, client-metrics, g, group)", q.rawEntity)
 	}
 
-	if q.entity == entityTopic && len(args) == 0 {
-		out.Die("missing entity name")
+	switch q.entity {
+	case entityTopic, entityClientMetrics, entityGroup:
+		if len(args) == 0 {
+			out.Die("missing entity name")
+		}
 	}
 	if len(args) > 0 {
 		q.resourceName = args[0]
@@ -85,7 +94,7 @@ func alterCommand(cl *client.Client) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "alter [ENTITY]",
-		Short: "Alter a topic, broker, or broker logger's configs.",
+		Short: "Alter configs (topic, broker, broker logger, client-metrics, group).",
 		Long: `Alter configurations (0.11.0+).
 
 Kafka has two modes of altering configurations: wholesale altering, and
@@ -100,28 +109,34 @@ use the --no-confirm flag. As well, with incremental altering, keys require
 a prefix of either set, del, +, or - to indicate whether the value is to be
 set, deleted, added to an array, or removed from an array.
 
-Altering requires specifying the "entity type" being altered. This is either
-"topic" ("t"), "broker" ("b"), or "broker logger" ("bl"). Broker logger support
-only exists for incrementally altering configs.
+Altering requires specifying the "entity type" being altered:
+  t,  topic           topic configuration
+  b,  broker          broker configuration
+  bl, broker logger   broker logger configuration
+  cm, client-metrics  client metrics subscription (Kafka 3.7+)
+  g,  group           group configuration (Kafka 4.0+)
 
-Altering topics always requires the topic name being altered. Altering brokers
-allows for leaving off the broker being altered; this will update the dynamic
-configuration on all brokers. Updating an individual broker causes the broker
-to reload its password files and allows for setting password fields.
+Altering topics, client-metrics, and groups always requires the entity name.
+Altering brokers allows for leaving off the broker being altered; this will
+update the dynamic configuration on all brokers. Updating an individual broker
+causes the broker to reload its password files and allows for setting password
+fields.
 `,
 
-		Example: `alter foo -itt -ks:cleanup.policy=compact -kd:preallocate
+		Example: `alter foo -s cleanup.policy=compact --delete preallocate
 
-alter foo --dry --inc --type topic --kv set:preallocate=true --kv del:cleanup.policy
+alter foo --dry --type topic --set preallocate=true --delete cleanup.policy
 
-alter foo --no-confirm --type topic --kv preallocate=true // loses other dynamic configs`,
+alter my-share-group -tg -s share.auto.offset.reset=earliest
+
+alter my-subscription -tcm -s match=[client_software_name=kcl]`,
 
 		Run: func(_ *cobra.Command, args []string) {
 			cfger.alter(args)
 		},
 	}
 
-	cmd.Flags().StringVarP(&cfger.rawEntity, "type", "t", "topic", "entity type (t or topic, b or broker, bl or broker logger)")
+	cmd.Flags().StringVarP(&cfger.rawEntity, "type", "t", "topic", "entity type (t, topic, b, broker, bl, broker logger, cm, client-metrics, g, group)")
 	cmd.Flags().BoolVarP(&cfger.incremental, "inc", "i", false, "perform an incremental alter (Kafka 2.3.0+)")
 	cmd.Flags().StringArrayVarP(&cfger.rawKVs, "kv", "k", nil, "key value config parameters; repeatable; if incremental, keys require prefix in [set:, del:, +:, -:]")
 	cmd.Flags().MarkDeprecated("kv", "use --set, --delete, --append, --subtract instead")
@@ -400,26 +415,32 @@ func describeCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "describe [ENTITY]",
 		Aliases: []string{"d"},
-		Short:   "Describe a topic, broker, or broker logger's configs.",
+		Short:   "Describe configs (topic, broker, broker logger, client-metrics, group).",
 		Long: `Describe configurations (Kafka 0.11.0+).
 
-This command prints all key/value config values for a topic, broker, or broker
-logger. Read only keys are suffixed with *.
+This command prints all key/value config values for a given entity. Read only
+keys are suffixed with *.
 
-Describing requires specifying the "entity type" being altered. This is either
-"topic" ("t"), "broker" ("b"), or "broker logger" ("bl").
+Describing requires specifying the "entity type":
+  t,  topic           topic configuration
+  b,  broker          broker configuration
+  bl, broker logger   broker logger configuration
+  cm, client-metrics  client metrics subscription (Kafka 3.7+)
+  g,  group           group configuration (Kafka 4.0+)
 
 When describing brokers, if no broker ID is used, only dynamic (manually set)
 key/value pairs are printed. If you wish to describe the full config for a
 specific broker, be sure to pass a broker ID.
 `,
-		Example: `describe 1 -tb
+		Example: `describe foo -tt
+
+describe 1 -tb
 
 describe --type broker // prints all dynamic broker key/value pairs
 
-describe foo -tt
+describe my-share-group -tg
 
-describe bar --type topic`,
+describe my-subscription -tcm`,
 
 		Run: func(_ *cobra.Command, args []string) {
 			q.parseEntity(args)
@@ -478,7 +499,7 @@ describe bar --type topic`,
 		},
 	}
 
-	cmd.Flags().StringVarP(&q.rawEntity, "type", "t", "topic", "entity type (topic, broker, broker logger; shortcuts t, b, bl)")
+	cmd.Flags().StringVarP(&q.rawEntity, "type", "t", "topic", "entity type (t, topic, b, broker, bl, broker logger, cm, client-metrics, g, group)")
 	cmd.Flags().BoolVar(&withDocs, "with-docs", false, "include documentation for config values (Kafka 2.6.0+)")
 	cmd.Flags().BoolVar(&withTypes, "with-types", false, "include types of config values (Kafka 2.6.0+)")
 

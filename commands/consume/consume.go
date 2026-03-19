@@ -3,6 +3,7 @@ package consume
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"sync/atomic"
@@ -462,6 +463,8 @@ func (co *consumeOutput) consume() {
 		lastRecordTime = time.Now()
 	}
 
+	var printedWaiting bool
+
 	for atomic.LoadUint32(&co.quit) == 0 {
 		if len(co.untilOffsets) != 0 && len(offsetsRemaining) == 0 {
 			os.Exit(0)
@@ -472,7 +475,21 @@ func (co *consumeOutput) consume() {
 			os.Exit(0)
 		}
 
+		// If polling takes more than 1s with no records, print a
+		// one-time hint so the user knows we're not hung.
+		var idleTimer *time.Timer
+		if !printedWaiting {
+			idleTimer = time.AfterFunc(3*time.Second, func() {
+				fmt.Fprintln(os.Stderr, "waiting for new records...")
+				printedWaiting = true
+			})
+		}
+
 		fetches := co.cl.PollFetches(co.ctx)
+
+		if idleTimer != nil {
+			idleTimer.Stop()
+		}
 		if co.timeout > 0 && fetches.NumRecords() > 0 {
 			lastRecordTime = time.Now()
 		}
