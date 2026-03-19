@@ -2,6 +2,7 @@ package topic
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strconv"
@@ -108,7 +109,7 @@ SEE ALSO:
 					req.IsolationLevel = 1 // read_committed
 					rt := kmsg.NewListOffsetsRequestTopic()
 					rt.Topic = t
-					// We need partition IDs — get them from metadata.
+					// We need partition IDs -- get them from metadata.
 					for _, mt := range metaResp.Topics {
 						if strval(mt.Topic) == t {
 							for _, p := range mt.Partitions {
@@ -140,28 +141,19 @@ SEE ALSO:
 				}
 			}
 
-			for ti, topic := range metaResp.Topics {
+			// Build filtered partition lists for each topic.
+			type topicPartitions struct {
+				topic      kmsg.MetadataResponseTopic
+				partitions []kmsg.MetadataResponseTopicPartition
+			}
+			var described []topicPartitions
+			for _, topic := range metaResp.Topics {
 				if err := kerr.ErrorForCode(topic.ErrorCode); err != nil {
-					fmt.Fprintf(out.BeginTabWrite(), "TOPIC %s: %v\n", strval(topic.Topic), err)
+					if cl.Format() == "text" {
+						fmt.Fprintf(out.BeginTabWrite(), "TOPIC %s: %v\n", strval(topic.Topic), err)
+					}
 					continue
 				}
-
-				topicName := strval(topic.Topic)
-
-				// Summary section.
-				tw := out.NewTabWriter()
-				fmt.Fprintf(tw, "TOPIC\t%s\n", topicName)
-				if topic.TopicID != [16]byte{} {
-					fmt.Fprintf(tw, "TOPIC-ID\t%x\n", topic.TopicID)
-				}
-				fmt.Fprintf(tw, "PARTITIONS\t%d\n", len(topic.Partitions))
-				if len(topic.Partitions) > 0 {
-					fmt.Fprintf(tw, "REPLICATION\t%d\n", len(topic.Partitions[0].Replicas))
-				}
-				if topic.IsInternal {
-					fmt.Fprintf(tw, "INTERNAL\ttrue\n")
-				}
-				tw.Flush()
 
 				// Apply health filters.
 				var partitions []kmsg.MetadataResponseTopicPartition
@@ -181,65 +173,220 @@ SEE ALSO:
 				if !underReplicated && !unavailable && !underMinISR && !atMinISR {
 					partitions = topic.Partitions
 				}
+				sort.Slice(partitions, func(i, j int) bool {
+					return partitions[i].Partition < partitions[j].Partition
+				})
+				described = append(described, topicPartitions{topic, partitions})
+			}
 
-				// Partition table.
-				if len(partitions) > 0 {
-					sort.Slice(partitions, func(i, j int) bool {
-						return partitions[i].Partition < partitions[j].Partition
-					})
-
-					headers := []string{"PARTITION", "LEADER", "EPOCH", "REPLICAS", "ISR", "OFFLINE-REPLICAS"}
-					if stable {
-						headers = append(headers, "STABLE-OFFSET")
+			switch cl.Format() {
+			case "json":
+				type partJSON struct {
+					Partition       int32   `json:"partition"`
+					Leader          int32   `json:"leader"`
+					Epoch           int32   `json:"epoch"`
+					Replicas        []int32 `json:"replicas"`
+					ISR             []int32 `json:"isr"`
+					OfflineReplicas []int32 `json:"offline_replicas"`
+					Error           string  `json:"error,omitempty"`
+					StableOffset    *int64  `json:"stable_offset,omitempty"`
+				}
+				type configJSON struct {
+					Key       string `json:"key"`
+					Value     string `json:"value"`
+					Source    string `json:"source"`
+					Sensitive bool   `json:"sensitive"`
+				}
+				type topicJSON struct {
+					Topic       string       `json:"topic"`
+					TopicID     string       `json:"topic_id,omitempty"`
+					Partitions  int          `json:"partition_count"`
+					Replication int          `json:"replication_factor"`
+					Internal    bool         `json:"internal,omitempty"`
+					Details     []partJSON   `json:"partitions"`
+					Configs     []configJSON `json:"configs,omitempty"`
+				}
+				var topicsOut []topicJSON
+				for _, d := range described {
+					topicName := strval(d.topic.Topic)
+					tj := topicJSON{
+						Topic:      topicName,
+						Partitions: len(d.topic.Partitions),
+						Internal:   d.topic.IsInternal,
 					}
-					table := out.NewTable(headers...)
-					for _, p := range partitions {
-						errSuffix := ""
-						if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
-							errSuffix = " (" + err.Error() + ")"
+					if d.topic.TopicID != [16]byte{} {
+						tj.TopicID = hex.EncodeToString(d.topic.TopicID[:])
+					}
+					if len(d.topic.Partitions) > 0 {
+						tj.Replication = len(d.topic.Partitions[0].Replicas)
+					}
+					for _, p := range d.partitions {
+						pj := partJSON{
+							Partition:       p.Partition,
+							Leader:          p.Leader,
+							Epoch:           p.LeaderEpoch,
+							Replicas:        p.Replicas,
+							ISR:             p.ISR,
+							OfflineReplicas: p.OfflineReplicas,
 						}
-						row := []any{
-							p.Partition,
-							p.Leader,
-							p.LeaderEpoch,
-							int32sToString(p.Replicas),
-							int32sToString(p.ISR),
-							int32sToString(p.OfflineReplicas) + errSuffix,
+						if pj.Replicas == nil {
+							pj.Replicas = []int32{}
+						}
+						if pj.ISR == nil {
+							pj.ISR = []int32{}
+						}
+						if pj.OfflineReplicas == nil {
+							pj.OfflineReplicas = []int32{}
+						}
+						if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
+							pj.Error = err.Error()
 						}
 						if stable {
-							so := "-"
+							if m, ok := stableOffsets[topicName]; ok {
+								if v, ok := m[p.Partition]; ok {
+									pj.StableOffset = &v
+								}
+							}
+						}
+						tj.Details = append(tj.Details, pj)
+					}
+					if (showConfigs || showAll) && configsByTopic != nil {
+						if configs, ok := configsByTopic[topicName]; ok {
+							for _, c := range configs {
+								val := ""
+								if c.Value != nil {
+									val = *c.Value
+								}
+								tj.Configs = append(tj.Configs, configJSON{
+									Key:       c.Name,
+									Value:     val,
+									Source:    describeConfigSource(c.Source),
+									Sensitive: c.IsSensitive,
+								})
+							}
+						}
+					}
+					topicsOut = append(topicsOut, tj)
+				}
+				out.MarshalJSON("topic.describe", 1, map[string]any{
+					"topics": topicsOut,
+				})
+
+			case "awk":
+				for _, d := range described {
+					topicName := strval(d.topic.Topic)
+					for _, p := range d.partitions {
+						errStr := ""
+						if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
+							errStr = err.Error()
+						}
+						if stable {
+							so := ""
 							if m, ok := stableOffsets[topicName]; ok {
 								if v, ok := m[p.Partition]; ok {
 									so = fmt.Sprintf("%d", v)
 								}
 							}
-							row = append(row, so)
+							fmt.Printf("%s\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%s\n",
+								topicName,
+								p.Partition,
+								p.Leader,
+								p.LeaderEpoch,
+								int32sToString(p.Replicas),
+								int32sToString(p.ISR),
+								int32sToString(p.OfflineReplicas),
+								so,
+								errStr,
+							)
+						} else {
+							fmt.Printf("%s\t%d\t%d\t%d\t%s\t%s\t%s\t%s\n",
+								topicName,
+								p.Partition,
+								p.Leader,
+								p.LeaderEpoch,
+								int32sToString(p.Replicas),
+								int32sToString(p.ISR),
+								int32sToString(p.OfflineReplicas),
+								errStr,
+							)
 						}
-						table.Print(row...)
 					}
-					table.Flush()
 				}
 
-				// Configs section.
-				if (showConfigs || showAll) && configsByTopic != nil {
-					if configs, ok := configsByTopic[topicName]; ok && len(configs) > 0 {
-						fmt.Println()
-						fmt.Println("CONFIGS:")
-						configTw := out.NewTable("KEY", "VALUE", "SOURCE", "SENSITIVE")
-						for _, c := range configs {
-							val := ""
-							if c.Value != nil {
-								val = *c.Value
+			default: // text
+				for ti, d := range described {
+					topicName := strval(d.topic.Topic)
+
+					// Summary section.
+					tw := out.NewTabWriter()
+					fmt.Fprintf(tw, "TOPIC\t%s\n", topicName)
+					if d.topic.TopicID != [16]byte{} {
+						fmt.Fprintf(tw, "TOPIC-ID\t%x\n", d.topic.TopicID)
+					}
+					fmt.Fprintf(tw, "PARTITIONS\t%d\n", len(d.topic.Partitions))
+					if len(d.topic.Partitions) > 0 {
+						fmt.Fprintf(tw, "REPLICATION\t%d\n", len(d.topic.Partitions[0].Replicas))
+					}
+					if d.topic.IsInternal {
+						fmt.Fprintf(tw, "INTERNAL\ttrue\n")
+					}
+					tw.Flush()
+
+					// Partition table.
+					if len(d.partitions) > 0 {
+						headers := []string{"PARTITION", "LEADER", "EPOCH", "REPLICAS", "ISR", "OFFLINE-REPLICAS"}
+						if stable {
+							headers = append(headers, "STABLE-OFFSET")
+						}
+						table := out.NewTable(headers...)
+						for _, p := range d.partitions {
+							errSuffix := ""
+							if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
+								errSuffix = " (" + err.Error() + ")"
 							}
-							source := describeConfigSource(c.Source)
-							configTw.Print(c.Name, val, source, c.IsSensitive)
+							row := []any{
+								p.Partition,
+								p.Leader,
+								p.LeaderEpoch,
+								int32sToString(p.Replicas),
+								int32sToString(p.ISR),
+								int32sToString(p.OfflineReplicas) + errSuffix,
+							}
+							if stable {
+								so := "-"
+								if m, ok := stableOffsets[topicName]; ok {
+									if v, ok := m[p.Partition]; ok {
+										so = fmt.Sprintf("%d", v)
+									}
+								}
+								row = append(row, so)
+							}
+							table.Print(row...)
 						}
-						configTw.Flush()
+						table.Flush()
 					}
-				}
 
-				if ti < len(metaResp.Topics)-1 {
-					fmt.Println()
+					// Configs section.
+					if (showConfigs || showAll) && configsByTopic != nil {
+						if configs, ok := configsByTopic[topicName]; ok && len(configs) > 0 {
+							fmt.Println()
+							fmt.Println("CONFIGS:")
+							configTw := out.NewTable("KEY", "VALUE", "SOURCE", "SENSITIVE")
+							for _, c := range configs {
+								val := ""
+								if c.Value != nil {
+									val = *c.Value
+								}
+								source := describeConfigSource(c.Source)
+								configTw.Print(c.Name, val, source, c.IsSensitive)
+							}
+							configTw.Flush()
+						}
+					}
+
+					if ti < len(described)-1 {
+						fmt.Println()
+					}
 				}
 			}
 			return nil

@@ -31,12 +31,23 @@ import (
 	"github.com/twmb/kcl/out"
 )
 
+// version is set via ldflags at build time:
+//
+//	go build -ldflags "-X main.version=v1.0.0"
+var version string
+
 // TODO remove cobra to remove ridiculous implicit "help" command from everything.
 
 func main() {
+	v := version
+	if v == "" {
+		v = "kcl (development)"
+	}
+
 	root := &cobra.Command{
-		Use:   "kcl",
-		Short: "Kafka Command Line command for commanding Kafka on the command line",
+		Use:     "kcl",
+		Short:   "Kafka Command Line command for commanding Kafka on the command line",
+		Version: v,
 		Long: `A Kafka command line interface.
 
 kcl is a Kafka swiss army knife that aims to enable Kafka administration,

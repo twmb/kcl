@@ -242,8 +242,8 @@ SEE ALSO:
 
 	// Ergonomic resource-specific flags (shortcuts for --type + --name).
 	var topicFlag, groupFlag, txnIDFlag, dtokenFlag string
-	cmd.Flags().StringVar(&topicFlag, "topic", "", "topic resource filter")
-	cmd.Flags().StringVar(&groupFlag, "group", "", "group resource filter")
+	cmd.Flags().StringVarP(&topicFlag, "topic", "t", "", "topic resource filter")
+	cmd.Flags().StringVarP(&groupFlag, "group", "g", "", "group resource filter")
 	cmd.Flags().BoolVar(new(bool), "cluster", false, "cluster resource filter")
 	cmd.Flags().StringVar(&txnIDFlag, "transactional-id", "", "transactional ID resource filter")
 	cmd.Flags().StringVar(&dtokenFlag, "delegation-token", "", "delegation token resource filter")
@@ -475,8 +475,8 @@ SEE ALSO:
 	cmd.Flags().StringArrayVar(&denyPrincipals, "deny-principal", nil, "principal to deny (repeatable)")
 	cmd.Flags().StringArrayVar(&allowHosts, "allow-host", nil, "host to allow from (repeatable; default '*')")
 	cmd.Flags().StringArrayVar(&denyHosts, "deny-host", nil, "host to deny from (repeatable)")
-	cmd.Flags().StringArrayVar(&topics, "topic", nil, "topic resource (repeatable)")
-	cmd.Flags().StringArrayVar(&groups, "group", nil, "group resource (repeatable)")
+	cmd.Flags().StringArrayVarP(&topics, "topic", "t", nil, "topic resource (repeatable)")
+	cmd.Flags().StringArrayVarP(&groups, "group", "g", nil, "group resource (repeatable)")
 	cmd.Flags().StringArrayVar(&txnIDs, "transactional-id", nil, "transactional ID resource (repeatable)")
 	cmd.Flags().StringArrayVar(&dtokens, "delegation-token", nil, "delegation token resource (repeatable)")
 	cmd.Flags().BoolVar(&cluster, "cluster", false, "cluster resource")
@@ -733,8 +733,8 @@ For more detailed information about ACLs, read kcl acl --help.
 
 	// Ergonomic resource-specific flags.
 	var topicFlag, groupFlag, txnIDFlag, dtokenFlag string
-	cmd.Flags().StringVar(&topicFlag, "topic", "", "topic resource filter")
-	cmd.Flags().StringVar(&groupFlag, "group", "", "group resource filter")
+	cmd.Flags().StringVarP(&topicFlag, "topic", "t", "", "topic resource filter")
+	cmd.Flags().StringVarP(&groupFlag, "group", "g", "", "group resource filter")
 	cmd.Flags().BoolVar(new(bool), "cluster", false, "cluster resource filter")
 	cmd.Flags().StringVar(&txnIDFlag, "transactional-id", "", "transactional ID resource filter")
 	cmd.Flags().StringVar(&dtokenFlag, "delegation-token", "", "delegation token resource filter")

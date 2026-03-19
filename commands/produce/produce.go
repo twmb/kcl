@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -27,6 +28,7 @@ func Command(cl *client.Client) *cobra.Command {
 		deliveryTimeout      time.Duration
 		maxMessageBytes      int32
 		allowAutoTopicCreate bool
+		headers              []string
 	)
 
 	cmd := &cobra.Command{
@@ -231,6 +233,15 @@ To show partition and offset for each produced record:
 				cl.AddOpt(kgo.AllowAutoTopicCreation())
 			}
 
+			var staticHeaders []kgo.RecordHeader
+			for _, h := range headers {
+				k, v, ok := strings.Cut(h, "=")
+				if !ok {
+					return out.Errf(out.ExitUsage, "invalid header %q: must be in key=value format", h)
+				}
+				staticHeaders = append(staticHeaders, kgo.RecordHeader{Key: k, Value: []byte(v)})
+			}
+
 			for {
 				r, err := reader.ReadRecord()
 				if err != nil {
@@ -251,6 +262,10 @@ To show partition and offset for each produced record:
 
 				// Override the partition in the case when the manual partitioner is used.
 				r.Partition = partition
+
+				if len(staticHeaders) > 0 {
+					r.Headers = append(r.Headers, staticHeaders...)
+				}
 
 				cl.Client().Produce(context.Background(), r, func(r *kgo.Record, err error) {
 					out.MaybeDie(err, "unable to produce record: %v", err)
@@ -277,6 +292,7 @@ To show partition and offset for each produced record:
 	cmd.Flags().DurationVar(&deliveryTimeout, "delivery-timeout", 0, "per-record delivery timeout (0 is no timeout)")
 	cmd.Flags().Int32Var(&maxMessageBytes, "max-message-bytes", 0, "max record batch size in bytes (0 uses broker default)")
 	cmd.Flags().BoolVar(&allowAutoTopicCreate, "allow-auto-topic-creation", false, "allow auto-creation of topics that don't exist")
+	cmd.Flags().StringArrayVarP(&headers, "header", "H", nil, "header in key=value format to attach to each record (repeatable)")
 
 	return cmd
 }
