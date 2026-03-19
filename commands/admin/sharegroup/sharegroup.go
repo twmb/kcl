@@ -120,7 +120,7 @@ Use --summary to show only aggregate information (total lag, member count).
 				}
 			}
 			if len(groups) == 0 {
-				return out.Errf(out.ExitNotFound, "no share groups to describe")
+				return fmt.Errorf( "no share groups to describe")
 			}
 
 			req := kmsg.NewPtrShareGroupDescribeRequest()

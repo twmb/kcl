@@ -106,7 +106,7 @@ SEE ALSO:
 			}
 			g, ok := described[groupName]
 			if !ok {
-				return out.Errf(out.ExitNotFound, "group %q not found in describe response", groupName)
+				return fmt.Errorf( "group %q not found in describe response", groupName)
 			}
 			if g.Err != nil {
 				return fmt.Errorf("error describing group %q: %v", groupName, g.Err)
@@ -219,7 +219,7 @@ SEE ALSO:
 					})
 				}
 				if len(targetTopics) == 0 {
-					return out.Errf(out.ExitNotFound, "no topics to seek; the group has no committed offsets and --topics was not specified")
+					return fmt.Errorf( "no topics to seek; the group has no committed offsets and --topics was not specified")
 				}
 
 				switch spec.Start.Kind {

@@ -78,7 +78,7 @@ SEE ALSO:
 				}
 			}
 			if len(groups) == 0 {
-				return out.Errf(out.ExitNotFound, "no groups to describe")
+				return fmt.Errorf( "no groups to describe")
 			}
 
 			described, err := describeClassicGroups(cl, groups)
@@ -163,7 +163,7 @@ func describeConsumerGroups(cl *client.Client, groups []string, readCommitted, s
 		}
 	}
 	if len(groups) == 0 {
-		return out.Errf(out.ExitNotFound, "no consumer groups to describe")
+		return fmt.Errorf( "no consumer groups to describe")
 	}
 
 	req := kmsg.NewPtrConsumerGroupDescribeRequest()

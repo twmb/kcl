@@ -25,12 +25,9 @@ func BeginTabWriteTo(w io.Writer) *tabwriter.Writer {
 
 // Standard exit codes.
 const (
-	ExitOK       = 0 // success
-	ExitError    = 1 // general / Kafka-level error
-	ExitUsage    = 2 // invalid usage (bad flags, args, parse errors)
-	ExitAuth     = 3 // auth / permission error
-	ExitNotFound = 4 // resource not found
-	ExitTimeout  = 5 // timeout
+	ExitOK    = 0 // success
+	ExitError = 1 // general / Kafka-level error
+	ExitUsage = 2 // invalid usage (bad flags, args, parse errors)
 )
 
 // ExitError is an error with a specific exit code. Commands should return

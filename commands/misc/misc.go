@@ -108,7 +108,7 @@ func errtextCommand() *cobra.Command {
 				}
 			}
 			if !list {
-				return out.Errf(out.ExitNotFound, "Unknown error text.")
+				return fmt.Errorf( "Unknown error text.")
 			}
 			return nil
 		},
