@@ -526,40 +526,27 @@ offset.
 			}
 			sort.Slice(sorted, func(i, j int) bool { return sorted[i].topic < sorted[j].topic })
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
-			fmt.Fprintf(tw, "BROKER\tTOPIC\tPARTITION\tSTART\tSTABLE\tEND\tERROR\n")
+			table := out.NewFormattedTable(cl.Format(), "misc.list-offsets", 1, "offsets",
+				"BROKER", "TOPIC", "PARTITION", "START", "STABLE", "END", "ERROR")
 
 			for _, topic := range sorted {
 				for _, part := range topic.parts {
 					if part.err != nil {
-						fmt.Fprintf(tw, "%d\t%s\t%d\t\t\t\t%v\n", part.broker, topic.topic, part.part, part.err)
+						table.Row(part.broker, topic.topic, part.part, "", "", "", part.err)
 						continue
 					}
+					var startStr, endStr string
 					if withEpochs {
-						fmt.Fprintf(tw, "%d\t%s\t%d\t%d/%d\t%d\t%d/%d\t\n",
-							part.broker,
-							topic.topic,
-							part.part,
-							part.startOffset,
-							part.startLeaderEpoch,
-							part.stableOffset,
-							part.endOffset,
-							part.endLeaderEpoch,
-						)
+						startStr = fmt.Sprintf("%d/%d", part.startOffset, part.startLeaderEpoch)
+						endStr = fmt.Sprintf("%d/%d", part.endOffset, part.endLeaderEpoch)
 					} else {
-						fmt.Fprintf(tw, "%d\t%s\t%d\t%d\t%d\t%d\t\n",
-							part.broker,
-							topic.topic,
-							part.part,
-							part.startOffset,
-							part.stableOffset,
-							part.endOffset,
-						)
+						startStr = fmt.Sprintf("%d", part.startOffset)
+						endStr = fmt.Sprintf("%d", part.endOffset)
 					}
+					table.Row(part.broker, topic.topic, part.part, startStr, part.stableOffset, endStr, "")
 				}
 			}
+			table.Flush()
 			return nil
 		},
 	}
@@ -608,10 +595,8 @@ it does, read the documentation for kmsg.OffsetForLeaderEpochRequest.
 			}
 
 			shards := cl.Client().RequestSharded(context.Background(), req)
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
-			fmt.Fprintf(tw, "BROKER\tTOPIC\tPARTITION\tLEADER-EPOCH\tEND-OFFSET\tERROR\n")
+			table := out.NewFormattedTable(cl.Format(), "misc.offset-for-leader-epoch", 1, "epochs",
+				"BROKER", "TOPIC", "PARTITION", "LEADER-EPOCH", "END-OFFSET", "ERROR")
 
 			for _, shard := range shards {
 				if shard.Err != nil {
@@ -629,7 +614,7 @@ it does, read the documentation for kmsg.OffsetForLeaderEpochRequest.
 						if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
 							msg = err.Error()
 						}
-						fmt.Fprintf(tw, "%d\t%s\t%d\t%d\t%d\t%s\n",
+						table.Row(
 							shard.Meta.NodeID,
 							topic.Topic,
 							partition.Partition,
@@ -640,6 +625,7 @@ it does, read the documentation for kmsg.OffsetForLeaderEpochRequest.
 					}
 				}
 			}
+			table.Flush()
 			return nil
 		},
 	}

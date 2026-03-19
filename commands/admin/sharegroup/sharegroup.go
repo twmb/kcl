@@ -63,25 +63,24 @@ by issuing a ListGroups request with a type filter of "share".
 				TypesFilter:  []string{"share"},
 			})
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
-			fmt.Fprintf(tw, "BROKER\tGROUP-ID\tSTATE\n")
+			table := out.NewFormattedTable(cl.Format(), "share-group.list", 1, "groups",
+				"BROKER", "GROUP-ID", "STATE")
 			for _, kresp := range kresps {
 				err := kresp.Err
 				if err == nil {
 					err = kerr.ErrorForCode(kresp.Resp.(*kmsg.ListGroupsResponse).ErrorCode)
 				}
 				if err != nil {
-					fmt.Fprintf(tw, "%d\t\t%v\n", kresp.Meta.NodeID, err)
+					table.Row(kresp.Meta.NodeID, "", err)
 					continue
 				}
 
 				resp := kresp.Resp.(*kmsg.ListGroupsResponse)
 				for _, group := range resp.Groups {
-					fmt.Fprintf(tw, "%d\t%s\t%s\n", kresp.Meta.NodeID, group.Group, group.GroupState)
+					table.Row(kresp.Meta.NodeID, group.Group, group.GroupState)
 				}
 			}
+			table.Flush()
 			return nil
 		},
 	}
@@ -245,7 +244,7 @@ Use --summary to show only aggregate information (total lag, member count).
 
 					resp := shard.Resp.(*kmsg.ShareGroupDescribeResponse)
 					for _, group := range resp.Groups {
-						printShareGroup(shard.Meta.NodeID, group)
+						printShareGroup(cl.Format(), shard.Meta.NodeID, group)
 
 						offsets, ok := offsetsByGroup[group.GroupID]
 						if !ok {
@@ -271,7 +270,8 @@ Use --summary to show only aggregate information (total lag, member count).
 							tw.Flush()
 						} else {
 							fmt.Println()
-							tw := out.NewTable("TOPIC", "PARTITION", "START-OFFSET", "LEADER-EPOCH", "LAG", "ERROR")
+							lagTable := out.NewFormattedTable(cl.Format(), "share-group.describe", 1, "offsets",
+								"TOPIC", "PARTITION", "START-OFFSET", "LEADER-EPOCH", "LAG", "ERROR")
 							for _, topic := range offsets.Topics {
 								for _, p := range topic.Partitions {
 									errMsg := ""
@@ -282,10 +282,10 @@ Use --summary to show only aggregate information (total lag, member count).
 									if p.Lag >= 0 {
 										lagStr = fmt.Sprintf("%d", p.Lag)
 									}
-									tw.Print(topic.Topic, p.Partition, p.StartOffset, p.LeaderEpoch, lagStr, errMsg)
+									lagTable.Row(topic.Topic, p.Partition, p.StartOffset, p.LeaderEpoch, lagStr, errMsg)
 								}
 							}
-							tw.Flush()
+							lagTable.Flush()
 							fmt.Println()
 							summTw := out.NewTabWriter()
 							fmt.Fprintf(summTw, "TOTAL-LAG\t%d across %d partitions (%d non-zero)\n", totalLag, partCount, nonZeroLag)
@@ -323,7 +323,7 @@ func fetchShareGroupOffsets(cl *client.Client, groups []string) map[string]*kmsg
 	return result
 }
 
-func printShareGroup(broker int32, group kmsg.ShareGroupDescribeResponseGroup) {
+func printShareGroup(format string, broker int32, group kmsg.ShareGroupDescribeResponseGroup) {
 	tw := out.NewTabWriter()
 	fmt.Fprintf(tw, "GROUP\t%s\n", group.GroupID)
 	fmt.Fprintf(tw, "COORDINATOR\t%d\n", broker)
@@ -345,16 +345,8 @@ func printShareGroup(broker int32, group kmsg.ShareGroupDescribeResponseGroup) {
 		return
 	}
 
-	headers := []string{
-		"MEMBER-ID",
-		"CLIENT-ID",
-		"HOST",
-		"MEMBER-EPOCH",
-		"SUBSCRIBED-TOPICS",
-		"ASSIGNMENT",
-	}
-	table := out.NewTable(headers...)
-	defer table.Flush()
+	table := out.NewFormattedTable(format, "share-group.describe", 1, "members",
+		"MEMBER-ID", "CLIENT-ID", "HOST", "MEMBER-EPOCH", "SUBSCRIBED-TOPICS", "ASSIGNMENT")
 	for _, member := range group.Members {
 		var rack string
 		if member.RackID != nil {
@@ -374,7 +366,7 @@ func printShareGroup(broker int32, group kmsg.ShareGroupDescribeResponseGroup) {
 			assignedParts = append(assignedParts, name+":"+strings.Join(parts, ","))
 		}
 
-		table.Print(
+		table.Row(
 			member.MemberID,
 			member.ClientID,
 			member.ClientHost+rack,
@@ -383,6 +375,7 @@ func printShareGroup(broker int32, group kmsg.ShareGroupDescribeResponseGroup) {
 			strings.Join(assignedParts, " "),
 		)
 	}
+	table.Flush()
 }
 
 func deleteCommand(cl *client.Client) *cobra.Command {
@@ -423,13 +416,12 @@ without actually deleting them.
 			brokerResps := cl.Client().RequestSharded(context.Background(), &kmsg.DeleteGroupsRequest{
 				Groups: args,
 			})
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-			fmt.Fprintf(tw, "BROKER\tGROUP\tERROR\n")
+			table := out.NewFormattedTable(cl.Format(), "share-group.delete", 1, "results",
+				"BROKER", "GROUP", "ERROR")
 			for _, brokerResp := range brokerResps {
 				kresp, err := brokerResp.Resp, brokerResp.Err
 				if err != nil {
-					fmt.Fprintf(tw, "%d\t\tunable to issue request (addr %s:%d): %v\n", brokerResp.Meta.NodeID, brokerResp.Meta.Host, brokerResp.Meta.Port, err)
+					table.Row(brokerResp.Meta.NodeID, "", fmt.Sprintf("unable to issue request (addr %s:%d): %v", brokerResp.Meta.Host, brokerResp.Meta.Port, err))
 					continue
 				}
 				resp := kresp.(*kmsg.DeleteGroupsResponse)
@@ -442,9 +434,10 @@ without actually deleting them.
 							msg = err.Error()
 						}
 					}
-					fmt.Fprintf(tw, "%d\t%s\t%s\n", brokerResp.Meta.NodeID, r.Group, msg)
+					table.Row(brokerResp.Meta.NodeID, r.Group, msg)
 				}
 			}
+			table.Flush()
 			return nil
 		},
 	}

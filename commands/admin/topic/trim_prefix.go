@@ -184,7 +184,8 @@ SEE ALSO:
 
 			shards := kclClient.RequestSharded(ctx, req)
 			fmt.Println()
-			resultTw := out.NewTable("PARTITION", "NEW-LOW-WATERMARK", "ERROR")
+			resultTable := out.NewFormattedTable(cl.Format(), "topic.trim-prefix", 1, "results",
+				"PARTITION", "NEW-LOW-WATERMARK", "ERROR")
 			for _, shard := range shards {
 				if shard.Err != nil {
 					fmt.Printf("error from broker %d: %v\n", shard.Meta.NodeID, shard.Err)
@@ -197,11 +198,11 @@ SEE ALSO:
 						if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
 							errMsg = err.Error()
 						}
-						resultTw.Print(p.Partition, p.LowWatermark, errMsg)
+						resultTable.Row(p.Partition, p.LowWatermark, errMsg)
 					}
 				}
 			}
-			resultTw.Flush()
+			resultTable.Flush()
 			return nil
 		},
 	}

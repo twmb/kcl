@@ -166,7 +166,7 @@ If the brokers section is printed, the controller broker is marked with *.
 					if includeHeader {
 						fmt.Printf("BROKERS\n=======\n")
 					}
-					printBrokers(resp.ControllerID, resp.Brokers)
+					printBrokers(cl.Format(), resp.ControllerID, resp.Brokers)
 					if includeHeader {
 						fmt.Println()
 					}
@@ -176,7 +176,7 @@ If the brokers section is printed, the controller broker is marked with *.
 					if includeHeader {
 						fmt.Printf("TOPICS\n======\n")
 					}
-					PrintTopics(resp.Version, resp.Topics, pinternal, detailed)
+					PrintTopics(cl.Format(), resp.Version, resp.Topics, pinternal, detailed)
 				}
 			}
 			return nil
@@ -193,15 +193,13 @@ If the brokers section is printed, the controller broker is marked with *.
 	return cmd
 }
 
-func printBrokers(controllerID int32, brokers []kmsg.MetadataResponseBroker) {
+func printBrokers(format string, controllerID int32, brokers []kmsg.MetadataResponseBroker) {
 	sort.Slice(brokers, func(i, j int) bool {
 		return brokers[i].NodeID < brokers[j].NodeID
 	})
 
-	tw := out.BeginTabWrite()
-	defer tw.Flush()
-
-	fmt.Fprintf(tw, "ID\tHOST\tPORT\tRACK\n")
+	table := out.NewFormattedTable(format, "metadata.brokers", 1, "brokers",
+		"ID", "HOST", "PORT", "RACK")
 	for _, broker := range brokers {
 		var controllerStar string
 		if broker.NodeID == controllerID {
@@ -213,12 +211,12 @@ func printBrokers(controllerID int32, brokers []kmsg.MetadataResponseBroker) {
 			rack = *broker.Rack
 		}
 
-		fmt.Fprintf(tw, "%d%s\t%s\t%d\t%s\n",
-			broker.NodeID, controllerStar, broker.Host, broker.Port, rack)
+		table.Row(fmt.Sprintf("%d%s", broker.NodeID, controllerStar), broker.Host, broker.Port, rack)
 	}
+	table.Flush()
 }
 
-func PrintTopics(version int16, topics []kmsg.MetadataResponseTopic, pinternal, detailed bool) {
+func PrintTopics(format string, version int16, topics []kmsg.MetadataResponseTopic, pinternal, detailed bool) {
 	sort.Slice(topics, func(i, j int) bool {
 		l := topics[i].Topic
 		r := topics[j].Topic
@@ -237,13 +235,13 @@ func PrintTopics(version int16, topics []kmsg.MetadataResponseTopic, pinternal, 
 	hasID := version >= 10
 
 	if !detailed {
-		tw := out.BeginTabWrite()
-		defer tw.Flush()
-
+		var table *out.FormattedTable
 		if hasID {
-			fmt.Fprintf(tw, "NAME\tID\tPARTITIONS\tREPLICAS\n")
+			table = out.NewFormattedTable(format, "metadata.topics", 1, "topics",
+				"NAME", "ID", "PARTITIONS", "REPLICAS")
 		} else {
-			fmt.Fprintf(tw, "NAME\tPARTITIONS\tREPLICAS\n")
+			table = out.NewFormattedTable(format, "metadata.topics", 1, "topics",
+				"NAME", "PARTITIONS", "REPLICAS")
 		}
 		for _, topic := range topics {
 			if !pinternal && topic.IsInternal {
@@ -255,12 +253,12 @@ func PrintTopics(version int16, topics []kmsg.MetadataResponseTopic, pinternal, 
 				replicas = len(topic.Partitions[0].Replicas)
 			}
 			if hasID {
-				fmt.Fprintf(tw, "%s\t%x\t%d\t%d\n", topicOut(topic.Topic), topic.TopicID, parts, replicas)
+				table.Row(topicOut(topic.Topic), fmt.Sprintf("%x", topic.TopicID), parts, replicas)
 			} else {
-				fmt.Fprintf(tw, "%s\t%d\t%d\n", topicOut(topic.Topic), parts, replicas)
+				table.Row(topicOut(topic.Topic), parts, replicas)
 			}
 		}
-		tw.Flush()
+		table.Flush()
 		return
 	}
 

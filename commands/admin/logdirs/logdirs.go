@@ -229,35 +229,34 @@ describe // describes all`,
 					}
 					return entries[i].key < entries[j].key
 				})
-				tw := out.BeginTabWrite()
-				defer tw.Flush()
 				header := strings.ToUpper(aggregateInto)
-				fmt.Fprintf(tw, "%s\tSIZE\n", header)
+				aggTable := out.NewFormattedTable(cl.Format(), "logdirs.describe", 1, "dirs",
+					header, "SIZE")
 				for _, e := range entries {
 					sizeStr := fmt.Sprintf("%d", e.size)
 					if humanReadable {
 						sizeStr = humanSize(e.size)
 					}
-					fmt.Fprintf(tw, "%s\t%s\n", e.key, sizeStr)
+					aggTable.Row(e.key, sizeStr)
 				}
+				aggTable.Flush()
 				return nil
 			}
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-			fmt.Fprintf(tw, "BROKER\tERR\tDIR\tTOPIC\tPARTITION\tSIZE\tOFFSET-LAG\tIS-FUTURE\n")
+			table := out.NewFormattedTable(cl.Format(), "logdirs.describe", 1, "dirs",
+				"BROKER", "ERR", "DIR", "TOPIC", "PARTITION", "SIZE", "OFFSET-LAG", "IS-FUTURE")
 			for _, r := range rows {
 				if r.err != nil {
-					fmt.Fprintf(tw, "%d\t%v\t%s\t\t\t\t\t\n", r.broker, r.err, r.dir)
+					table.Row(r.broker, r.err, r.dir, "", "", "", "", "")
 					continue
 				}
 				sizeStr := fmt.Sprintf("%d", r.size)
 				if humanReadable {
 					sizeStr = humanSize(r.size)
 				}
-				fmt.Fprintf(tw, "%d\t\t%s\t%s\t%d\t%s\t%d\t%v\n",
-					r.broker, r.dir, r.topic, r.partition, sizeStr, r.offsetLag, r.isFuture)
+				table.Row(r.broker, "", r.dir, r.topic, r.partition, sizeStr, r.offsetLag, r.isFuture)
 			}
+			table.Flush()
 			return nil
 		},
 	}

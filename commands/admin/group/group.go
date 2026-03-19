@@ -129,13 +129,12 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 			brokerResps := cl.Client().RequestSharded(context.Background(), &kmsg.DeleteGroupsRequest{
 				Groups: args,
 			})
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-			fmt.Fprintf(tw, "BROKER\tGROUP\tERROR\n")
+			table := out.NewFormattedTable(cl.Format(), "group.delete", 1, "results",
+				"BROKER", "GROUP", "ERROR")
 			for _, brokerResp := range brokerResps {
 				kresp, err := brokerResp.Resp, brokerResp.Err
 				if err != nil {
-					fmt.Fprintf(tw, "%d\t\tunable to issue request (addr %s:%d): %v\n", brokerResp.Meta.NodeID, brokerResp.Meta.Host, brokerResp.Meta.Port, err)
+					table.Row(brokerResp.Meta.NodeID, "", fmt.Sprintf("unable to issue request (addr %s:%d): %v", brokerResp.Meta.Host, brokerResp.Meta.Port, err))
 					continue
 				}
 				resp := kresp.(*kmsg.DeleteGroupsResponse)
@@ -148,9 +147,10 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 							msg = err.Error()
 						}
 					}
-					fmt.Fprintf(tw, "%d\t%s\t%s\n", brokerResp.Meta.NodeID, resp.Group, msg)
+					table.Row(brokerResp.Meta.NodeID, resp.Group, msg)
 				}
 			}
+			table.Flush()
 			return nil
 		},
 	}

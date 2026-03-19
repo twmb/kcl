@@ -93,7 +93,7 @@ SEE ALSO:
 			if err != nil {
 				return err
 			}
-			return printDescribed(described, fetchedOffsets, listedOffsets, showSummary, showMembers, showLag, lagPerTopic, lagFilter)
+			return printDescribed(cl.Format(), described, fetchedOffsets, listedOffsets, showSummary, showMembers, showLag, lagPerTopic, lagFilter)
 		},
 	}
 
@@ -215,7 +215,7 @@ func describeConsumerGroups(cl *client.Client, groups []string, readCommitted, s
 
 			resp := shard.Resp.(*kmsg.ConsumerGroupDescribeResponse)
 			for _, group := range resp.Groups {
-				printConsumerGroup(shard.Meta.NodeID, group)
+				printConsumerGroup(cl.Format(), shard.Meta.NodeID, group)
 				fmt.Println()
 			}
 		}
@@ -223,7 +223,7 @@ func describeConsumerGroups(cl *client.Client, groups []string, readCommitted, s
 	return nil
 }
 
-func printConsumerGroup(broker int32, group kmsg.ConsumerGroupDescribeResponseGroup) {
+func printConsumerGroup(format string, broker int32, group kmsg.ConsumerGroupDescribeResponseGroup) {
 	tw := out.NewTabWriter()
 	fmt.Fprintf(tw, "GROUP\t%s\n", group.Group)
 	fmt.Fprintf(tw, "COORDINATOR\t%d\n", broker)
@@ -245,17 +245,8 @@ func printConsumerGroup(broker int32, group kmsg.ConsumerGroupDescribeResponseGr
 		return
 	}
 
-	headers := []string{
-		"MEMBER-ID",
-		"CLIENT-ID",
-		"HOST",
-		"MEMBER-EPOCH",
-		"SUBSCRIBED-TOPICS",
-		"ASSIGNMENT",
-		"TARGET-ASSIGNMENT",
-	}
-	table := out.NewTable(headers...)
-	defer table.Flush()
+	table := out.NewFormattedTable(format, "group.describe-consumer", 1, "members",
+		"MEMBER-ID", "CLIENT-ID", "HOST", "MEMBER-EPOCH", "SUBSCRIBED-TOPICS", "ASSIGNMENT", "TARGET-ASSIGNMENT")
 	for _, member := range group.Members {
 		var extras []string
 		if member.InstanceID != nil {
@@ -269,7 +260,7 @@ func printConsumerGroup(broker int32, group kmsg.ConsumerGroupDescribeResponseGr
 			host += " (" + strings.Join(extras, ",") + ")"
 		}
 
-		table.Print(
+		table.Row(
 			member.MemberID,
 			member.ClientID,
 			host,
@@ -279,6 +270,7 @@ func printConsumerGroup(broker int32, group kmsg.ConsumerGroupDescribeResponseGr
 			formatAssignment(member.TargetAssignment),
 		)
 	}
+	table.Flush()
 }
 
 func formatAssignment(a kmsg.Assignment) string {
@@ -492,6 +484,7 @@ type describeRow struct {
 }
 
 func printDescribed(
+	format string,
 	groups []describedGroup,
 	fetched map[string]map[int32]offset,
 	listed map[string]map[int32]offset,
@@ -655,7 +648,8 @@ func printDescribed(
 				return rows[i].partition < rows[j].partition
 			})
 
-			table := out.NewTable("TOPIC", "PARTITION", "CURRENT-OFFSET", "LOG-END-OFFSET", "LAG", "MEMBER-ID", "CLIENT-ID", "HOST")
+			table := out.NewFormattedTable(format, "group.describe", 1, "lag",
+				"TOPIC", "PARTITION", "CURRENT-OFFSET", "LOG-END-OFFSET", "LAG", "MEMBER-ID", "CLIENT-ID", "HOST")
 			for _, r := range rows {
 				curStr := strconv.FormatInt(r.currentOffset, 10)
 				if r.currentOffset < 0 {
@@ -665,7 +659,7 @@ func printDescribed(
 				if !r.lagValid {
 					lagStr = "-"
 				}
-				table.Print(r.topic, r.partition, curStr, r.logEndOffset, lagStr, r.memberID, r.clientID, r.host)
+				table.Row(r.topic, r.partition, curStr, r.logEndOffset, lagStr, r.memberID, r.clientID, r.host)
 			}
 			table.Flush()
 		}
@@ -688,9 +682,10 @@ func printDescribed(
 			}
 			sort.Slice(tls, func(i, j int) bool { return tls[i].topic < tls[j].topic })
 
-			table := out.NewTable("TOPIC", "LAG")
+			table := out.NewFormattedTable(format, "group.describe", 1, "lag",
+				"TOPIC", "LAG")
 			for _, tl := range tls {
-				table.Print(tl.topic, tl.lag)
+				table.Row(tl.topic, tl.lag)
 			}
 			table.Flush()
 		}

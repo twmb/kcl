@@ -224,7 +224,7 @@ EXAMPLES:
 				}
 				topics = append(topics, t)
 			}
-			metadata.PrintTopics(resp.Version, topics, false, detailed)
+			metadata.PrintTopics(cl.Format(), resp.Version, topics, false, detailed)
 			return nil
 		},
 	}
