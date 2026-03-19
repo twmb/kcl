@@ -149,6 +149,7 @@ type commandJSON struct {
 	Usage       string                 `json:"usage,omitempty"`
 	Aliases     []string               `json:"aliases,omitempty"`
 	Deprecated  string                 `json:"deprecated,omitempty"`
+	Examples    []string               `json:"examples,omitempty"`
 	Flags       map[string]flagJSON    `json:"flags,omitempty"`
 	Commands    map[string]commandJSON `json:"commands,omitempty"`
 }
@@ -171,6 +172,14 @@ func buildCommandJSON(cmd *cobra.Command) commandJSON {
 	}
 	if len(cmd.Aliases) > 0 {
 		c.Aliases = cmd.Aliases
+	}
+	if cmd.Example != "" {
+		for _, line := range strings.Split(strings.TrimSpace(cmd.Example), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				c.Examples = append(c.Examples, line)
+			}
+		}
 	}
 
 	// Flags.
