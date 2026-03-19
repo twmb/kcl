@@ -17,8 +17,8 @@ func Command(cl *client.Client) *cobra.Command {
 	}
 
 	info := metadata.Command(cl)
-	info.Use = "info [TOPICS]"
-	info.Aliases = []string{"metadata"}
+	info.Use = "metadata [TOPICS]"
+	info.Aliases = []string{"info"}
 	info.Short = "Show cluster metadata"
 
 	cmd.AddCommand(
