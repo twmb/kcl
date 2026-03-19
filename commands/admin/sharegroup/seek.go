@@ -3,6 +3,7 @@ package sharegroup
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -23,6 +24,7 @@ import (
 func seekCommand(cl *client.Client) *cobra.Command {
 	var (
 		to      string
+		toFile  string
 		topics  []string
 		dryRun  bool
 		execute bool
@@ -36,6 +38,8 @@ func seekCommand(cl *client.Client) *cobra.Command {
 Seek adjusts the start offsets for a share group. The group must be
 empty (no active consumers).
 
+Exactly one of --to or --to-file must be specified.
+
 The --to flag accepts offset specifications:
   start              earliest offset
   end                latest offset
@@ -45,46 +49,33 @@ The --to flag accepts offset specifications:
 Note: +N/-N (relative to committed) are not supported for share groups
 because share groups have start offsets, not committed offsets.
 
-EXAMPLES:
-  kcl share-group seek mygroup --to start
-  kcl share-group seek mygroup --to end --topics foo,bar
-  kcl share-group seek mygroup --to @-1h
-  kcl share-group seek mygroup --to 100 --dry-run
+The --to-file flag reads target offsets from a JSON file with format:
+  [{"topic": "foo", "partition": 0, "offset": 100}, ...]
 
-SEE ALSO:
-  kcl share-group describe-offsets    describe share group start offsets
-  kcl share-group alter-offsets       alter offsets with explicit values
+EXAMPLES:
+  kcl share-group seek mygroup --to start --topics foo,bar
+  kcl share-group seek mygroup --to end --topics foo,bar
+  kcl share-group seek mygroup --to @-1h --topics foo,bar
+  kcl share-group seek mygroup --to 100 --topics foo --dry-run
+  kcl share-group seek mygroup --to-file offsets.json
 `,
 		Args: cobra.ExactArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
 			groupName := args[0]
 
-			if to == "" {
-				out.Die("--to is required")
+			hasTo := to != ""
+			hasToFile := toFile != ""
+			if !hasTo && !hasToFile {
+				out.Die("one of --to or --to-file is required")
 			}
-
-			spec, err := offsetparse.Parse(to, time.Now())
-			out.MaybeDie(err, "unable to parse --to %q: %v", to, err)
-			if spec.End != nil {
-				out.Die("--to does not accept range offsets; use a single target value")
-			}
-			if spec.Start.Kind == offsetparse.KindRelative {
-				out.Die("+N/-N relative offsets are not supported for share groups (use start, end, N, or @timestamp)")
+			if hasTo && hasToFile {
+				out.Die("--to and --to-file are mutually exclusive")
 			}
 
 			kclClient := cl.Client()
 			adm := kadm.NewClient(kclClient)
 			ctx := context.Background()
 
-			// Determine target topics.
-			var targetTopics []string
-			if len(topics) > 0 {
-				targetTopics = topics
-			} else {
-				out.Die("--topics is required for share-group seek")
-			}
-
-			// Resolve target offsets.
 			type targetOffset struct {
 				topic     string
 				partition int32
@@ -92,45 +83,86 @@ SEE ALSO:
 			}
 			var targets []targetOffset
 
-			switch spec.Start.Kind {
-			case offsetparse.KindStart:
-				listed, err := adm.ListStartOffsets(ctx, targetTopics...)
-				out.MaybeDie(err, "unable to list start offsets: %v", err)
-				listed.Each(func(lo kadm.ListedOffset) {
-					if lo.Err == nil {
-						targets = append(targets, targetOffset{lo.Topic, lo.Partition, lo.Offset})
+			if hasToFile {
+				type fileEntry struct {
+					Topic     string `json:"topic"`
+					Partition int32  `json:"partition"`
+					Offset    int64  `json:"offset"`
+				}
+				data, err := os.ReadFile(toFile)
+				out.MaybeDie(err, "unable to read --to-file %q: %v", toFile, err)
+				var entries []fileEntry
+				err = json.Unmarshal(data, &entries)
+				out.MaybeDie(err, "unable to parse --to-file %q: %v", toFile, err)
+				for _, e := range entries {
+					if len(topics) > 0 {
+						found := false
+						for _, t := range topics {
+							if t == e.Topic {
+								found = true
+								break
+							}
+						}
+						if !found {
+							continue
+						}
 					}
-				})
+					targets = append(targets, targetOffset{e.Topic, e.Partition, e.Offset})
+				}
+			} else {
+				spec, err := offsetparse.Parse(to, time.Now())
+				out.MaybeDie(err, "unable to parse --to %q: %v", to, err)
+				if spec.End != nil {
+					out.Die("--to does not accept range offsets; use a single target value")
+				}
+				if spec.Start.Kind == offsetparse.KindRelative {
+					out.Die("+N/-N relative offsets are not supported for share groups (use start, end, N, or @timestamp)")
+				}
 
-			case offsetparse.KindEnd:
-				listed, err := adm.ListEndOffsets(ctx, targetTopics...)
-				out.MaybeDie(err, "unable to list end offsets: %v", err)
-				listed.Each(func(lo kadm.ListedOffset) {
-					if lo.Err == nil {
-						targets = append(targets, targetOffset{lo.Topic, lo.Partition, lo.Offset})
-					}
-				})
+				if len(topics) == 0 {
+					out.Die("--topics is required when using --to")
+				}
 
-			case offsetparse.KindExact:
-				listed, err := adm.ListEndOffsets(ctx, targetTopics...)
-				out.MaybeDie(err, "unable to list offsets: %v", err)
-				listed.Each(func(lo kadm.ListedOffset) {
-					if lo.Err == nil {
-						targets = append(targets, targetOffset{lo.Topic, lo.Partition, spec.Start.Value})
-					}
-				})
+				switch spec.Start.Kind {
+				case offsetparse.KindStart:
+					listed, err := adm.ListStartOffsets(ctx, topics...)
+					out.MaybeDie(err, "unable to list start offsets: %v", err)
+					listed.Each(func(lo kadm.ListedOffset) {
+						if lo.Err == nil {
+							targets = append(targets, targetOffset{lo.Topic, lo.Partition, lo.Offset})
+						}
+					})
 
-			case offsetparse.KindTimestamp:
-				listed, err := adm.ListOffsetsAfterMilli(ctx, spec.Start.Value, targetTopics...)
-				out.MaybeDie(err, "unable to resolve timestamp to offsets: %v", err)
-				listed.Each(func(lo kadm.ListedOffset) {
-					if lo.Err == nil {
-						targets = append(targets, targetOffset{lo.Topic, lo.Partition, lo.Offset})
-					}
-				})
+				case offsetparse.KindEnd:
+					listed, err := adm.ListEndOffsets(ctx, topics...)
+					out.MaybeDie(err, "unable to list end offsets: %v", err)
+					listed.Each(func(lo kadm.ListedOffset) {
+						if lo.Err == nil {
+							targets = append(targets, targetOffset{lo.Topic, lo.Partition, lo.Offset})
+						}
+					})
 
-			default:
-				out.Die("unsupported seek target kind: %v", spec.Start.Kind)
+				case offsetparse.KindExact:
+					listed, err := adm.ListEndOffsets(ctx, topics...)
+					out.MaybeDie(err, "unable to list offsets: %v", err)
+					listed.Each(func(lo kadm.ListedOffset) {
+						if lo.Err == nil {
+							targets = append(targets, targetOffset{lo.Topic, lo.Partition, spec.Start.Value})
+						}
+					})
+
+				case offsetparse.KindTimestamp:
+					listed, err := adm.ListOffsetsAfterMilli(ctx, spec.Start.Value, topics...)
+					out.MaybeDie(err, "unable to resolve timestamp to offsets: %v", err)
+					listed.Each(func(lo kadm.ListedOffset) {
+						if lo.Err == nil {
+							targets = append(targets, targetOffset{lo.Topic, lo.Partition, lo.Offset})
+						}
+					})
+
+				default:
+					out.Die("unsupported seek target kind: %v", spec.Start.Kind)
+				}
 			}
 
 			if len(targets) == 0 {
@@ -220,12 +252,11 @@ SEE ALSO:
 		},
 	}
 
-	cmd.Flags().StringVar(&to, "to", "", "target offset (start, end, N, @timestamp)")
-	cmd.Flags().StringSliceVar(&topics, "topics", nil, "topics to seek (required; comma-separated, repeatable)")
+	cmd.Flags().StringVar(&to, "to", "", "target offset (start, end, N, @timestamp; mutually exclusive with --to-file)")
+	cmd.Flags().StringVar(&toFile, "to-file", "", "JSON file with per-partition offsets (mutually exclusive with --to)")
+	cmd.Flags().StringSliceVar(&topics, "topics", nil, "topics to seek (required with --to; optional filter with --to-file)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview offset changes without applying")
 	cmd.Flags().BoolVar(&execute, "execute", false, "apply changes without interactive confirmation")
-	cmd.MarkFlagRequired("to")
-	cmd.MarkFlagRequired("topics")
 
 	return cmd
 }

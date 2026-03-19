@@ -20,7 +20,7 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "share-group",
 		Aliases: []string{"sg"},
-		Short:   "Share group operations (list, describe, seek, offsets).",
+		Short:   "Share group operations (list, describe, seek, delete).",
 		Args:    cobra.ExactArgs(0),
 	}
 
@@ -28,9 +28,7 @@ func Command(cl *client.Client) *cobra.Command {
 		listCommand(cl),
 		describeCommand(cl),
 		deleteCommand(cl),
-		describeOffsetsCommand(cl),
-		alterOffsetsCommand(cl),
-		deleteOffsetsCommand(cl),
+		offsetDeleteCommand(cl),
 		seekCommand(cl),
 	)
 
@@ -91,16 +89,19 @@ by issuing a ListGroups request with a type filter of "share".
 }
 
 func describeCommand(cl *client.Client) *cobra.Command {
-	var verbose bool
+	var summary bool
 	var regex bool
 	cmd := &cobra.Command{
 		Use:     "describe GROUPS...",
 		Aliases: []string{"d"},
-		Short:   "Describe share groups (Kafka 4.0+).",
+		Short:   "Describe share groups with offsets and lag (Kafka 4.0+).",
 		Long: `Describe share groups (KIP-932, Kafka 4.0+).
 
 If no groups are provided, all share groups are listed and then described.
-Use -v to also show start offsets and lag from DescribeShareGroupOffsets.
+The output includes group metadata, members, and per-partition start offsets
+with lag.
+
+Use --summary to show only aggregate information (total lag, member count).
 `,
 		Run: func(_ *cobra.Command, groups []string) {
 			if regex {
@@ -118,11 +119,7 @@ Use -v to also show start offsets and lag from DescribeShareGroupOffsets.
 
 			shards := cl.Client().RequestSharded(context.Background(), req)
 
-			// If verbose, also fetch offsets.
-			var offsetsByGroup map[string]*kmsg.DescribeShareGroupOffsetsResponseGroup
-			if verbose {
-				offsetsByGroup = fetchShareGroupOffsets(cl, groups)
-			}
+			offsetsByGroup := fetchShareGroupOffsets(cl, groups)
 
 			switch cl.Format() {
 			case "json":
@@ -240,25 +237,50 @@ Use -v to also show start offsets and lag from DescribeShareGroupOffsets.
 					resp := shard.Resp.(*kmsg.ShareGroupDescribeResponse)
 					for _, group := range resp.Groups {
 						printShareGroup(shard.Meta.NodeID, group)
-						if verbose {
-							if offsets, ok := offsetsByGroup[group.GroupID]; ok {
-								fmt.Println()
-								tw := out.NewTable("TOPIC", "PARTITION", "START-OFFSET", "LEADER-EPOCH", "LAG", "ERROR")
-								for _, topic := range offsets.Topics {
-									for _, p := range topic.Partitions {
-										errMsg := ""
-										if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
-											errMsg = err.Error()
-										}
-										lagStr := "-"
-										if p.Lag >= 0 {
-											lagStr = fmt.Sprintf("%d", p.Lag)
-										}
-										tw.Print(topic.Topic, p.Partition, p.StartOffset, p.LeaderEpoch, lagStr, errMsg)
-									}
+
+						offsets, ok := offsetsByGroup[group.GroupID]
+						if !ok {
+							fmt.Println()
+							continue
+						}
+
+						var totalLag int64
+						var partCount, nonZeroLag int
+						for _, topic := range offsets.Topics {
+							for _, p := range topic.Partitions {
+								partCount++
+								if p.Lag > 0 {
+									totalLag += p.Lag
+									nonZeroLag++
 								}
-								tw.Flush()
 							}
+						}
+
+						if summary {
+							tw := out.NewTabWriter()
+							fmt.Fprintf(tw, "TOTAL LAG\t%d across %d partitions (%d non-zero)\n", totalLag, partCount, nonZeroLag)
+							tw.Flush()
+						} else {
+							fmt.Println()
+							tw := out.NewTable("TOPIC", "PARTITION", "START-OFFSET", "LEADER-EPOCH", "LAG", "ERROR")
+							for _, topic := range offsets.Topics {
+								for _, p := range topic.Partitions {
+									errMsg := ""
+									if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
+										errMsg = err.Error()
+									}
+									lagStr := "-"
+									if p.Lag >= 0 {
+										lagStr = fmt.Sprintf("%d", p.Lag)
+									}
+									tw.Print(topic.Topic, p.Partition, p.StartOffset, p.LeaderEpoch, lagStr, errMsg)
+								}
+							}
+							tw.Flush()
+							fmt.Println()
+							summTw := out.NewTabWriter()
+							fmt.Fprintf(summTw, "TOTAL LAG\t%d across %d partitions (%d non-zero)\n", totalLag, partCount, nonZeroLag)
+							summTw.Flush()
 						}
 						fmt.Println()
 					}
@@ -266,7 +288,7 @@ Use -v to also show start offsets and lag from DescribeShareGroupOffsets.
 			}
 		},
 	}
-	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "also show start offsets and lag per partition")
+	cmd.Flags().BoolVarP(&summary, "summary", "s", false, "show only summary (total lag) instead of per-partition detail")
 	cmd.Flags().BoolVar(&regex, "regex", false, "treat group arguments as regular expressions")
 	return cmd
 }
@@ -355,15 +377,35 @@ func printShareGroup(broker int32, group kmsg.ShareGroupDescribeResponseGroup) {
 
 func deleteCommand(cl *client.Client) *cobra.Command {
 	var ifExists bool
+	var dryRun bool
+	var useRegex bool
 	cmd := &cobra.Command{
 		Use:   "delete GROUPS...",
 		Short: "Delete share groups (Kafka 4.0+).",
 		Long: `Delete share groups (KIP-932, Kafka 4.0+).
 
 The groups must be empty (no active consumers) to be deleted.
+
+Use --regex to treat arguments as regex patterns: all share groups matching
+any pattern will be deleted. Use --dry-run to see which groups would be deleted
+without actually deleting them.
 `,
 		Args: cobra.MinimumNArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
+			if useRegex {
+				args = filterShareGroupsByRegex(cl, args)
+				if len(args) == 0 {
+					fmt.Println("No share groups matched the provided regex patterns.")
+					return
+				}
+			}
+			if dryRun {
+				fmt.Println("Dry run: the following share groups would be deleted:")
+				for _, g := range args {
+					fmt.Printf("  %s\n", g)
+				}
+				return
+			}
 			brokerResps := cl.Client().RequestSharded(context.Background(), &kmsg.DeleteGroupsRequest{
 				Groups: args,
 			})
@@ -392,6 +434,8 @@ The groups must be empty (no active consumers) to be deleted.
 		},
 	}
 	cmd.Flags().BoolVar(&ifExists, "if-exists", false, "suppress error if group does not exist")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print groups that would be deleted without actually deleting them")
+	cmd.Flags().BoolVar(&useRegex, "regex", false, "treat group arguments as regex patterns; match against all existing share groups")
 	return cmd
 }
 
