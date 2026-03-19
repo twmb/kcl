@@ -152,7 +152,7 @@ SEE ALSO:
 				tw := out.NewTabWriter()
 				fmt.Fprintf(tw, "TOPIC\t%s\n", topicName)
 				if topic.TopicID != [16]byte{} {
-					fmt.Fprintf(tw, "TOPIC ID\t%x\n", topic.TopicID)
+					fmt.Fprintf(tw, "TOPIC-ID\t%x\n", topic.TopicID)
 				}
 				fmt.Fprintf(tw, "PARTITIONS\t%d\n", len(topic.Partitions))
 				if len(topic.Partitions) > 0 {

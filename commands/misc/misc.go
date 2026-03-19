@@ -611,7 +611,7 @@ it does, read the documentation for kmsg.OffsetForLeaderEpochRequest.
 			tw := out.BeginTabWrite()
 			defer tw.Flush()
 
-			fmt.Fprintf(tw, "BROKER\tTOPIC\tPARTITION\tLEADER EPOCH\tEND OFFSET\tERROR\n")
+			fmt.Fprintf(tw, "BROKER\tTOPIC\tPARTITION\tLEADER-EPOCH\tEND-OFFSET\tERROR\n")
 
 			for _, shard := range shards {
 				if shard.Err != nil {

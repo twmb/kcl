@@ -229,7 +229,7 @@ func printConsumerGroup(broker int32, group kmsg.ConsumerGroupDescribeResponseGr
 	fmt.Fprintf(tw, "COORDINATOR\t%d\n", broker)
 	fmt.Fprintf(tw, "STATE\t%s\n", group.State)
 	fmt.Fprintf(tw, "EPOCH\t%d\n", group.Epoch)
-	fmt.Fprintf(tw, "ASSIGNMENT EPOCH\t%d\n", group.AssignmentEpoch)
+	fmt.Fprintf(tw, "ASSIGNMENT-EPOCH\t%d\n", group.AssignmentEpoch)
 	fmt.Fprintf(tw, "ASSIGNOR\t%s\n", group.AssignorName)
 	fmt.Fprintf(tw, "MEMBERS\t%d\n", len(group.Members))
 	if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
@@ -634,7 +634,7 @@ func printDescribed(
 			fmt.Fprintf(tw, "BALANCER\t%s\n", group.Protocol)
 			fmt.Fprintf(tw, "MEMBERS\t%d\n", len(group.Members))
 			if totalLagValid {
-				fmt.Fprintf(tw, "TOTAL LAG\t%d\n", totalLag)
+				fmt.Fprintf(tw, "TOTAL-LAG\t%d\n", totalLag)
 			}
 			if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
 				msg := err.Error()

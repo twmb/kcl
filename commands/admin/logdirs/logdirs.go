@@ -245,7 +245,7 @@ describe // describes all`,
 
 			tw := out.BeginTabWrite()
 			defer tw.Flush()
-			fmt.Fprintf(tw, "BROKER\tERR\tDIR\tTOPIC\tPARTITION\tSIZE\tOFFSET LAG\tIS FUTURE\n")
+			fmt.Fprintf(tw, "BROKER\tERR\tDIR\tTOPIC\tPARTITION\tSIZE\tOFFSET-LAG\tIS-FUTURE\n")
 			for _, r := range rows {
 				if r.err != nil {
 					fmt.Fprintf(tw, "%d\t%v\t%s\t\t\t\t\t\n", r.broker, r.err, r.dir)

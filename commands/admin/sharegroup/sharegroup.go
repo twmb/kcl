@@ -66,7 +66,7 @@ by issuing a ListGroups request with a type filter of "share".
 			tw := out.BeginTabWrite()
 			defer tw.Flush()
 
-			fmt.Fprintf(tw, "BROKER\tGROUP ID\tSTATE\n")
+			fmt.Fprintf(tw, "BROKER\tGROUP-ID\tSTATE\n")
 			for _, kresp := range kresps {
 				err := kresp.Err
 				if err == nil {
@@ -267,7 +267,7 @@ Use --summary to show only aggregate information (total lag, member count).
 
 						if summary {
 							tw := out.NewTabWriter()
-							fmt.Fprintf(tw, "TOTAL LAG\t%d across %d partitions (%d non-zero)\n", totalLag, partCount, nonZeroLag)
+							fmt.Fprintf(tw, "TOTAL-LAG\t%d across %d partitions (%d non-zero)\n", totalLag, partCount, nonZeroLag)
 							tw.Flush()
 						} else {
 							fmt.Println()
@@ -288,7 +288,7 @@ Use --summary to show only aggregate information (total lag, member count).
 							tw.Flush()
 							fmt.Println()
 							summTw := out.NewTabWriter()
-							fmt.Fprintf(summTw, "TOTAL LAG\t%d across %d partitions (%d non-zero)\n", totalLag, partCount, nonZeroLag)
+							fmt.Fprintf(summTw, "TOTAL-LAG\t%d across %d partitions (%d non-zero)\n", totalLag, partCount, nonZeroLag)
 							summTw.Flush()
 						}
 						fmt.Println()
@@ -329,7 +329,7 @@ func printShareGroup(broker int32, group kmsg.ShareGroupDescribeResponseGroup) {
 	fmt.Fprintf(tw, "COORDINATOR\t%d\n", broker)
 	fmt.Fprintf(tw, "STATE\t%s\n", group.GroupState)
 	fmt.Fprintf(tw, "EPOCH\t%d\n", group.GroupEpoch)
-	fmt.Fprintf(tw, "ASSIGNMENT EPOCH\t%d\n", group.AssignmentEpoch)
+	fmt.Fprintf(tw, "ASSIGNMENT-EPOCH\t%d\n", group.AssignmentEpoch)
 	fmt.Fprintf(tw, "ASSIGNOR\t%s\n", group.Assignor)
 	fmt.Fprintf(tw, "MEMBERS\t%d\n", len(group.Members))
 	if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
