@@ -152,6 +152,7 @@ Use --dry-run to preview without applying.
 
 func DescribeClusterCommand(cl *client.Client) *cobra.Command {
 	var includeAuthorizedOps bool
+	var section string
 
 	cmd := &cobra.Command{
 		Use:   "describe-cluster",
@@ -163,6 +164,16 @@ in the cluster.
 `,
 		Args: cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
+			// Validate --section.
+			switch section {
+			case "", "cluster", "brokers":
+			default:
+				return out.Errf(out.ExitUsage, "invalid --section %q: must be cluster or brokers", section)
+			}
+
+			showCluster := section == "" || section == "cluster"
+			showBrokers := section == "" || section == "brokers"
+
 			req := kmsg.NewPtrDescribeClusterRequest()
 			req.IncludeClusterAuthorizedOperations = includeAuthorizedOps
 
@@ -213,44 +224,61 @@ in the cluster.
 				out.MarshalJSON("cluster.describe", 1, fields)
 
 			case "awk":
-				for _, broker := range resp.Brokers {
-					var rack string
-					if broker.Rack != nil {
-						rack = *broker.Rack
+				awkSection := section
+				if awkSection == "" {
+					awkSection = "brokers"
+				}
+				switch awkSection {
+				case "cluster":
+					fmt.Printf("%s\t%d\n", resp.ClusterID, resp.ControllerID)
+				case "brokers":
+					for _, broker := range resp.Brokers {
+						var rack string
+						if broker.Rack != nil {
+							rack = *broker.Rack
+						}
+						fmt.Printf("%d\t%s\t%d\t%s\n", broker.NodeID, broker.Host, broker.Port, rack)
 					}
-					fmt.Printf("%d\t%s\t%d\t%s\n", broker.NodeID, broker.Host, broker.Port, rack)
 				}
 
 			default:
-				fmt.Printf("CLUSTER ID: %s\n", resp.ClusterID)
-				fmt.Printf("CONTROLLER: %d\n", resp.ControllerID)
-				if includeAuthorizedOps {
-					fmt.Printf("AUTHORIZED OPS: %d\n", resp.ClusterAuthorizedOperations)
-				}
-				fmt.Println()
-
-				tw := out.BeginTabWrite()
-				defer tw.Flush()
-
-				fmt.Fprintf(tw, "ID\tHOST\tPORT\tRACK\n")
-				for _, broker := range resp.Brokers {
-					var rack string
-					if broker.Rack != nil {
-						rack = *broker.Rack
+				if showCluster {
+					fmt.Printf("CLUSTER ID: %s\n", resp.ClusterID)
+					fmt.Printf("CONTROLLER: %d\n", resp.ControllerID)
+					if includeAuthorizedOps {
+						fmt.Printf("AUTHORIZED OPS: %d\n", resp.ClusterAuthorizedOperations)
 					}
-					fmt.Fprintf(tw, "%d\t%s\t%d\t%s\n", broker.NodeID, broker.Host, broker.Port, rack)
+				}
+
+				if showBrokers {
+					if showCluster {
+						fmt.Println()
+					}
+					tw := out.BeginTabWrite()
+					fmt.Fprintf(tw, "ID\tHOST\tPORT\tRACK\n")
+					for _, broker := range resp.Brokers {
+						var rack string
+						if broker.Rack != nil {
+							rack = *broker.Rack
+						}
+						fmt.Fprintf(tw, "%d\t%s\t%d\t%s\n", broker.NodeID, broker.Host, broker.Port, rack)
+					}
+					tw.Flush()
 				}
 			}
 			return nil
 		},
 	}
 
+	cmd.Flags().StringVar(&section, "section", "", "output section (cluster, brokers; default: all for text, brokers for awk)")
 	cmd.Flags().BoolVar(&includeAuthorizedOps, "include-authorized-ops", false, "include cluster authorized operations in the response")
 	return cmd
 }
 
 func DescribeQuorumCommand(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
+	var section string
+
+	cmd := &cobra.Command{
 		Use:   "describe-quorum",
 		Short: "Describe the KRaft quorum (Kafka 3.0+).",
 		Long: `Describe the KRaft quorum (Kafka 3.0+).
@@ -261,6 +289,16 @@ and observers.
 `,
 		Args: cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
+			// Validate --section.
+			switch section {
+			case "", "voters", "observers":
+			default:
+				return out.Errf(out.ExitUsage, "invalid --section %q: must be voters or observers", section)
+			}
+
+			showVoters := section == "" || section == "voters"
+			showObservers := section == "" || section == "observers"
+
 			req := kmsg.NewPtrDescribeQuorumRequest()
 			req.Topics = []kmsg.DescribeQuorumRequestTopic{{
 				Topic:      "__cluster_metadata",
@@ -320,11 +358,15 @@ and observers.
 			case "awk":
 				for _, topic := range resp.Topics {
 					for _, p := range topic.Partitions {
-						for _, v := range p.CurrentVoters {
-							fmt.Printf("%s\t%d\tvoter\t%d\t%d\t%d\t%d\n", topic.Topic, p.Partition, v.ReplicaID, v.LogEndOffset, v.LastFetchTimestamp, v.LastCaughtUpTimestamp)
+						if showVoters {
+							for _, v := range p.CurrentVoters {
+								fmt.Printf("%s\t%d\tvoter\t%d\t%d\t%d\t%d\n", topic.Topic, p.Partition, v.ReplicaID, v.LogEndOffset, v.LastFetchTimestamp, v.LastCaughtUpTimestamp)
+							}
 						}
-						for _, o := range p.Observers {
-							fmt.Printf("%s\t%d\tobserver\t%d\t%d\t%d\t%d\n", topic.Topic, p.Partition, o.ReplicaID, o.LogEndOffset, o.LastFetchTimestamp, o.LastCaughtUpTimestamp)
+						if showObservers {
+							for _, o := range p.Observers {
+								fmt.Printf("%s\t%d\tobserver\t%d\t%d\t%d\t%d\n", topic.Topic, p.Partition, o.ReplicaID, o.LogEndOffset, o.LastFetchTimestamp, o.LastCaughtUpTimestamp)
+							}
 						}
 					}
 				}
@@ -339,7 +381,7 @@ and observers.
 						fmt.Printf("%s partition %d: leader %d, epoch %d, high-watermark %d\n",
 							topic.Topic, p.Partition, p.LeaderID, p.LeaderEpoch, p.HighWatermark)
 
-						if len(p.CurrentVoters) > 0 {
+						if showVoters && len(p.CurrentVoters) > 0 {
 							fmt.Println()
 							fmt.Println("VOTERS:")
 							tw := out.BeginTabWrite()
@@ -351,7 +393,7 @@ and observers.
 							tw.Flush()
 						}
 
-						if len(p.Observers) > 0 {
+						if showObservers && len(p.Observers) > 0 {
 							fmt.Println()
 							fmt.Println("OBSERVERS:")
 							tw := out.BeginTabWrite()
@@ -368,4 +410,7 @@ and observers.
 			return nil
 		},
 	}
+
+	cmd.Flags().StringVar(&section, "section", "", "output section (voters, observers; default: all)")
+	return cmd
 }

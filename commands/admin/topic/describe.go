@@ -27,6 +27,7 @@ func topicDescribeCommand(cl *client.Client) *cobra.Command {
 		unavailable     bool
 		underMinISR     bool
 		atMinISR        bool
+		section         string
 	)
 
 	cmd := &cobra.Command{
@@ -55,6 +56,24 @@ SEE ALSO:
 `,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, topics []string) error {
+			// Validate --section.
+			switch section {
+			case "", "summary", "partitions", "configs":
+			default:
+				return out.Errf(out.ExitUsage, "invalid --section %q: must be summary, partitions, or configs", section)
+			}
+
+			// --section implies showing the requested data.
+			showSummary := section == "" || section == "summary"
+			showPartitions := section == "" || section == "partitions"
+			showConfigSection := section == "configs"
+			if section == "" && (showConfigs || showAll) {
+				showConfigSection = true
+			}
+			if section == "configs" {
+				showConfigs = true
+			}
+
 			kclClient := cl.Client()
 			ctx := context.Background()
 
@@ -72,7 +91,7 @@ SEE ALSO:
 
 			// Optionally fetch configs.
 			var configsByTopic map[string][]kmsg.DescribeConfigsResponseResourceConfig
-			if showConfigs || showAll || withOverrides {
+			if showConfigs || showAll || withOverrides || section == "configs" {
 				var err error
 				configsByTopic, err = fetchTopicConfigs(ctx, kclClient, topics)
 				if err != nil {
@@ -273,42 +292,78 @@ SEE ALSO:
 				})
 
 			case "awk":
+				awkSection := section
+				if awkSection == "" {
+					awkSection = "partitions"
+				}
 				for _, d := range described {
 					topicName := strval(d.topic.Topic)
-					for _, p := range d.partitions {
-						errStr := ""
-						if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
-							errStr = err.Error()
+					switch awkSection {
+					case "summary":
+						replicas := 0
+						if len(d.topic.Partitions) > 0 {
+							replicas = len(d.topic.Partitions[0].Replicas)
 						}
-						if stable {
-							so := ""
-							if m, ok := stableOffsets[topicName]; ok {
-								if v, ok := m[p.Partition]; ok {
-									so = fmt.Sprintf("%d", v)
+						fmt.Printf("%s\t%d\t%d\t%v\n",
+							topicName,
+							len(d.topic.Partitions),
+							replicas,
+							d.topic.IsInternal,
+						)
+					case "partitions":
+						for _, p := range d.partitions {
+							errStr := ""
+							if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
+								errStr = err.Error()
+							}
+							if stable {
+								so := ""
+								if m, ok := stableOffsets[topicName]; ok {
+									if v, ok := m[p.Partition]; ok {
+										so = fmt.Sprintf("%d", v)
+									}
+								}
+								fmt.Printf("%s\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%s\n",
+									topicName,
+									p.Partition,
+									p.Leader,
+									p.LeaderEpoch,
+									int32sToString(p.Replicas),
+									int32sToString(p.ISR),
+									int32sToString(p.OfflineReplicas),
+									so,
+									errStr,
+								)
+							} else {
+								fmt.Printf("%s\t%d\t%d\t%d\t%s\t%s\t%s\t%s\n",
+									topicName,
+									p.Partition,
+									p.Leader,
+									p.LeaderEpoch,
+									int32sToString(p.Replicas),
+									int32sToString(p.ISR),
+									int32sToString(p.OfflineReplicas),
+									errStr,
+								)
+							}
+						}
+					case "configs":
+						if configsByTopic != nil {
+							if configs, ok := configsByTopic[topicName]; ok {
+								for _, c := range configs {
+									val := ""
+									if c.Value != nil {
+										val = *c.Value
+									}
+									fmt.Printf("%s\t%s\t%s\t%s\t%v\n",
+										topicName,
+										c.Name,
+										val,
+										describeConfigSource(c.Source),
+										c.IsSensitive,
+									)
 								}
 							}
-							fmt.Printf("%s\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%s\n",
-								topicName,
-								p.Partition,
-								p.Leader,
-								p.LeaderEpoch,
-								int32sToString(p.Replicas),
-								int32sToString(p.ISR),
-								int32sToString(p.OfflineReplicas),
-								so,
-								errStr,
-							)
-						} else {
-							fmt.Printf("%s\t%d\t%d\t%d\t%s\t%s\t%s\t%s\n",
-								topicName,
-								p.Partition,
-								p.Leader,
-								p.LeaderEpoch,
-								int32sToString(p.Replicas),
-								int32sToString(p.ISR),
-								int32sToString(p.OfflineReplicas),
-								errStr,
-							)
 						}
 					}
 				}
@@ -318,22 +373,24 @@ SEE ALSO:
 					topicName := strval(d.topic.Topic)
 
 					// Summary section.
-					tw := out.NewTabWriter()
-					fmt.Fprintf(tw, "TOPIC\t%s\n", topicName)
-					if d.topic.TopicID != [16]byte{} {
-						fmt.Fprintf(tw, "TOPIC-ID\t%x\n", d.topic.TopicID)
+					if showSummary {
+						tw := out.NewTabWriter()
+						fmt.Fprintf(tw, "TOPIC\t%s\n", topicName)
+						if d.topic.TopicID != [16]byte{} {
+							fmt.Fprintf(tw, "TOPIC-ID\t%x\n", d.topic.TopicID)
+						}
+						fmt.Fprintf(tw, "PARTITIONS\t%d\n", len(d.topic.Partitions))
+						if len(d.topic.Partitions) > 0 {
+							fmt.Fprintf(tw, "REPLICATION\t%d\n", len(d.topic.Partitions[0].Replicas))
+						}
+						if d.topic.IsInternal {
+							fmt.Fprintf(tw, "INTERNAL\ttrue\n")
+						}
+						tw.Flush()
 					}
-					fmt.Fprintf(tw, "PARTITIONS\t%d\n", len(d.topic.Partitions))
-					if len(d.topic.Partitions) > 0 {
-						fmt.Fprintf(tw, "REPLICATION\t%d\n", len(d.topic.Partitions[0].Replicas))
-					}
-					if d.topic.IsInternal {
-						fmt.Fprintf(tw, "INTERNAL\ttrue\n")
-					}
-					tw.Flush()
 
 					// Partition table.
-					if len(d.partitions) > 0 {
+					if showPartitions && len(d.partitions) > 0 {
 						headers := []string{"PARTITION", "LEADER", "EPOCH", "REPLICAS", "ISR", "OFFLINE-REPLICAS"}
 						if stable {
 							headers = append(headers, "STABLE-OFFSET")
@@ -367,7 +424,7 @@ SEE ALSO:
 					}
 
 					// Configs section.
-					if (showConfigs || showAll) && configsByTopic != nil {
+					if showConfigSection && configsByTopic != nil {
 						if configs, ok := configsByTopic[topicName]; ok && len(configs) > 0 {
 							fmt.Println()
 							fmt.Println("CONFIGS:")
@@ -393,6 +450,7 @@ SEE ALSO:
 		},
 	}
 
+	cmd.Flags().StringVar(&section, "section", "", "output section (summary, partitions, configs; default: all for text, partitions for awk)")
 	cmd.Flags().BoolVarP(&showConfigs, "configs", "c", false, "also show topic configs")
 	cmd.Flags().BoolVarP(&showAll, "all", "a", false, "show all sections (summary, partitions, configs)")
 	cmd.Flags().BoolVar(&stable, "stable", false, "include stable (read_committed) offset column for transactional topics")

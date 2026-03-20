@@ -8,113 +8,20 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-func TestParseLagFilterAllOperators(t *testing.T) {
-	type testCase struct {
-		expr    string
-		lag     int64
-		want    bool
-		wantErr bool
+func TestValidateSectionAllOperators(t *testing.T) {
+	valid := []string{"", "summary", "lag", "members"}
+	for _, s := range valid {
+		if err := validateSection(s); err != nil {
+			t.Errorf("validateSection(%q) unexpected error: %v", s, err)
+		}
 	}
 
-	tests := []testCase{
-		// Greater than.
-		{">0", 0, false, false},
-		{">0", 1, true, false},
-		{">10", 10, false, false},
-		{">10", 11, true, false},
-		{">10", 9, false, false},
-
-		// Greater than or equal.
-		{">=0", 0, true, false},
-		{">=10", 9, false, false},
-		{">=10", 10, true, false},
-		{">=10", 11, true, false},
-
-		// Less than.
-		{"<10", 9, true, false},
-		{"<10", 10, false, false},
-		{"<10", 11, false, false},
-		{"<0", 0, false, false},
-
-		// Less than or equal.
-		{"<=10", 9, true, false},
-		{"<=10", 10, true, false},
-		{"<=10", 11, false, false},
-		{"<=0", 0, true, false},
-
-		// Equal.
-		{"=0", 0, true, false},
-		{"=0", 1, false, false},
-		{"=100", 100, true, false},
-		{"=100", 99, false, false},
-		{"=100", 101, false, false},
-
-		// Bare number (treated as >=N).
-		{"0", 0, true, false},
-		{"0", 1, true, false},
-		{"50", 49, false, false},
-		{"50", 50, true, false},
-		{"50", 51, true, false},
-
-		// Empty returns nil (tested separately below).
-		// Errors.
-		{"abc", 0, false, true},
-		{">abc", 0, false, true},
-		{">=xyz", 0, false, true},
-		{"<not", 0, false, true},
-		{"<=bad", 0, false, true},
-		{"=nope", 0, false, true},
+	invalid := []string{"invalid", "Summary", "LAG", "Members", "foo", "all"}
+	for _, s := range invalid {
+		if err := validateSection(s); err == nil {
+			t.Errorf("validateSection(%q) expected error", s)
+		}
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.expr, func(t *testing.T) {
-			fn, err := parseLagFilter(tt.expr)
-			if tt.wantErr {
-				if err == nil {
-					t.Errorf("parseLagFilter(%q) expected error", tt.expr)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("parseLagFilter(%q) unexpected error: %v", tt.expr, err)
-			}
-			if fn == nil {
-				t.Fatalf("parseLagFilter(%q) returned nil", tt.expr)
-			}
-			got := fn(tt.lag)
-			if got != tt.want {
-				t.Errorf("parseLagFilter(%q)(%d) = %v, want %v", tt.expr, tt.lag, got, tt.want)
-			}
-		})
-	}
-
-	// Test empty expression returns nil function.
-	t.Run("empty", func(t *testing.T) {
-		fn, err := parseLagFilter("")
-		if err != nil {
-			t.Fatalf("parseLagFilter(\"\") error: %v", err)
-		}
-		if fn != nil {
-			t.Error("parseLagFilter(\"\") should return nil function")
-		}
-	})
-
-	// Test whitespace trimming.
-	t.Run("whitespace", func(t *testing.T) {
-		fn, err := parseLagFilter(" > 5 ")
-		if err != nil {
-			t.Fatalf("parseLagFilter(\" > 5 \") error: %v", err)
-		}
-		if fn == nil {
-			t.Fatal("parseLagFilter(\" > 5 \") returned nil")
-		}
-		if !fn(6) {
-			t.Error("expected lag 6 to match > 5")
-		}
-		if fn(5) {
-			t.Error("expected lag 5 to not match > 5")
-		}
-	})
 }
 
 func TestLagPerTopicComputation(t *testing.T) {
@@ -214,19 +121,6 @@ func TestLagPerTopicComputation(t *testing.T) {
 	totalLag := lagPerTopic[topicA] + lagPerTopic[topicB]
 	if totalLag != 25 {
 		t.Errorf("total lag = %d, want 25", totalLag)
-	}
-
-	// Test that lag filter works correctly with computed lag values.
-	// Filter: only topics with lag > 10.
-	fn, err := parseLagFilter(">10")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fn(lagPerTopic[topicA]) {
-		t.Error("topicA lag (5) should not match >10")
-	}
-	if !fn(lagPerTopic[topicB]) {
-		t.Error("topicB lag (20) should match >10")
 	}
 
 	// Verify the raw offset values are correct.

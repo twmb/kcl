@@ -90,7 +90,7 @@ by issuing a ListGroups request with a type filter of "share".
 }
 
 func describeCommand(cl *client.Client) *cobra.Command {
-	var summary bool
+	var section string
 	var regex bool
 	cmd := &cobra.Command{
 		Use:     "describe GROUPS...",
@@ -102,9 +102,27 @@ If no groups are provided, all share groups are listed and then described.
 The output includes group metadata, members, and per-partition start offsets
 with lag.
 
-Use --summary to show only aggregate information (total lag, member count).
+Use --section to show only a specific section of the output:
+  summary   group metadata, member count, total lag
+  members   per-member detail (id, host, epoch, assignment)
+  offsets   per-partition start offsets and lag
+
+Defaults: text shows all sections, awk shows offsets.
 `,
 		RunE: func(_ *cobra.Command, groups []string) error {
+			if section != "" {
+				switch client.Strnorm(section) {
+				case "summary":
+					section = "summary"
+				case "members":
+					section = "members"
+				case "offsets":
+					section = "offsets"
+				default:
+					return out.Errf(out.ExitUsage, "invalid --section %q: must be summary, members, or offsets", section)
+				}
+			}
+
 			if regex {
 				var err error
 				groups, err = filterShareGroupsByRegex(cl, groups)
@@ -120,7 +138,7 @@ Use --summary to show only aggregate information (total lag, member count).
 				}
 			}
 			if len(groups) == 0 {
-				return fmt.Errorf( "no share groups to describe")
+				return fmt.Errorf("no share groups to describe")
 			}
 
 			req := kmsg.NewPtrShareGroupDescribeRequest()
@@ -130,8 +148,38 @@ Use --summary to show only aggregate information (total lag, member count).
 
 			offsetsByGroup := fetchShareGroupOffsets(cl, groups)
 
+			// Pre-compute total lag per group so it is available to all
+			// format paths.
+			type lagSummary struct {
+				totalLag   int64
+				partCount  int
+				nonZeroLag int
+			}
+			lagByGroup := make(map[string]lagSummary)
+			for gid, offsets := range offsetsByGroup {
+				var ls lagSummary
+				for _, topic := range offsets.Topics {
+					for _, p := range topic.Partitions {
+						ls.partCount++
+						if p.Lag > 0 {
+							ls.totalLag += p.Lag
+							ls.nonZeroLag++
+						}
+					}
+				}
+				lagByGroup[gid] = ls
+			}
+
 			switch cl.Format() {
 			case "json":
+				type jsonOffset struct {
+					Topic       string `json:"topic"`
+					Partition   int32  `json:"partition"`
+					StartOffset int64  `json:"start_offset"`
+					LeaderEpoch int32  `json:"leader_epoch"`
+					Lag         int64  `json:"lag"`
+					Error       string `json:"error,omitempty"`
+				}
 				type jsonMember struct {
 					MemberID         string   `json:"member_id"`
 					ClientID         string   `json:"client_id"`
@@ -148,9 +196,11 @@ Use --summary to show only aggregate information (total lag, member count).
 					AssignmentEpoch int32        `json:"assignment_epoch"`
 					Assignor        string       `json:"assignor"`
 					Members         []jsonMember `json:"members"`
+					TotalLag        int64        `json:"total_lag"`
+					Offsets         []jsonOffset `json:"offsets"`
 					Error           string       `json:"error,omitempty"`
 				}
-				var groups []jsonGroup
+				var jgroups []jsonGroup
 				for _, shard := range shards {
 					if shard.Err != nil {
 						continue
@@ -165,6 +215,9 @@ Use --summary to show only aggregate information (total lag, member count).
 							AssignmentEpoch: group.AssignmentEpoch,
 							Assignor:        group.Assignor,
 						}
+						if ls, ok := lagByGroup[group.GroupID]; ok {
+							jg.TotalLag = ls.totalLag
+						}
 						if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
 							msg := err.Error()
 							if group.ErrorMessage != nil {
@@ -173,70 +226,108 @@ Use --summary to show only aggregate information (total lag, member count).
 							jg.Error = msg
 						}
 						for _, member := range group.Members {
-							var assignedParts []string
-							for _, tp := range member.Assignment.TopicPartitions {
-								name := tp.Topic
-								if name == "" {
-									name = fmt.Sprintf("%x", tp.TopicID)
-								}
-								parts := make([]string, len(tp.Partitions))
-								for i, p := range tp.Partitions {
-									parts[i] = fmt.Sprintf("%d", p)
-								}
-								assignedParts = append(assignedParts, name+":"+strings.Join(parts, ","))
-							}
 							jg.Members = append(jg.Members, jsonMember{
 								MemberID:         member.MemberID,
 								ClientID:         member.ClientID,
 								Host:             member.ClientHost,
 								MemberEpoch:      member.MemberEpoch,
 								SubscribedTopics: member.SubscribedTopicNames,
-								Assignment:       strings.Join(assignedParts, " "),
+								Assignment:       formatShareMemberAssignment(member),
 							})
 						}
-						groups = append(groups, jg)
+						if offsets, ok := offsetsByGroup[group.GroupID]; ok {
+							for _, topic := range offsets.Topics {
+								for _, p := range topic.Partitions {
+									jo := jsonOffset{
+										Topic:       topic.Topic,
+										Partition:   p.Partition,
+										StartOffset: p.StartOffset,
+										LeaderEpoch: p.LeaderEpoch,
+										Lag:         p.Lag,
+									}
+									if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
+										jo.Error = err.Error()
+									}
+									jg.Offsets = append(jg.Offsets, jo)
+								}
+							}
+						}
+						jgroups = append(jgroups, jg)
 					}
 				}
 				out.MarshalJSON("share-group.describe", 1, map[string]any{
-					"groups": groups,
+					"groups": jgroups,
 				})
 			case "awk":
+				awkSection := section
+				if awkSection == "" {
+					awkSection = "offsets"
+				}
 				for _, shard := range shards {
 					if shard.Err != nil {
 						continue
 					}
 					resp := shard.Resp.(*kmsg.ShareGroupDescribeResponse)
 					for _, group := range resp.Groups {
-						for _, member := range group.Members {
-							var rack string
-							if member.RackID != nil {
-								rack = " (rack=" + *member.RackID + ")"
-							}
-							var assignedParts []string
-							for _, tp := range member.Assignment.TopicPartitions {
-								name := tp.Topic
-								if name == "" {
-									name = fmt.Sprintf("%x", tp.TopicID)
+						switch awkSection {
+						case "summary":
+							errMsg := ""
+							if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
+								errMsg = err.Error()
+								if group.ErrorMessage != nil {
+									errMsg += ": " + *group.ErrorMessage
 								}
-								parts := make([]string, len(tp.Partitions))
-								for i, p := range tp.Partitions {
-									parts[i] = fmt.Sprintf("%d", p)
-								}
-								assignedParts = append(assignedParts, name+":"+strings.Join(parts, ","))
 							}
-							fmt.Printf("%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
+							ls := lagByGroup[group.GroupID]
+							fmt.Printf("%s\t%d\t%s\t%d\t%d\t%s\t%d\t%d\t%s\n",
 								group.GroupID,
-								member.MemberID,
-								member.ClientID,
-								member.ClientHost+rack,
-								member.MemberEpoch,
-								strings.Join(member.SubscribedTopicNames, ","),
-								strings.Join(assignedParts, " "),
+								shard.Meta.NodeID,
+								group.GroupState,
+								group.GroupEpoch,
+								group.AssignmentEpoch,
+								group.Assignor,
+								len(group.Members),
+								ls.totalLag,
+								errMsg,
 							)
+						case "members":
+							for _, member := range group.Members {
+								fmt.Printf("%s\t%s\t%s\t%d\t%s\t%s\n",
+									member.MemberID,
+									member.ClientID,
+									member.ClientHost,
+									member.MemberEpoch,
+									strings.Join(member.SubscribedTopicNames, ","),
+									formatShareMemberAssignment(member),
+								)
+							}
+						case "offsets":
+							if offsets, ok := offsetsByGroup[group.GroupID]; ok {
+								for _, topic := range offsets.Topics {
+									for _, p := range topic.Partitions {
+										errMsg := ""
+										if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
+											errMsg = err.Error()
+										}
+										fmt.Printf("%s\t%d\t%d\t%d\t%d\t%s\n",
+											topic.Topic,
+											p.Partition,
+											p.StartOffset,
+											p.LeaderEpoch,
+											p.Lag,
+											errMsg,
+										)
+									}
+								}
+							}
 						}
 					}
 				}
 			default:
+				showSummary := section == "" || section == "summary"
+				showMembers := section == "" || section == "members"
+				showOffsets := section == "" || section == "offsets"
+
 				for _, shard := range shards {
 					if shard.Err != nil {
 						fmt.Fprintf(os.Stderr, "unable to issue ShareGroupDescribe to broker %d (%s:%d): %v\n", shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
@@ -245,52 +336,41 @@ Use --summary to show only aggregate information (total lag, member count).
 
 					resp := shard.Resp.(*kmsg.ShareGroupDescribeResponse)
 					for _, group := range resp.Groups {
-						printShareGroup(cl.Format(), shard.Meta.NodeID, group)
-
-						offsets, ok := offsetsByGroup[group.GroupID]
-						if !ok {
-							fmt.Println()
-							continue
+						if showSummary {
+							ls := lagByGroup[group.GroupID]
+							printShareGroupSummary(shard.Meta.NodeID, group, ls.totalLag, ls.partCount, ls.nonZeroLag)
 						}
 
-						var totalLag int64
-						var partCount, nonZeroLag int
-						for _, topic := range offsets.Topics {
-							for _, p := range topic.Partitions {
-								partCount++
-								if p.Lag > 0 {
-									totalLag += p.Lag
-									nonZeroLag++
-								}
+						if showMembers && len(group.Members) > 0 {
+							if showSummary {
+								fmt.Println()
 							}
+							printShareGroupMembers(cl.Format(), group)
 						}
 
-						if summary {
-							tw := out.NewTabWriter()
-							fmt.Fprintf(tw, "TOTAL-LAG\t%d across %d partitions (%d non-zero)\n", totalLag, partCount, nonZeroLag)
-							tw.Flush()
-						} else {
-							fmt.Println()
-							lagTable := out.NewFormattedTable(cl.Format(), "share-group.describe", 1, "offsets",
-								"TOPIC", "PARTITION", "START-OFFSET", "LEADER-EPOCH", "LAG", "ERROR")
-							for _, topic := range offsets.Topics {
-								for _, p := range topic.Partitions {
-									errMsg := ""
-									if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
-										errMsg = err.Error()
-									}
-									lagStr := "-"
-									if p.Lag >= 0 {
-										lagStr = fmt.Sprintf("%d", p.Lag)
-									}
-									lagTable.Row(topic.Topic, p.Partition, p.StartOffset, p.LeaderEpoch, lagStr, errMsg)
+						if showOffsets {
+							offsets, ok := offsetsByGroup[group.GroupID]
+							if ok {
+								if showSummary || showMembers {
+									fmt.Println()
 								}
+								lagTable := out.NewFormattedTable(cl.Format(), "share-group.describe", 1, "offsets",
+									"TOPIC", "PARTITION", "START-OFFSET", "LEADER-EPOCH", "LAG", "ERROR")
+								for _, topic := range offsets.Topics {
+									for _, p := range topic.Partitions {
+										errMsg := ""
+										if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
+											errMsg = err.Error()
+										}
+										lagStr := "-"
+										if p.Lag >= 0 {
+											lagStr = fmt.Sprintf("%d", p.Lag)
+										}
+										lagTable.Row(topic.Topic, p.Partition, p.StartOffset, p.LeaderEpoch, lagStr, errMsg)
+									}
+								}
+								lagTable.Flush()
 							}
-							lagTable.Flush()
-							fmt.Println()
-							summTw := out.NewTabWriter()
-							fmt.Fprintf(summTw, "TOTAL-LAG\t%d across %d partitions (%d non-zero)\n", totalLag, partCount, nonZeroLag)
-							summTw.Flush()
 						}
 						fmt.Println()
 					}
@@ -299,7 +379,7 @@ Use --summary to show only aggregate information (total lag, member count).
 			return nil
 		},
 	}
-	cmd.Flags().BoolVarP(&summary, "summary", "s", false, "show only summary (total lag) instead of per-partition detail")
+	cmd.Flags().StringVar(&section, "section", "", "output section (summary, members, offsets; default: all for text, offsets for awk)")
 	cmd.Flags().BoolVar(&regex, "regex", false, "treat group arguments as regular expressions")
 	return cmd
 }
@@ -324,7 +404,7 @@ func fetchShareGroupOffsets(cl *client.Client, groups []string) map[string]*kmsg
 	return result
 }
 
-func printShareGroup(format string, broker int32, group kmsg.ShareGroupDescribeResponseGroup) {
+func printShareGroupSummary(broker int32, group kmsg.ShareGroupDescribeResponseGroup, totalLag int64, partCount, nonZeroLag int) {
 	tw := out.NewTabWriter()
 	fmt.Fprintf(tw, "GROUP\t%s\n", group.GroupID)
 	fmt.Fprintf(tw, "COORDINATOR\t%d\n", broker)
@@ -333,6 +413,7 @@ func printShareGroup(format string, broker int32, group kmsg.ShareGroupDescribeR
 	fmt.Fprintf(tw, "ASSIGNMENT-EPOCH\t%d\n", group.AssignmentEpoch)
 	fmt.Fprintf(tw, "ASSIGNOR\t%s\n", group.Assignor)
 	fmt.Fprintf(tw, "MEMBERS\t%d\n", len(group.Members))
+	fmt.Fprintf(tw, "TOTAL-LAG\t%d across %d partitions (%d non-zero)\n", totalLag, partCount, nonZeroLag)
 	if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
 		msg := err.Error()
 		if group.ErrorMessage != nil {
@@ -341,11 +422,9 @@ func printShareGroup(format string, broker int32, group kmsg.ShareGroupDescribeR
 		fmt.Fprintf(tw, "ERROR\t%s\n", msg)
 	}
 	tw.Flush()
+}
 
-	if len(group.Members) == 0 {
-		return
-	}
-
+func printShareGroupMembers(format string, group kmsg.ShareGroupDescribeResponseGroup) {
 	table := out.NewFormattedTable(format, "share-group.describe", 1, "members",
 		"MEMBER-ID", "CLIENT-ID", "HOST", "MEMBER-EPOCH", "SUBSCRIBED-TOPICS", "ASSIGNMENT")
 	for _, member := range group.Members {
@@ -354,29 +433,32 @@ func printShareGroup(format string, broker int32, group kmsg.ShareGroupDescribeR
 			rack = " (rack=" + *member.RackID + ")"
 		}
 
-		var assignedParts []string
-		for _, tp := range member.Assignment.TopicPartitions {
-			name := tp.Topic
-			if name == "" {
-				name = fmt.Sprintf("%x", tp.TopicID)
-			}
-			parts := make([]string, len(tp.Partitions))
-			for i, p := range tp.Partitions {
-				parts[i] = fmt.Sprintf("%d", p)
-			}
-			assignedParts = append(assignedParts, name+":"+strings.Join(parts, ","))
-		}
-
 		table.Row(
 			member.MemberID,
 			member.ClientID,
 			member.ClientHost+rack,
 			member.MemberEpoch,
 			strings.Join(member.SubscribedTopicNames, ","),
-			strings.Join(assignedParts, " "),
+			formatShareMemberAssignment(member),
 		)
 	}
 	table.Flush()
+}
+
+func formatShareMemberAssignment(member kmsg.ShareGroupDescribeResponseGroupMember) string {
+	var assignedParts []string
+	for _, tp := range member.Assignment.TopicPartitions {
+		name := tp.Topic
+		if name == "" {
+			name = fmt.Sprintf("%x", tp.TopicID)
+		}
+		parts := make([]string, len(tp.Partitions))
+		for i, p := range tp.Partitions {
+			parts[i] = fmt.Sprintf("%d", p)
+		}
+		assignedParts = append(assignedParts, name+":"+strings.Join(parts, ","))
+	}
+	return strings.Join(assignedParts, " ")
 }
 
 func deleteCommand(cl *client.Client) *cobra.Command {

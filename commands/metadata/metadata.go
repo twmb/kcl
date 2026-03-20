@@ -19,8 +19,9 @@ import (
 func Command(cl *client.Client) *cobra.Command {
 	req := kmsg.MetadataRequest{}
 
-	var pcluster, pbrokers, ptopics, pinternal, pall, detailed bool
+	var pinternal, detailed bool
 	var ids bool
+	var section string
 
 	cmd := &cobra.Command{
 		Use:   "metadata [TOPICS]",
@@ -31,29 +32,35 @@ Kafka's metadata contains a good deal of information about brokers, topics,
 and the cluster as a whole. This is the command to use to get general info
 on the what of everything.
 
-To avoid noise, this command only prints requested sections. Additionally,
-since there is a lot of information in topics, this prints short information
-for topics unless detailed is requested. It is optional to specify which
+Use --section to select which section to display (cluster, brokers, topics).
+By default in text mode all sections are shown; in awk mode only topics are
+shown. Use -d for detailed topic partitions. It is optional to specify which
 topics to list metadata for; by default, all topics are listed.
 
 If the brokers section is printed, the controller broker is marked with *.
 `,
 
 		RunE: func(_ *cobra.Command, topics []string) error {
+			// Validate --section.
+			switch section {
+			case "", "cluster", "brokers", "topics":
+			default:
+				return out.Errf(out.ExitUsage, "invalid --section %q: must be cluster, brokers, or topics", section)
+			}
+
+			// Determine which sections to print.
+			pcluster := section == "" || section == "cluster"
+			pbrokers := section == "" || section == "brokers"
+			ptopics := section == "" || section == "topics"
 			if len(topics) > 0 {
 				ptopics = true
 			}
+
 			sections := 0
-			for _, v := range []*bool{&pcluster, &pbrokers, &ptopics} {
-				if pall {
-					*v = true
-				}
-				if *v {
+			for _, v := range []bool{pcluster, pbrokers, ptopics} {
+				if v {
 					sections++
 				}
-			}
-			if sections == 0 && cl.Format() == "text" {
-				return out.Errf(out.ExitUsage, "no metadata section requested")
 			}
 
 			includeHeader := sections > 1
@@ -134,20 +141,38 @@ If the brokers section is printed, the controller broker is marked with *.
 				out.MarshalJSON("metadata", 1, fields)
 
 			case "awk":
-				// AWK mode: output topic table only (TSV).
-				for _, t := range resp.Topics {
-					if !pinternal && t.IsInternal {
-						continue
+				awkSection := section
+				if awkSection == "" {
+					awkSection = "topics"
+				}
+				switch awkSection {
+				case "cluster":
+					if resp.ClusterID != nil {
+						fmt.Printf("%s\t%d\n", *resp.ClusterID, resp.ControllerID)
 					}
-					parts := len(t.Partitions)
-					replicas := 0
-					if parts > 0 {
-						replicas = len(t.Partitions[0].Replicas)
+				case "brokers":
+					for _, b := range resp.Brokers {
+						rack := ""
+						if b.Rack != nil {
+							rack = *b.Rack
+						}
+						fmt.Printf("%d\t%s\t%d\t%s\n", b.NodeID, b.Host, b.Port, rack)
 					}
-					if resp.Version >= 10 {
-						fmt.Printf("%s\t%x\t%d\t%d\n", topicOut(t.Topic), t.TopicID, parts, replicas)
-					} else {
-						fmt.Printf("%s\t%d\t%d\n", topicOut(t.Topic), parts, replicas)
+				case "topics":
+					for _, t := range resp.Topics {
+						if !pinternal && t.IsInternal {
+							continue
+						}
+						parts := len(t.Partitions)
+						replicas := 0
+						if parts > 0 {
+							replicas = len(t.Partitions[0].Replicas)
+						}
+						if resp.Version >= 10 {
+							fmt.Printf("%s\t%x\t%d\t%d\n", topicOut(t.Topic), t.TopicID, parts, replicas)
+						} else {
+							fmt.Printf("%s\t%d\t%d\n", topicOut(t.Topic), parts, replicas)
+						}
 					}
 				}
 
@@ -183,13 +208,10 @@ If the brokers section is printed, the controller broker is marked with *.
 		},
 	}
 
-	cmd.Flags().BoolVarP(&pcluster, "cluster", "c", false, "print cluster section")
-	cmd.Flags().BoolVarP(&pbrokers, "brokers", "b", false, "print brokers section")
-	cmd.Flags().BoolVarP(&ptopics, "topics", "t", false, "print topics section (this flag is implied if any topics are input)")
+	cmd.Flags().StringVar(&section, "section", "", "output section (cluster, brokers, topics; default: all for text, topics for awk)")
 	cmd.Flags().BoolVar(&ids, "ids", false, "whether the input topics should be parsed as topic IDs")
 	cmd.Flags().BoolVarP(&pinternal, "internal", "i", false, "print internal topics if all topics are printed")
 	cmd.Flags().BoolVarP(&detailed, "detailed", "d", false, "include detailed information about all topic partitions")
-	cmd.Flags().BoolVarP(&pall, "all", "a", false, "shortcut for -cbti")
 	return cmd
 }
 

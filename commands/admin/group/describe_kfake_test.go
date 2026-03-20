@@ -75,20 +75,3 @@ func TestDescribeLagComputation(t *testing.T) {
 		t.Errorf("lag = %d, want 5", lag)
 	}
 }
-
-func TestParseLagFilterIntegration(t *testing.T) {
-	// Test that lag filter correctly filters.
-	fn, err := parseLagFilter(">0")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Lag of 5 should match >0.
-	if !fn(5) {
-		t.Error("lag 5 should match >0")
-	}
-	// Lag of 0 should not match >0.
-	if fn(0) {
-		t.Error("lag 0 should not match >0")
-	}
-}
