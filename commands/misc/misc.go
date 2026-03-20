@@ -309,7 +309,7 @@ func rawCommand(cl *client.Client) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("response error: %v", err)
 			}
-			out.ExitJSON(kresp)
+			out.DumpJSON(kresp)
 			return nil
 		},
 	}

@@ -439,7 +439,8 @@ SEE ALSO:
 			if len(resp.Results) != len(req.Creations) {
 				fmt.Fprintf(os.Stderr, "Kafka replied with only %d responses to our %d creations! Dumping response as JSON...",
 					len(resp.Results), len(req.Creations))
-				out.ExitJSON(kresp)
+				out.DumpJSON(kresp)
+				return nil
 			}
 
 			table := out.NewFormattedTable(cl.Format(), "acl.create", 1, "results",
