@@ -282,7 +282,7 @@ To show partition and offset for each produced record:
 	}
 
 	cmd.Flags().StringVarP(&topicFlag, "topic", "t", "", "topic to produce to (alternative to positional argument)")
-	cmd.Flags().StringVarP(&informat, "format", "f", "%v\n", "record only delimiter")
+	cmd.Flags().StringVarP(&informat, "format", "f", "%v\n", "record input format")
 	cmd.Flags().StringVarP(&verboseFormat, "output-format", "o", "", "format string for produced record output (topic, partition, offset of each record)")
 	cmd.Flags().StringVarP(&compression, "compression", "z", "snappy", "compression to use for producing batches (none, gzip, snappy, lz4, zstd)")
 	cmd.Flags().IntVar(&acks, "acks", -1, "number of acks required, -1 is all in sync replicas, 1 is leader replica only, 0 is no acks required (0 disables idempotency)")

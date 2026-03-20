@@ -31,7 +31,7 @@ func (c *consumption) command() *cobra.Command {
 	cmd.Flags().StringVarP(&c.offset, "offset", "o", "start", "offset to consume from (start, end, +N, -N, N, N:M, :end, @timestamp, @T1:T2)")
 	cmd.Flags().IntVarP(&c.num, "num", "n", 0, "quit after consuming this number of records; 0 is unbounded")
 	cmd.Flags().IntVar(&c.numPerPartition, "num-per-partition", 0, "stop printing individual partitions after this many records; 0 is unbounded")
-	cmd.Flags().StringVarP(&c.format, "format", "f", `%v\n`, "output format")
+	cmd.Flags().StringVarP(&c.format, "format", "f", `%v\n`, "record output format")
 	cmd.Flags().BoolVarP(&c.regex, "regex", "r", false, "parse topics as regex; consume any topic that matches any expression")
 	cmd.Flags().Int32Var(&c.fetchMaxBytes, "fetch-max-bytes", 1<<20, "maximum amount of bytes per fetch request per broker")
 	cmd.Flags().DurationVar(&c.fetchMaxWait, "fetch-max-wait", 5*time.Second, "maximum amount of time to wait when fetching from a broker before the broker replies")
