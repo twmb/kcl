@@ -19,9 +19,9 @@ import (
 
 func addControllerCommand(cl *client.Client) *cobra.Command {
 	var (
-		controllerID    int32
-		directoryID     string
-		listeners       []string
+		controllerID int32
+		directoryID  string
+		listeners    []string
 	)
 
 	cmd := &cobra.Command{

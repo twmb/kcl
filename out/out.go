@@ -58,8 +58,8 @@ func HandleError(err error, format string) {
 	}
 	if format == FormatJSON {
 		writeJSON(map[string]any{
-			"error":   err.Error(),
-			"code":    code,
+			"error": err.Error(),
+			"code":  code,
 		})
 	} else {
 		fmt.Fprintln(os.Stderr, err)

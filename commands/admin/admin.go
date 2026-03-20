@@ -322,8 +322,8 @@ and observers.
 			switch cl.Format() {
 			case "json":
 				type replicaJSON struct {
-					ReplicaID            int32 `json:"replica_id"`
-					LogEndOffset         int64 `json:"log_end_offset"`
+					ReplicaID             int32 `json:"replica_id"`
+					LogEndOffset          int64 `json:"log_end_offset"`
 					LastFetchTimestamp    int64 `json:"last_fetch_timestamp"`
 					LastCaughtUpTimestamp int64 `json:"last_caught_up_timestamp"`
 				}

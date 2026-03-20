@@ -21,7 +21,7 @@ import (
 
 func describeCommand(cl *client.Client) *cobra.Command {
 	var (
-		readCommitted      bool
+		readCommitted       bool
 		useConsumerDescribe bool
 		section             string
 		regex               bool

@@ -32,8 +32,8 @@ type consumption struct {
 	offset          string
 	num             int
 	numPerPartition int
-	format string
-	rack   string
+	format          string
+	rack            string
 
 	readUncommitted     bool
 	printControlRecords bool
@@ -192,18 +192,18 @@ func (c *consumption) run(topics []string) error {
 	}
 
 	co := &consumeOutput{
-		cl:              cl,
-		numPerPartition: c.numPerPartition,
-		max:             c.num,
-		start:           c.start,
-		end:             c.end,
-		group:           c.group,
+		cl:                  cl,
+		numPerPartition:     c.numPerPartition,
+		max:                 c.num,
+		start:               c.start,
+		end:                 c.end,
+		group:               c.group,
 		grepFilters:         grepFilters,
 		printControlRecords: c.printControlRecords,
 		timeout:             c.timeout,
 		done:                make(chan struct{}),
-		ctx:             ctx,
-		cancel:          cancel,
+		ctx:                 ctx,
+		cancel:              cancel,
 	}
 	if c.protoFile != "" {
 		var err error

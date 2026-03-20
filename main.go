@@ -88,8 +88,8 @@ Command completion is available at:
 		metadataCmd,
 		misc.Command(cl),
 		admin.Command(cl),
-		myconfig.Command(cl),            // "profile" (primary)
-		myconfig.DeprecatedCommand(cl),   // "myconfig" (deprecated alias)
+		myconfig.Command(cl),           // "profile" (primary)
+		myconfig.DeprecatedCommand(cl), // "myconfig" (deprecated alias)
 
 		// Resource commands (promoted from admin).
 		topicCmd,

@@ -173,10 +173,10 @@ func TestGrepFilterEmpty(t *testing.T) {
 
 func TestGrepFilterErrors(t *testing.T) {
 	tests := []string{
-		"invalid",      // no prefix
-		"k:[invalid",   // bad regex
-		"h:noequals",   // h: without =
-		"x:something",  // unknown prefix
+		"invalid",     // no prefix
+		"k:[invalid",  // bad regex
+		"h:noequals",  // h: without =
+		"x:something", // unknown prefix
 	}
 	for _, p := range tests {
 		_, err := parseGrepFilters([]string{p})

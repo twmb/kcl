@@ -19,8 +19,6 @@ import (
 
 func topicDescribeCommand(cl *client.Client) *cobra.Command {
 	var (
-		showConfigs     bool
-		showAll         bool
 		stable          bool
 		withOverrides   bool
 		underReplicated bool
@@ -34,20 +32,19 @@ func topicDescribeCommand(cl *client.Client) *cobra.Command {
 		Use:     "describe TOPICS...",
 		Aliases: []string{"d"},
 		Short:   "Describe topics with partition detail",
-		Long: `Describe topics showing summary and partition details.
+		Long: `Describe topics showing summary, partitions, and optionally configs.
 
-By default, shows a summary (name, partitions, replication factor) followed
-by a partition table (leader, replicas, ISR). Use -c to also show topic
-configs, or -a for all sections.
+By default in text mode, shows all sections. Use --section to select one.
+AWK mode defaults to partitions. JSON always includes all sections.
 
 Health filters show only partitions matching the condition.
 
 EXAMPLES:
-  kcl topic describe foo                   # summary + partitions
-  kcl topic describe foo -c                # also show configs
-  kcl topic describe foo -a                # all sections
-  kcl topic describe foo --under-replicated # unhealthy partitions only
-  kcl topic describe --format json foo     # JSON output
+  kcl topic describe foo                         # all sections
+  kcl topic describe foo --section configs        # configs only
+  kcl topic describe foo --under-replicated       # unhealthy partitions
+  kcl topic describe foo --format json            # JSON output
+  kcl topic describe foo --format awk             # partitions as TSV
 
 SEE ALSO:
   kcl topic list         list topics
@@ -66,13 +63,7 @@ SEE ALSO:
 			// --section implies showing the requested data.
 			showSummary := section == "" || section == "summary"
 			showPartitions := section == "" || section == "partitions"
-			showConfigSection := section == "configs"
-			if section == "" && (showConfigs || showAll) {
-				showConfigSection = true
-			}
-			if section == "configs" {
-				showConfigs = true
-			}
+			showConfigSection := section == "" || section == "configs"
 
 			kclClient := cl.Client()
 			ctx := context.Background()
@@ -91,7 +82,7 @@ SEE ALSO:
 
 			// Optionally fetch configs.
 			var configsByTopic map[string][]kmsg.DescribeConfigsResponseResourceConfig
-			if showConfigs || showAll || withOverrides || section == "configs" {
+			if showConfigSection || withOverrides {
 				var err error
 				configsByTopic, err = fetchTopicConfigs(ctx, kclClient, topics)
 				if err != nil {
@@ -269,7 +260,7 @@ SEE ALSO:
 						}
 						tj.Details = append(tj.Details, pj)
 					}
-					if (showConfigs || showAll) && configsByTopic != nil {
+					if showConfigSection && configsByTopic != nil {
 						if configs, ok := configsByTopic[topicName]; ok {
 							for _, c := range configs {
 								val := ""
@@ -451,8 +442,6 @@ SEE ALSO:
 	}
 
 	cmd.Flags().StringVar(&section, "section", "", "output section (summary, partitions, configs; default: all for text, partitions for awk)")
-	cmd.Flags().BoolVarP(&showConfigs, "configs", "c", false, "also show topic configs")
-	cmd.Flags().BoolVarP(&showAll, "all", "a", false, "show all sections (summary, partitions, configs)")
 	cmd.Flags().BoolVar(&stable, "stable", false, "include stable (read_committed) offset column for transactional topics")
 	cmd.Flags().BoolVar(&withOverrides, "with-overrides", false, "only show topics with non-default config overrides (implies config fetching)")
 	cmd.Flags().BoolVar(&underReplicated, "under-replicated", false, "only show partitions where ISR < replicas")

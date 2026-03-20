@@ -78,7 +78,7 @@ func useCommand(cl *client.Client) *cobra.Command {
 				return fmt.Errorf("config file has no profiles; add [profiles.NAME] sections to your config first")
 			}
 			if _, ok := cfgFile.Profiles[name]; !ok {
-				return fmt.Errorf( "profile %q not found; available: %v", name, profileNames(cfgFile))
+				return fmt.Errorf("profile %q not found; available: %v", name, profileNames(cfgFile))
 			}
 
 			cfgFile.CurrentProfile = name
@@ -187,7 +187,7 @@ func renameCommand(cl *client.Client) *cobra.Command {
 
 			cfg, ok := cfgFile.Profiles[oldName]
 			if !ok {
-				return fmt.Errorf( "profile %q not found", oldName)
+				return fmt.Errorf("profile %q not found", oldName)
 			}
 			if _, exists := cfgFile.Profiles[newName]; exists {
 				return fmt.Errorf("profile %q already exists", newName)
@@ -223,7 +223,7 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 			}
 
 			if _, ok := cfgFile.Profiles[name]; !ok {
-				return fmt.Errorf( "profile %q not found", name)
+				return fmt.Errorf("profile %q not found", name)
 			}
 
 			delete(cfgFile.Profiles, name)
@@ -342,7 +342,7 @@ func linkCommand(cl *client.Client) *cobra.Command {
 				}
 			}
 			if !found {
-				return fmt.Errorf( "could not find requested config %q", args[0])
+				return fmt.Errorf("could not find requested config %q", args[0])
 			}
 			if existing != nil {
 				os.Remove(cl.DefaultCfgPath())
