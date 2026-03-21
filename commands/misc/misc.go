@@ -309,7 +309,9 @@ func rawCommand(cl *client.Client) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("response error: %v", err)
 			}
-			out.DumpJSON(kresp)
+			out.MarshalJSON("misc.raw-req", 1, map[string]any{
+				"response": kresp,
+			})
 			return nil
 		},
 	}

@@ -2,7 +2,6 @@
 package out
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -84,14 +83,6 @@ func Die(msg string, args ...any) {
 	os.Exit(1)
 }
 
-// DumpJSON prints json to stdout.
-func DumpJSON(j any) {
-	raw, err := json.MarshalIndent(j, "", "  ")
-	if err != nil {
-		Die("unable to json marshal response: %v", err)
-	}
-	fmt.Printf("%s\n", raw)
-}
 
 func args2strings(args []any) []string {
 	sargs := make([]string, len(args))

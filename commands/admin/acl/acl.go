@@ -439,7 +439,9 @@ SEE ALSO:
 			if len(resp.Results) != len(req.Creations) {
 				fmt.Fprintf(os.Stderr, "Kafka replied with only %d responses to our %d creations! Dumping response as JSON...",
 					len(resp.Results), len(req.Creations))
-				out.DumpJSON(kresp)
+				out.MarshalJSON("acl.create", 1, map[string]any{
+					"response": kresp,
+				})
 				return nil
 			}
 
