@@ -28,10 +28,11 @@ closely.
 
 ## Stability Status
 
-The command surface is now relatively stable. Recent releases have made
-targeted breaking changes (see the CHANGELOG) to clean up flag/config names
-before a 1.x tag. Once a broader set of users confirm they are happy with
-the surface, a 1.x will follow.
+Treat the current command surface as a beta. The v0.17.0 release made a
+large, deliberate set of breaking changes across flags, config, and
+command layout (see the CHANGELOG for the full list). Further breaks
+are possible as users exercise the new surface and surface issues;
+that feedback is explicitly welcome.
 
 I've spent significant time integration testing my [franz-go][2] client that
 this program uses. It is worth reading the stability status in the franz-go

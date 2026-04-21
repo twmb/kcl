@@ -1,10 +1,12 @@
 v0.17.0
 ===
 
-This is a large release with many breaking changes, intentional, to clean
-up the flag, config, and command surface before a 1.x tag. If you use
+This is a large release with many intentional breaking changes across
+the flag, config, and command surface. Treat it as a beta: it may look
+unchanging, but real feedback against this new command space may drive
+further breaks in subsequent releases before kcl settles. If you use
 kcl via shell scripts or automation, read this list carefully before
-upgrading.
+upgrading, and please file issues when something feels wrong.
 
 ### BREAKING -- command surface
 
