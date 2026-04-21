@@ -1,4 +1,4 @@
-v0.17.0
+v0.18.0
 ===
 
 This is a large release with many intentional breaking changes. Treat
@@ -6,7 +6,7 @@ it as a beta: the new command surface may still shift based on real
 feedback. If you use kcl via shell scripts or automation, read the
 BREAKING section carefully before upgrading.
 
-### BREAKING (migration guide from v0.16.0)
+### BREAKING (migration guide from v0.17.0)
 
 Renames:
 
@@ -140,6 +140,14 @@ Headline additions (see `kcl --help` and the README for details):
   DescribeTopicPartitions handlers).
 * Bumps the rest: aws-sdk-go-v2 family, cobra, pflag, protoreflect,
   crypto, sync, compression libraries.
+
+v0.17.0
+===
+
+* Bumps all deps, notably pulling in franz-go v1.20.0 which can detect
+  Kafka 4.1
+* Builds with Go 1.25.3
+* Fixes `kcl misc raw-req` request pinning
 
 v0.16.0
 ===
