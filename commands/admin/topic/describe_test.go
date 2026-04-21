@@ -2,6 +2,7 @@ package topic
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/kadm"
@@ -9,6 +10,40 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
+
+func TestParseTopicID(t *testing.T) {
+	tests := []struct {
+		in  string
+		err bool
+	}{
+		{"00000000000000000000000000000000", false},
+		{"465a97c59919152e1827030ce374ec71", false},
+		{"465a97c5-9919-152e-1827-030ce374ec71", false},
+		{"465a97c5-9919152e-1827-030ce374ec71", false}, // dashes are stripped regardless of position
+		{"", true},
+		{"short", true},
+		{"465a97c59919152e1827030ce374ec7g", true}, // non-hex
+		{"465a97c59919152e1827030ce374ec", true},   // 30 chars
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			_, err := parseTopicID(tt.in)
+			if tt.err {
+				if err == nil {
+					t.Errorf("parseTopicID(%q) expected error", tt.in)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseTopicID(%q): %v", tt.in, err)
+			}
+			stripped := strings.ReplaceAll(tt.in, "-", "")
+			if len(stripped) != 32 {
+				t.Fatalf("test input not 32 hex chars after strip: %q", tt.in)
+			}
+		})
+	}
+}
 
 func TestTopicDescribeMetadata(t *testing.T) {
 	c, err := kfake.NewCluster()

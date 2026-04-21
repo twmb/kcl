@@ -167,6 +167,89 @@ func TestCfgFileNoCfgFile(t *testing.T) {
 	}
 }
 
+func TestDurationText(t *testing.T) {
+	// UnmarshalText: accepted forms.
+	type tc struct {
+		in   string
+		want time.Duration
+		err  bool
+	}
+	tests := []tc{
+		{"5s", 5 * time.Second, false},
+		{"500ms", 500 * time.Millisecond, false},
+		{"2m30s", 2*time.Minute + 30*time.Second, false},
+		{"1h", time.Hour, false},
+		{"", 0, true},
+		{"notaduration", 0, true},
+		{"5", 0, true}, // bare number with no unit
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			var d Duration
+			err := d.UnmarshalText([]byte(tt.in))
+			if tt.err {
+				if err == nil {
+					t.Errorf("UnmarshalText(%q) expected error, got %v", tt.in, d.D())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("UnmarshalText(%q): %v", tt.in, err)
+			}
+			if d.D() != tt.want {
+				t.Errorf("UnmarshalText(%q) = %v, want %v", tt.in, d.D(), tt.want)
+			}
+		})
+	}
+
+	// MarshalText: round-trip.
+	rt := []time.Duration{
+		time.Second,
+		500 * time.Millisecond,
+		3*time.Minute + 15*time.Second,
+	}
+	for _, d := range rt {
+		got, err := Duration(d).MarshalText()
+		if err != nil {
+			t.Fatalf("MarshalText(%v): %v", d, err)
+		}
+		var back Duration
+		if err := back.UnmarshalText(got); err != nil {
+			t.Fatalf("round-trip UnmarshalText(%q): %v", got, err)
+		}
+		if back.D() != d {
+			t.Errorf("round-trip %v: text=%q back=%v", d, got, back.D())
+		}
+	}
+}
+
+// TestCfgBootstrapFlagOverridesAll ensures that setting the
+// --bootstrap-servers (stored as c.bootstrapServers) wins over
+// a profile's seed_brokers after config load.
+func TestCfgBootstrapFlagOverridesAll(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/config.toml"
+	if err := os.WriteFile(path, []byte(`
+current_profile = "prod"
+
+[profiles.prod]
+seed_brokers = ["profile:9092"]
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{
+		cfgPath:          path,
+		format:           "text",
+		bootstrapServers: []string{"cli-override:9092"},
+		cfg:              Cfg{SeedBrokers: []string{"default:9092"}},
+	}
+	c.parseCfgFile()
+	c.processOverrides()
+	if len(c.cfg.SeedBrokers) != 1 || c.cfg.SeedBrokers[0] != "cli-override:9092" {
+		t.Errorf("expected -B to win, got %v", c.cfg.SeedBrokers)
+	}
+}
+
 func TestStrnorm(t *testing.T) {
 	tests := []struct {
 		in, want string

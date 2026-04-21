@@ -1,11 +1,9 @@
 // Package fake implements the `kcl fake` subcommand: start an in-process
-// fake Kafka cluster backed by github.com/twmb/franz-go/pkg/kfake for
-// testing, probing, and experimentation.
+// kfake cluster for testing, probing, and experimentation.
 package fake
 
 import (
 	"fmt"
-	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -25,54 +23,55 @@ import (
 // Command returns the `kcl fake` cobra command.
 func Command() *cobra.Command {
 	var (
-		ports        []int
-		numBrokers   int
-		logLevel     string
-		dataDir      string
-		syncWrites   bool
-		asVersion    string
-		brokerCfgs   []string
-		seedTopics   []string
-		allowAuto    bool
-		clusterID    string
-		pprofAddr    string
+		ports      []int
+		logLevel   string
+		dataDir    string
+		syncWrites bool
+		asVersion  string
+		brokerCfgs []string
+		seedTopics []string
+		allowAuto  bool
+		acls       bool
+		saslUsers  []string
+		pprofAddr  string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "fake",
-		Short: "Start an in-process fake Kafka cluster for testing.",
-		Long: `Start an in-process fake Kafka cluster for testing.
+		Short: "Start an in-process kfake cluster for testing.",
+		Long: `Start an in-process kfake cluster for testing.
 
-kcl fake runs github.com/twmb/franz-go/pkg/kfake in-process and prints
-the listen addresses to stdout. By default it listens on 127.0.0.1:9092,
-:9093, :9094 (three brokers). Point another kcl or any Kafka client at
-those addresses -- SIGINT or SIGTERM exits cleanly.
+kcl fake runs a kfake cluster in-process and prints the listen addresses
+to stdout. By default it starts three brokers on kfake-chosen ports on
+127.0.0.1. Point any Kafka client at the printed addresses; SIGINT or
+SIGTERM exits cleanly.
 
-This is NOT a production broker. kfake is a protocol-level fake used
-for integration tests: it implements the public user-facing Kafka
+This is NOT a production broker. kfake implements the user-facing Kafka
 protocol surface (produce, fetch, groups, transactions, ACLs, share
 groups) but intentionally omits broker-to-broker / KRaft-internal
 requests and is not performance-tuned.
 
-State is in-memory by default. Pass --data-dir PATH to persist topics,
-records, consumer group offsets, and transactional producer state
-across restarts. Pass --sync to fsync every write (slower but safest).
+State is in-memory by default. Pass -d/--data-dir PATH to persist
+topics, records, consumer group offsets, and transactional producer
+state across restarts. Pass --sync to fsync every write (slower but
+safest).
 
 EXAMPLES
 
-Default three-broker cluster on 9092/9093/9094:
+Default three-broker cluster:
 
   kcl fake
 
-Single broker on a specific port:
+Pick specific ports (the number of ports determines broker count):
 
-  kcl fake --ports 9092 --num-brokers 1
+  kcl fake --ports 9092,9093,9094
+  kcl fake --ports 9092                # single broker
 
 Persistent cluster:
 
   kcl fake -d /tmp/kfake --sync
 
-Pretend to be Kafka 3.9 (restricts advertised API versions):
+Pretend to be Kafka 3.9 (caps advertised API versions):
 
   kcl fake --as-version 3.9
 
@@ -84,6 +83,10 @@ Custom broker config (repeatable):
 
   kcl fake -c group.consumer.heartbeat.interval.ms=500 \
            -c transactional.id.expiration.ms=60000
+
+Test SASL + ACLs:
+
+  kcl fake --acls --sasl plain:admin:pw --sasl scram-sha-256:alice:pw2
 
 Tune log verbosity for debugging:
 
@@ -103,16 +106,29 @@ Tune log verbosity for debugging:
 			if err != nil {
 				return out.Errf(out.ExitUsage, "%v", err)
 			}
+			supers, err := parseSASLUsers(saslUsers)
+			if err != nil {
+				return out.Errf(out.ExitUsage, "%v", err)
+			}
 
-			if numBrokers <= 0 {
+			numBrokers := 3
+			if len(ports) > 0 {
 				numBrokers = len(ports)
-				if numBrokers == 0 {
-					numBrokers = 3
-				}
+			}
+
+			// Default auto-created / seeded partition count scales with
+			// broker count so the cluster distributes work meaningfully:
+			//   1 broker  -> 1 partition
+			//   2 brokers -> 2 partitions
+			//   3+ brokers-> 3 partitions
+			defaultParts := numBrokers
+			if defaultParts > 3 {
+				defaultParts = 3
 			}
 
 			opts := []kfake.Opt{
 				kfake.NumBrokers(numBrokers),
+				kfake.DefaultNumPartitions(defaultParts),
 				kfake.WithLogger(kfake.BasicLogger(os.Stderr, level)),
 			}
 			if len(ports) > 0 {
@@ -127,8 +143,15 @@ Tune log verbosity for debugging:
 			if allowAuto {
 				opts = append(opts, kfake.AllowAutoTopicCreation())
 			}
-			if clusterID != "" {
-				opts = append(opts, kfake.ClusterID(clusterID))
+			if acls {
+				opts = append(opts, kfake.EnableACLs())
+			}
+			if len(supers) > 0 {
+				// Enabling SASL is implied by adding superusers.
+				opts = append(opts, kfake.EnableSASL())
+				for _, s := range supers {
+					opts = append(opts, kfake.Superuser(s.mechanism, s.user, s.pass))
+				}
 			}
 			if asVersion != "" {
 				v := kversion.FromString(asVersion)
@@ -170,8 +193,8 @@ Tune log verbosity for debugging:
 			signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
 			<-sigs
 			if dataDir != "" {
-				// Give persistent shutdown a chance to drain; a
-				// second signal forces immediate exit.
+				// Give persistent shutdown a chance to drain; a second
+				// signal forces immediate exit.
 				fmt.Fprintln(os.Stderr, "shutting down (Ctrl+C again to force)...")
 				done := make(chan struct{})
 				go func() {
@@ -191,16 +214,16 @@ Tune log verbosity for debugging:
 		},
 	}
 
-	cmd.Flags().IntSliceVar(&ports, "ports", nil, "ports for brokers (comma-separated; default is kfake-chosen when unset)")
-	cmd.Flags().IntVar(&numBrokers, "num-brokers", 0, "number of brokers (defaults to 3, or to len(--ports) if set)")
+	cmd.Flags().IntSliceVar(&ports, "ports", nil, "ports for brokers (comma-separated; broker count = number of ports; default: 3 brokers on kfake-chosen ports)")
 	cmd.Flags().StringVarP(&logLevel, "log-level", "l", "none", "kfake log level: none, error, warn, info, debug")
 	cmd.Flags().StringVarP(&dataDir, "data-dir", "d", "", "persist state under this directory across restarts (default: in-memory only)")
 	cmd.Flags().BoolVar(&syncWrites, "sync", false, "fsync every write for immediate durability (slower)")
 	cmd.Flags().StringVar(&asVersion, "as-version", "", "pretend to be this Kafka version (e.g. 3.9, 4.0); caps advertised API versions")
 	cmd.Flags().StringArrayVarP(&brokerCfgs, "broker-config", "c", nil, "broker config key=value (repeatable; applied at startup)")
-	cmd.Flags().StringArrayVar(&seedTopics, "seed-topic", nil, "seed a topic at startup as NAME:PARTITIONS (repeatable)")
+	cmd.Flags().StringSliceVar(&seedTopics, "seed-topic", nil, "seed topics at startup as NAME:PARTITIONS (repeatable and/or comma-separated)")
 	cmd.Flags().BoolVar(&allowAuto, "allow-auto-topic-creation", false, "allow producers/consumers to auto-create topics")
-	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "override the cluster ID (default 'kfake')")
+	cmd.Flags().BoolVar(&acls, "acls", false, "enable ACL enforcement (requires --sasl superusers to get through the deny-by-default)")
+	cmd.Flags().StringArrayVar(&saslUsers, "sasl", nil, "add a SASL superuser as MECHANISM:USER:PASS (repeatable; enables SASL). Mechanisms: plain, scram-sha-256, scram-sha-512")
 	cmd.Flags().StringVar(&pprofAddr, "pprof", "", "if set, serve pprof on this addr (e.g. :6060 or 127.0.0.1:6060)")
 
 	return cmd
@@ -263,7 +286,44 @@ func parseSeedTopics(list []string) ([]seedTopic, error) {
 	return out, nil
 }
 
-// Unused by the command flow but kept for future expansion (e.g., a
-// --listen flag that binds to non-loopback; kfake currently bakes
-// 127.0.0.1 into its ListenFn default, so we note that here).
-var _ = net.IPv4zero
+type saslUser struct {
+	mechanism string
+	user      string
+	pass      string
+}
+
+// parseSASLUsers parses "MECHANISM:USER:PASS" entries. USER and PASS
+// are passed through os.ExpandEnv so callers can reference environment
+// variables without exposing secrets on the command line, e.g.
+//   --sasl "plain:$KAFKA_USER:$KAFKA_PASS"
+// Quote the argument in the shell so the shell doesn't expand first.
+func parseSASLUsers(list []string) ([]saslUser, error) {
+	var out []saslUser
+	for _, s := range list {
+		parts := strings.SplitN(s, ":", 3)
+		if len(parts) != 3 {
+			return nil, fmt.Errorf("invalid --sasl %q: want MECHANISM:USER:PASS", s)
+		}
+		// kfake expects canonical uppercase Kafka mechanism names
+		// ("PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"), but accept
+		// any case from the user for convenience.
+		var mech string
+		switch strings.ToLower(parts[0]) {
+		case "plain":
+			mech = "PLAIN"
+		case "scram-sha-256":
+			mech = "SCRAM-SHA-256"
+		case "scram-sha-512":
+			mech = "SCRAM-SHA-512"
+		default:
+			return nil, fmt.Errorf("invalid --sasl %q: mechanism %q must be plain, scram-sha-256, or scram-sha-512", s, parts[0])
+		}
+		user := os.ExpandEnv(parts[1])
+		pass := os.ExpandEnv(parts[2])
+		if user == "" || pass == "" {
+			return nil, fmt.Errorf("invalid --sasl %q: user and password must be non-empty after env expansion", s)
+		}
+		out = append(out, saslUser{mechanism: mech, user: user, pass: pass})
+	}
+	return out, nil
+}
