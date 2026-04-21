@@ -10,6 +10,7 @@ kcl
 - [Autocompletion](#autocompletion)
 - [Group Consuming](#group-consuming)
 - [Share Groups](#share-groups)
+- [Local Fake Cluster](#local-fake-cluster)
 - [API at a Glance](#api-at-a-glance)
 - [Examples](#examples)
 
@@ -19,12 +20,12 @@ kcl is a complete, pure Go command line Kafka client. Think of it as your
 one stop shop to do anything you want to do with Kafka -- producing, consuming,
 administering, transactions, ACLs, share groups, and so on.
 
-Unlike the small size of [kafkacat][1], this binary is ~15M compiled. It is,
-however, still fast, has rich consuming and producing formatting options, and
-a complete Kafka administration interface that tracks the upstream protocol
-closely.
+Unlike the small size of [kcat][1] (formerly kafkacat), this binary is
+~15M compiled. It is, however, still fast, has rich consuming and
+producing formatting options, and a complete Kafka administration
+interface that tracks the upstream protocol closely.
 
-[1]: https://github.com/edenhill/kafkacat
+[1]: https://github.com/confluentinc/kcat
 
 ## Stability Status
 
@@ -152,6 +153,39 @@ acknowledged:
 `kcl share-group` has its own `list`, `describe`, `seek`, `delete`, and
 `offset-delete` subcommands.
 
+## Local Fake Cluster
+
+`kcl fake` runs a [kfake][4] cluster in-process and prints the listen
+addresses. Point any Kafka client (including another kcl invocation) at
+those addresses; SIGINT or SIGTERM exits cleanly. State is in-memory by
+default; pass `--data-dir PATH` to persist, and `--sync` for fsync-on-write
+durability.
+
+[4]: https://github.com/twmb/franz-go/tree/master/pkg/kfake
+
+This is NOT a production broker. kfake implements the user-facing Kafka
+protocol surface (produce, fetch, groups, transactions, ACLs, share
+groups) but intentionally omits broker-to-broker / KRaft-internal
+requests and is not performance-tuned. It's great for probing, learning,
+integration tests, CI pipelines, and demos without Docker.
+
+```
+kcl fake                                 # 3 brokers on kfake-picked ports
+kcl fake --ports 9092,9093,9094          # 3 brokers on specific ports
+kcl fake --ports 9092                    # single-broker cluster
+kcl fake -d /tmp/kfake --sync            # persistent, durable
+kcl fake --seed-topic foo:10,bar:3       # pre-create topics
+kcl fake --as-version 3.9                # cap advertised API versions
+kcl fake --acls --sasl 'plain:$USER:$PW' # SASL superuser from env vars
+kcl fake -c group.consumer.heartbeat.interval.ms=500  # broker config
+kcl fake -l debug                        # verbose kfake logs
+```
+
+The `--sasl` flag accepts `MECHANISM:USER:PASS` (repeatable). Supported
+mechanisms: `plain`, `scram-sha-256`, `scram-sha-512`. User and password
+go through `os.ExpandEnv`, so quoting the argument keeps the shell from
+expanding first and lets the broker name env vars pick up the secrets.
+
 ## API at a glance
 
 The best way to explore kcl is `kcl --help` and then `kcl <cmd> --help`.
@@ -161,10 +195,11 @@ The top-level commands are:
 kcl
  acl            -- list/create/delete ACLs
  client-metrics -- manage client telemetry subscriptions (KIP-714)
- cluster        -- cluster info/quorum/feature flags/leader elections
+ cluster        -- metadata, quorum, feature flags, leader elections, KRaft voters
  config         -- alter/describe topic, broker, group, client-metrics configs
  consume        -- consume records (classic group, share group, or direct)
  dtoken         -- delegation token commands
+ fake           -- start a local in-process kfake cluster for testing
  group          -- classic / KIP-848 consumer group operations
  logdirs        -- per-partition log directory operations
  misc           -- api-versions, list-offsets, raw-req, error lookups, completion
@@ -182,7 +217,21 @@ Output format for every command is controlled by the global `--format` flag
 (`text`, `json`, or `awk`). JSON output is stable (`{_command, _version, ...}`
 envelope) and suitable for piping into `jq`. Text output is tab-aligned;
 column names are hyphen-delimited (`GROUP-ID`, `LEADER-EPOCH`, etc.) so awk
-pipelines are straightforward.
+pipelines are straightforward. Note that `consume` and `produce`
+deliberately repurpose `--format` as the per-record format string
+(records don't fit the table envelope).
+
+For tooling and agents that want to introspect kcl's entire command tree
+programmatically (names, flags, examples, help text), use the global
+`--help-json` flag at the root:
+
+```
+kcl --help-json | jq '.commands[] | .name'
+```
+
+Interactive confirmation prompts on destructive commands (`group seek`,
+`share-group seek`, `topic trim-prefix`, `config alter`, `acl delete`)
+are skipped with `--yes/-y`.
 
 ## Examples
 
@@ -253,13 +302,36 @@ kcl topic create foo                              # uses cluster default partiti
 kcl topic create foo -p 6 -r 3                    # 6 partitions, 3 replicas
 kcl topic describe foo                            # partitions, configs, health
 kcl topic describe --topic-id <uuid>              # lookup by UUID (KIP-516)
-kcl cluster info                                  # broker list, controller
+kcl cluster metadata                              # broker list, controller
+kcl cluster describe-cluster                      # admin view with fenced brokers
 kcl cluster features describe                     # feature flags (KIP-584)
 kcl cluster features update share.version=1 --upgrade-type safe-downgrade
 kcl group list                                    # classic + KIP-848 + share groups
 kcl group describe mygroup
 kcl group seek mygroup --to end --yes
 kcl acl list
+```
+
+### Probing against a local fake cluster
+
+Start a fake in one shell, use it from another:
+
+```
+# shell 1
+kcl fake --seed-topic foo:3
+
+# shell 2 (fake prints 127.0.0.1:<port> -- pick any)
+kcl -B 127.0.0.1:<port> topic list
+seq 1 5 | kcl -B 127.0.0.1:<port> produce foo
+kcl -B 127.0.0.1:<port> consume foo -n 5 -o start
+```
+
+Or set a persistent profile for the fake so `-B` isn't needed on each
+invocation:
+
+```
+kcl profile create            # interactive; name it e.g. "fake"
+kcl -C fake topic list
 ```
 
 ### Error and exit codes

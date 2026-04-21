@@ -200,7 +200,7 @@ To show partition and offset for each produced record:
 			case "zstd":
 				codec = kgo.ZstdCompression()
 			default:
-				return out.Errf(out.ExitUsage, "invalid compression codec %q", codec)
+				return out.Errf(out.ExitUsage, "invalid compression codec %q", compression)
 			}
 			cl.AddOpt(kgo.ProducerBatchCompression(codec))
 
