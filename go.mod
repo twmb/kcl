@@ -1,6 +1,6 @@
 module github.com/twmb/kcl
 
-go 1.25
+go 1.25.0
 
 require (
 	github.com/BurntSushi/toml v1.5.0
@@ -8,11 +8,11 @@ require (
 	github.com/jhump/protoreflect v1.17.0
 	github.com/spf13/cobra v1.9.1
 	github.com/spf13/pflag v1.0.7
-	github.com/twmb/franz-go v1.20.6
-	github.com/twmb/franz-go/pkg/kadm v1.17.1
-	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260315151839-72fe24297b24
-	github.com/twmb/franz-go/pkg/kmsg v1.12.0
-	golang.org/x/crypto v0.48.0
+	github.com/twmb/franz-go v1.21.0
+	github.com/twmb/franz-go/pkg/kadm v1.18.0
+	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260421223213-85afe25f1254
+	github.com/twmb/franz-go/pkg/kmsg v1.13.1
+	golang.org/x/crypto v0.50.0
 	google.golang.org/protobuf v1.36.8
 )
 
@@ -32,14 +32,7 @@ require (
 	github.com/bufbuild/protocompile v0.14.1 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/klauspost/compress v1.18.4 // indirect
-	github.com/pierrec/lz4/v4 v4.1.25 // indirect
+	github.com/klauspost/compress v1.18.5 // indirect
+	github.com/pierrec/lz4/v4 v4.1.26 // indirect
 	golang.org/x/sync v0.16.0 // indirect
-)
-
-replace (
-	github.com/twmb/franz-go => ../franz-go
-	github.com/twmb/franz-go/pkg/kadm => ../franz-go/pkg/kadm
-	github.com/twmb/franz-go/pkg/kfake => ../franz-go/pkg/kfake
-	github.com/twmb/franz-go/pkg/kmsg => ../franz-go/pkg/kmsg
 )
