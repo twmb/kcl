@@ -25,7 +25,7 @@ func topicTrimPrefixCommand(cl *client.Client) *cobra.Command {
 	var (
 		offsetFlag string
 		partitions []int32
-		noConfirm  bool
+		yes        bool
 		fromFile   string
 	)
 
@@ -157,7 +157,7 @@ SEE ALSO:
 			}
 			tw.Flush()
 
-			if !noConfirm {
+			if !yes {
 				fmt.Fprint(os.Stderr, "\nDelete records before these offsets? [y/N] ")
 				scanner := bufio.NewScanner(os.Stdin)
 				scanner.Scan()
@@ -209,7 +209,7 @@ SEE ALSO:
 
 	cmd.Flags().StringVar(&offsetFlag, "offset", "", "offset or timestamp to trim before (N, end, @timestamp)")
 	cmd.Flags().Int32SliceVar(&partitions, "partitions", nil, "limit to specific partitions (default: all)")
-	cmd.Flags().BoolVar(&noConfirm, "no-confirm", false, "skip confirmation prompt")
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip confirmation prompt")
 	cmd.Flags().StringVar(&fromFile, "from-file", "", "JSON file of [{topic, partition, offset}, ...] to trim")
 
 	return cmd

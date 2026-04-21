@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -36,11 +37,11 @@ func TestWriteAndReadCfgFile(t *testing.T) {
 		Profiles: map[string]client.Cfg{
 			"prod": {
 				SeedBrokers:   []string{"kafka-prod:9092"},
-				TimeoutMillis: 10000,
+				BrokerTimeout: client.Duration(10 * time.Second),
 			},
 			"local": {
 				SeedBrokers:   []string{"localhost:9092"},
-				TimeoutMillis: 5000,
+				BrokerTimeout: client.Duration(5 * time.Second),
 			},
 		},
 	}
@@ -64,8 +65,8 @@ func TestWriteAndReadCfgFile(t *testing.T) {
 	if len(prod.SeedBrokers) != 1 || prod.SeedBrokers[0] != "kafka-prod:9092" {
 		t.Errorf("prod seed_brokers = %v", prod.SeedBrokers)
 	}
-	if prod.TimeoutMillis != 10000 {
-		t.Errorf("prod timeout = %d, want 10000", prod.TimeoutMillis)
+	if prod.BrokerTimeout.D() != 10*time.Second {
+		t.Errorf("prod broker_timeout = %v, want 10s", prod.BrokerTimeout.D())
 	}
 }
 
@@ -76,7 +77,7 @@ func TestBackwardCompatFlatConfig(t *testing.T) {
 	// Write a flat config (old format).
 	err := os.WriteFile(path, []byte(`
 seed_brokers = ["localhost:9092"]
-timeout_ms = 5000
+broker_timeout = "5s"
 `), 0644)
 	if err != nil {
 		t.Fatal(err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,6 +27,7 @@ func topicDescribeCommand(cl *client.Client) *cobra.Command {
 		underMinISR     bool
 		atMinISR        bool
 		section         string
+		topicIDs        []string
 	)
 
 	cmd := &cobra.Command{
@@ -39,20 +41,35 @@ AWK mode defaults to partitions. JSON always includes all sections.
 
 Health filters show only partitions matching the condition.
 
+Topics can be referenced by name (positional args) or UUID (--topic-id,
+repeatable). UUIDs are 32 hex characters with optional dashes.
+
 EXAMPLES:
   kcl topic describe foo                         # all sections
   kcl topic describe foo --section configs        # configs only
   kcl topic describe foo --under-replicated       # unhealthy partitions
   kcl topic describe foo --format json            # JSON output
   kcl topic describe foo --format awk             # partitions as TSV
+  kcl topic describe --topic-id 15fc1bf40a5c1c3cdd363ec28f5c0c69
 
 SEE ALSO:
   kcl topic list         list topics
   kcl topic create       create topics
   kcl config describe    describe any resource config
 `,
-		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, topics []string) error {
+			if len(topics) == 0 && len(topicIDs) == 0 {
+				return out.Errf(out.ExitUsage, "at least one topic name or --topic-id is required")
+			}
+			// Parse and validate topic IDs up front.
+			parsedIDs := make([][16]byte, 0, len(topicIDs))
+			for _, raw := range topicIDs {
+				id, err := parseTopicID(raw)
+				if err != nil {
+					return out.Errf(out.ExitUsage, "invalid --topic-id %q: %v", raw, err)
+				}
+				parsedIDs = append(parsedIDs, id)
+			}
 			// Validate --section.
 			switch section {
 			case "", "summary", "partitions", "configs":
@@ -68,16 +85,51 @@ SEE ALSO:
 			kclClient := cl.Client()
 			ctx := context.Background()
 
-			// Fetch metadata for topics.
+			// Fetch metadata for topics (by name or ID).
 			metaReq := kmsg.NewPtrMetadataRequest()
 			for _, t := range topics {
 				rt := kmsg.NewMetadataRequestTopic()
 				rt.Topic = kmsg.StringPtr(t)
 				metaReq.Topics = append(metaReq.Topics, rt)
 			}
+			for _, id := range parsedIDs {
+				rt := kmsg.NewMetadataRequestTopic()
+				rt.TopicID = id
+				// Topic left nil: broker resolves name via TopicID (v10+).
+				metaReq.Topics = append(metaReq.Topics, rt)
+			}
 			metaResp, err := metaReq.RequestWith(ctx, kclClient)
 			if err != nil {
 				return fmt.Errorf("unable to request metadata: %v", err)
+			}
+
+			// After resolution, operate on the response's topic names so
+			// downstream config/offset lookups work uniformly for
+			// name-referenced and ID-referenced topics. Dedupe the
+			// metadata response entries (the same topic shows up twice
+			// when a caller passes both its name and its ID).
+			if len(parsedIDs) > 0 {
+				inTopics := make(map[string]bool, len(topics))
+				for _, t := range topics {
+					inTopics[t] = true
+				}
+				emitted := make(map[string]bool, len(metaResp.Topics))
+				deduped := make([]kmsg.MetadataResponseTopic, 0, len(metaResp.Topics))
+				for _, mt := range metaResp.Topics {
+					name := strval(mt.Topic)
+					if mt.ErrorCode == 0 && name != "" {
+						if emitted[name] {
+							continue
+						}
+						emitted[name] = true
+						if !inTopics[name] {
+							topics = append(topics, name)
+							inTopics[name] = true
+						}
+					}
+					deduped = append(deduped, mt)
+				}
+				metaResp.Topics = deduped
 			}
 
 			// Optionally fetch configs.
@@ -157,10 +209,12 @@ SEE ALSO:
 				partitions []kmsg.MetadataResponseTopicPartition
 			}
 			var described []topicPartitions
+			var anyTopicErr bool
 			for _, topic := range metaResp.Topics {
 				if err := kerr.ErrorForCode(topic.ErrorCode); err != nil {
+					anyTopicErr = true
 					if cl.Format() == "text" {
-						fmt.Fprintf(out.BeginTabWrite(), "TOPIC %s: %v\n", strval(topic.Topic), err)
+						fmt.Fprintf(os.Stderr, "TOPIC %s: %v\n", strval(topic.Topic), err)
 					}
 					continue
 				}
@@ -437,6 +491,11 @@ SEE ALSO:
 					}
 				}
 			}
+			if anyTopicErr {
+				// Exit non-zero so scripts can detect partial/total
+				// failure. The per-topic errors are already on stderr.
+				return out.ErrSilent
+			}
 			return nil
 		},
 	}
@@ -448,8 +507,25 @@ SEE ALSO:
 	cmd.Flags().BoolVar(&unavailable, "unavailable", false, "only show partitions with no leader")
 	cmd.Flags().BoolVar(&underMinISR, "under-min-isr", false, "only show partitions where ISR < min.insync.replicas")
 	cmd.Flags().BoolVar(&atMinISR, "at-min-isr", false, "only show partitions where ISR = min.insync.replicas")
+	cmd.Flags().StringArrayVar(&topicIDs, "topic-id", nil, "topic UUID to describe (repeatable; 32 hex chars with optional dashes)")
 
 	return cmd
+}
+
+// parseTopicID accepts a topic UUID as either 32 hex chars or the
+// dashed 8-4-4-4-12 form and returns the raw 16 bytes.
+func parseTopicID(s string) ([16]byte, error) {
+	var id [16]byte
+	stripped := strings.ReplaceAll(s, "-", "")
+	if len(stripped) != 32 {
+		return id, fmt.Errorf("topic id must be 32 hex chars (with optional dashes), got %d", len(stripped))
+	}
+	raw, err := hex.DecodeString(stripped)
+	if err != nil {
+		return id, fmt.Errorf("not a hex string: %v", err)
+	}
+	copy(id[:], raw)
+	return id, nil
 }
 
 func fetchTopicConfigs(ctx context.Context, cl kmsg.Requestor, topics []string) (map[string][]kmsg.DescribeConfigsResponseResourceConfig, error) {
@@ -469,7 +545,9 @@ func fetchTopicConfigs(ctx context.Context, cl kmsg.Requestor, topics []string) 
 	result := make(map[string][]kmsg.DescribeConfigsResponseResourceConfig)
 	for _, r := range resp.Resources {
 		if err := kerr.ErrorForCode(r.ErrorCode); err != nil {
-			fmt.Fprintf(out.BeginTabWrite(), "config error for %s: %v\n", r.ResourceName, err)
+			// Route per-resource errors to stderr so they don't
+			// contaminate JSON/awk output on stdout.
+			fmt.Fprintf(os.Stderr, "config error for %s: %v\n", r.ResourceName, err)
 			continue
 		}
 		// Sort configs: non-default first, then alphabetical.

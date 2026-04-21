@@ -72,7 +72,7 @@ the groups listed. This prints all of the information from a ListGroups request.
 			})
 
 			table := out.NewFormattedTable(cl.Format(), "group.list", 1, "groups",
-				"BROKER", "GROUP ID", "PROTO TYPE", "GROUP TYPE", "STATE", "ERROR")
+				"BROKER", "GROUP-ID", "PROTO-TYPE", "GROUP-TYPE", "STATE", "ERROR")
 			for _, kresp := range kresps {
 				err := kresp.Err
 				if err == nil {
@@ -100,7 +100,6 @@ the groups listed. This prints all of the information from a ListGroups request.
 func deleteCommand(cl *client.Client) *cobra.Command {
 	var dryRun bool
 	var regex bool
-	var ifExists bool
 	cmd := &cobra.Command{
 		Use:   "delete GROUPS...",
 		Short: "Delete all listed Kafka groups (Kafka 1.1.0+).",
@@ -131,9 +130,11 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 			})
 			table := out.NewFormattedTable(cl.Format(), "group.delete", 1, "results",
 				"BROKER", "GROUP", "ERROR")
+			anyErr := false
 			for _, brokerResp := range brokerResps {
 				kresp, err := brokerResp.Resp, brokerResp.Err
 				if err != nil {
+					anyErr = true
 					table.Row(brokerResp.Meta.NodeID, "", fmt.Sprintf("unable to issue request (addr %s:%d): %v", brokerResp.Meta.Host, brokerResp.Meta.Port, err))
 					continue
 				}
@@ -141,22 +142,21 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 				for _, resp := range resp.Groups {
 					msg := "OK"
 					if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-						if ifExists && err == kerr.GroupIDNotFound {
-							msg = "OK (did not exist)"
-						} else {
-							msg = err.Error()
-						}
+						anyErr = true
+						msg = err.Error()
 					}
 					table.Row(brokerResp.Meta.NodeID, resp.Group, msg)
 				}
 			}
 			table.Flush()
+			if anyErr {
+				return out.ErrSilent
+			}
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print groups that would be deleted without actually deleting them")
 	cmd.Flags().BoolVar(&regex, "regex", false, "treat group arguments as regular expressions")
-	cmd.Flags().BoolVar(&ifExists, "if-exists", false, "suppress error if group does not exist")
 	return cmd
 }
 

@@ -25,7 +25,8 @@ func (c *consumption) command() *cobra.Command {
 	cmd.Flags().StringArrayVarP(&topicFlags, "topic", "t", nil, "topic to consume (repeatable; alternative to positional args)")
 	cmd.Flags().StringVarP(&c.group, "group", "g", "", "consumer group to assign")
 	cmd.Flags().StringVar(&c.shareGroup, "share-group", "", "share group to consume from (Kafka 4.0+, mutually exclusive with --group)")
-	cmd.Flags().StringVarP(&c.groupAlg, "balancer", "b", "cooperative-sticky", "group balancer to use if group consuming (range, roundrobin, sticky, cooperative-sticky)")
+	cmd.Flags().StringVar(&c.shareAckType, "share-ack-type", "accept", "share group ack type: accept (mark processed), release (peek, return to pool for redelivery), reject (drain permanently, bumps delivery count); only with --share-group")
+	cmd.Flags().StringVar(&c.groupAlg, "balancer", "cooperative-sticky", "group balancer to use if group consuming (range, roundrobin, sticky, cooperative-sticky)")
 	cmd.Flags().StringVarP(&c.instanceID, "instance-id", "i", "", "group instance ID to use for consuming; empty means none (implies static membership, Kafka 2.3.0+)")
 	cmd.Flags().Int32SliceVarP(&c.partitions, "partitions", "p", nil, "comma delimited list of specific partitions to consume")
 	cmd.Flags().StringVarP(&c.offset, "offset", "o", "start", "offset to consume from (start, end, +N, -N, N, N:M, :end, @timestamp, @T1:T2)")
@@ -199,11 +200,20 @@ after '$', an error message will be appended.
 
 EXAMPLES
 
-A basic example:
-  -f 'Topic %t [%p] at offset %o @%d{strftime[%F %T]}: key %k: %v\n'
+Default (value only, newline-delimited):
+  -f '%v\n'
 
-To mirror a topic (consume with this format, pipe to produce with the same):
-  -f '%K{big32}%k%V{big32}%v%H{big32}%h{%K{big32}%k%V{big32}%v}'
+Key and value, tab-separated:
+  -f '%k\t%v\n'
+
+Timestamped, with topic/partition/offset:
+  -f '%d{strftime[%F %T]} %t[%p]@%o %v\n'
+
+Inspect headers:
+  -f '%v headers=%H %h{%k=%v,}\n'
+
+Show share-group delivery count (with --share-group):
+  -f '%v delivery=%D\n'
 
 
 REMARKS
@@ -215,6 +225,4 @@ must be the only topic specified.
 For __consumer_offsets, to dump information about a specific group, use the -G
 flag. Doing so will also hide transaction markers. For __transaction_state, you
 can use -G to dump information about a specific transactional ID.
-
-Combined with producing, these two commands allow you to easily mirror a topic.
 `

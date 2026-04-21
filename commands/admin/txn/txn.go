@@ -25,7 +25,6 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd.AddCommand(describeProducers(cl))
 	cmd.AddCommand(listCommand(cl))
 	cmd.AddCommand(describeCommand(cl))
-	cmd.AddCommand(unstickLSO(cl))
 	return cmd
 }
 
@@ -98,7 +97,7 @@ The information printed:
 			}
 
 			table := out.NewFormattedTable(cl.Format(), "txn.describe-producers", 1, "producers",
-				"TOPIC", "PARTITION", "ERROR", "ID", "EPOCH", "LAST SEQUENCE", "LAST TIMESTAMP", "COORDINATOR EPOCH", "TXN START OFFSET")
+				"TOPIC", "PARTITION", "ERROR", "ID", "EPOCH", "LAST-SEQUENCE", "LAST-TIMESTAMP", "COORDINATOR-EPOCH", "TXN-START-OFFSET")
 			for _, topic := range resp.Topics {
 				for _, partition := range topic.Partitions {
 					if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {

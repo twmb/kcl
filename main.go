@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"runtime/debug"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -34,11 +35,76 @@ import (
 // version is set via ldflags at build time:
 //
 //	go build -ldflags "-X main.version=v1.0.0"
+//
+// When unset (typical for `go install github.com/twmb/kcl@vX.Y.Z`),
+// we fall back to runtime/debug.ReadBuildInfo so the module version
+// recorded in the binary is used.
 var version string
 
+func resolveVersion() string {
+	if version != "" {
+		return version
+	}
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "dev"
+	}
+	// Tagged install: "v1.2.3". Use as-is.
+	if v := bi.Main.Version; v != "" && v != "(devel)" && !isPseudoVersion(v) {
+		return v
+	}
+	// Dirty or pseudo-version build: try to surface the VCS short sha
+	// as "dev+abc1234" (and "+dirty" if the tree was dirty).
+	var rev string
+	var dirty bool
+	for _, s := range bi.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.modified":
+			dirty = s.Value == "true"
+		}
+	}
+	if len(rev) >= 7 {
+		v := "dev+" + rev[:7]
+		if dirty {
+			v += "-dirty"
+		}
+		return v
+	}
+	return "dev"
+}
+
+// isPseudoVersion returns true for Go module pseudo-versions
+// (v0.0.0-20231231120000-abcdef123456, v1.2.3-0.20231231120000-abcdef123456,
+// or any of the above with a "+dirty" suffix).
+func isPseudoVersion(v string) bool {
+	if strings.HasSuffix(v, "+dirty") {
+		return true
+	}
+	// The fingerprint of a pseudo-version is an embedded 14-digit
+	// UTC timestamp preceded by "-" or ".0." and followed by "-".
+	for i := 0; i+14 < len(v); i++ {
+		if (v[i] == '-' || v[i] == '.') && v[i+15] == '-' {
+			allDigits := true
+			for j := 1; j <= 14; j++ {
+				if v[i+j] < '0' || v[i+j] > '9' {
+					allDigits = false
+					break
+				}
+			}
+			if allDigits {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func main() {
-	v := version
-	if v == "" {
+	v := resolveVersion()
+	client.SetVersion(v)
+	if version == "" && v == "dev" {
 		v = "kcl (development)"
 	}
 
@@ -46,6 +112,10 @@ func main() {
 		Use:     "kcl",
 		Short:   "Kafka Command Line command for commanding Kafka on the command line",
 		Version: v,
+		// Runtime errors (broker failures, protocol errors) should not
+		// trigger the full cobra usage dump. Argument/flag parse errors
+		// still print usage because they surface before RunE.
+		SilenceUsage: true,
 		Long: `A Kafka command line interface.
 
 kcl is a Kafka swiss army knife that aims to enable Kafka administration,

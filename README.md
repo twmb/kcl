@@ -8,74 +8,114 @@ kcl
 - [Stability Status](#stability-status)
 - [Configuration](#configuration)
 - [Autocompletion](#autocompletion)
-- [Transactions](#transactions)
 - [Group Consuming](#group-consuming)
+- [Share Groups](#share-groups)
 - [API at a Glance](#api-at-a-glance)
 - [Examples](#examples)
 
 ## Introduction
 
 kcl is a complete, pure Go command line Kafka client. Think of it as your
-one stop shop to do anything you want to do with Kafka. Producing, consuming,
-transacting, administrating, and so on.
+one stop shop to do anything you want to do with Kafka -- producing, consuming,
+administering, transactions, ACLs, share groups, and so on.
 
-Unlike the small size of [kafkacat][1], this binary is ~12M compiled.
-It is, however, still fast, has rich consuming and producing formatting
-options, and a complete Kafka administration interface.
+Unlike the small size of [kafkacat][1], this binary is ~15M compiled. It is,
+however, still fast, has rich consuming and producing formatting options, and
+a complete Kafka administration interface that tracks the upstream protocol
+closely.
 
 [1]: https://github.com/edenhill/kafkacat
 
 ## Stability Status
 
-I consider the current API **relatively** stable. Once this hits a 1.x release,
-the API will be even more stable. I would like to get some definitive
-broader usage of the client before deeming things unchanging.
+The command surface is now relatively stable. Recent releases have made
+targeted breaking changes (see the CHANGELOG) to clean up flag/config names
+before a 1.x tag. Once a broader set of users confirm they are happy with
+the surface, a 1.x will follow.
 
-I've spent a good amount of time integration testing my [franz-go][2] client
-that this program uses. The main thing I have currently been unable to test is
-closest replica fetching, which is only theoretically supported. It is worth it
-to read the stability status in the franz-go repo as well if using this client.
+I've spent significant time integration testing my [franz-go][2] client that
+this program uses. It is worth reading the stability status in the franz-go
+repo as well if using this client.
 
 [2]: https://github.com/twmb/franz-go/
 
-I would love confirmation that this program has been used more broadly, and
-would love to start a "Users" section below. With this confirmation, I will
-push a 1.x release.
-
 ## Getting Started
 
-If you have a go installation, you can simply
+If you have a Go installation:
 
 ```
 go install github.com/twmb/kcl@latest
 ```
 
-This will install kcl from the latest release. You can optionally suffix the
-`go get` with `@v#.#.#` to install a specific version.
+This installs kcl from the latest release. You can optionally suffix with
+`@v#.#.#` to install a specific version. When installed this way, kcl
+automatically reports itself to brokers as `kcl/<version>` via the Kafka
+protocol's client ID (useful for ACL audit logs and broker-side metrics).
 
-Otherwise, you can download a release from the
+Otherwise, download a release from the
 [releases](https://github.com/twmb/kcl/releases) page.
 
 ## Configuration
 
-kcl supports configuration through a config file, environment variables, and
-config flag overrides, with the config values being defined in that order.
-By default, kcl searches your OS's user config dir for a `kcl` directory and
-a `config.toml` file in that directory. The default path can be overridden.
-As well, multiple configs can easily swapped between with `kcl myconfig`.
+kcl is usable out of the box against `localhost:9092`; no config is required
+for the common case of probing a local cluster. For real clusters you can
+either use flags, environment variables, or a config file. The config file
+supports multiple named profiles so that switching between clusters is easy.
 
-The configuration supports TLS, SASL (currently PLAIN and SCRAM), seed brokers,
-and a timeout for requests that take timeouts.
+Priority (highest wins):
 
-To learn more about configuration, use `kcl myconfig help`.
+1. `-B/--bootstrap-servers` (seed brokers only)
+2. `-X key=value` flags (repeatable; any config key)
+3. `KCL_<KEY>` environment variables
+4. Active profile in the config file (`--profile/-C` or `current_profile`)
+5. Top-level config file keys (flat layout)
+6. Built-in defaults
+
+By default, kcl reads its config from your OS user-config directory,
+typically `~/.config/kcl/config.toml`. The default path can be overridden
+with `--config-path` or `KCL_CONFIG_PATH`.
+
+The configuration supports TLS, SASL (PLAIN, SCRAM-SHA-256, SCRAM-SHA-512,
+AWS_MSK_IAM), seed brokers, and client/server timeouts. Timeouts accept Go
+duration strings (`500ms`, `5s`, `2m30s`).
+
+For a full reference with examples, run `kcl profile --help`.
+
+### Quick example config
+
+```toml
+# ~/.config/kcl/config.toml
+current_profile = "prod"
+
+[profiles.prod]
+seed_brokers   = ["kafka-prod-1:9092", "kafka-prod-2:9092"]
+broker_timeout = "10s"
+
+[profiles.cicd]
+seed_brokers   = ["kafka-staging:9092"]
+dial_timeout   = "2s"       # fail fast in CI
+broker_timeout = "5s"
+retry_timeout  = "5s"
+
+[profiles.local]
+seed_brokers = ["localhost:9092"]
+```
+
+Then:
+
+```
+kcl topic list                  # uses "prod"
+kcl -C cicd topic list          # switches to "cicd" for one command
+kcl -B other-host:9092 topic list   # one-off override of seed brokers
+```
 
 ## Autocompletion
 
-Thanks to [cobra][2], autocompletion exists for bash, zsh, and powershell.
+Thanks to [cobra][3], autocompletion exists for bash, zsh, and powershell.
 
 [3]: https://github.com/spf13/cobra
 
-As an example of what to put in your .bashrc,
+Bash example to put in `.bashrc`:
 
 ```bash
 if [ -f /etc/bash_completion ] && ! shopt -oq posix; then
@@ -84,174 +124,146 @@ if [ -f /etc/bash_completion ] && ! shopt -oq posix; then
 fi
 ```
 
-## Transactions
-
-Transactions are supported by consuming a batch of records, executing a command
-and passing the records to the command's STDIN, reading the modified records
-via the command's STDOUT, and publishing those records.
-
-Input to the program and output from the program is controlled through the same
-syntax as consuming and producing, and the `--rw` flag is a shortcut to say that
-the input and output will use the same format.
-
-As an example, the following command:
-
-```
-kcl transact --rw '%V{b4}%v' -dtxn -g group -t foo -x mytxn -v ./command
-```
-
-reads topic `foo` in group `group`, executes `./command`, writes all record
-values to it prefixed with the four byte big endian value length, reads
-back records in the same format, and produces to topic `txn` all using the
-transactional id `mytxn`.
-
-Additionally, you can use the special command "mirror" to have poor man's
-mirrormarker:
-
-```
-kcl transact -x mytxn -g group -t srcTopic -d destTopic -v mirror
-```
-
 ## Group Consuming
 
-Group consuming is supported with the `-g` or `--group` flag to `kcl consume`
-or `kcl transact`. The default balancer is the cooperative-sticky balancer,
-which was introduced with incremental rebalancing in Kafka 2.4.0. This balancer
-is incompatible with the previous eager balancers (roundrobin, range, sticky),
-thus if you are using kcl with existing groups that have members using eager
-balancing strategies, be sure to specify a different balancer.
+Group consuming is supported with the `-g/--group` flag on `kcl consume`. The
+default balancer is `cooperative-sticky` (incremental rebalancing, Kafka 2.4+),
+which is incompatible with the older eager balancers (roundrobin, range,
+sticky). If your existing group has members using eager balancing, pass
+`--balancer` explicitly.
+
+`kcl group describe` shows per-partition committed offsets, lag, and member
+assignments. `kcl group seek` resets committed offsets via AlterOffsets;
+`kcl group offset-delete` deletes specific partitions' committed offsets.
+
+## Share Groups
+
+Share groups (KIP-932, Kafka 4.0+) are supported via `kcl consume --share-group
+NAME`. The `--share-ack-type` flag controls how each fetched record is
+acknowledged:
+
+- `accept` (default) -- mark the record as successfully processed.
+- `release` -- put the record back into the pool for redelivery (bumps
+  delivery count). Useful for peeking at records without consuming them.
+- `reject` -- archive the record as unprocessable (bumps delivery count,
+  no redelivery). Useful for force-draining or exercising DLQ-style flows.
+
+`kcl share-group` has its own `list`, `describe`, `seek`, `delete`, and
+`offset-delete` subcommands.
 
 ## API at a glance
 
-Be sure to `help` any command before using it to understand the full syntax.
+The best way to explore kcl is `kcl --help` and then `kcl <cmd> --help`.
+The top-level commands are:
 
 ```
 kcl
- consume                            -- consume records
-
- produce                            -- produce records
-
- transact                           -- transactional consuming & producing
-
- metadata                           -- print broker, cluster, and topic information
-
- group
-   list                             -- list consumer groups
-   describe                         -- describe consumer groups
-   delete                           -- delete consumer groups
-   offset-delete                    -- forcefully delete committed offsets a group (see KIP-496)
-
- topic
-   create                         -- create topics
-   delete                         -- delete topics
-   add-partitions                 -- add partitions to topics
-
- misc
-   api-versions                     -- print api versions for requests
-   probe-version                    -- probe for the currently running Kafka version
-   gen-autocomplete                 -- generate cli autocompletion
-   errcode                          -- print the error name and desc for an error number
-   errtext                          -- print the error name and desc for an error code / all errors
-   raw-req                          -- issue a raw request from input JSON
-   list-offsets                     -- list offsets for topics and partitions
-
- admin
-   delete-records                   -- delete record deletion for partitions based off input offsets
-   elect-leaders                    -- trigger leader elections
-
-   acl
-     create                         -- create ACLs
-     describe                       -- describe ACLs
-     delete                         -- delete ACLs
-
-   client-quotas
-     alter                          -- alter client quotas
-     describe                       -- describe client quotas
-
-   configs
-     alter                          -- alter broker, topic, broker-logger, etc. configs
-     describe                       -- describe broker, topic, broker-logger, etc. configs
-
-   dtoken
-     create                         -- create delegation tokens
-     renew                          -- renew delegation tokens
-     describe                       -- describe delegation tokens
-     expire                         -- expire delegation tokens
-
-   group                            -- duplicate of `kcl group` top level command
-
-   logdirs
-     alter                          -- alter log directories that partitions are in
-     describe                       -- describe log directories that partitions are in
-
-   partas
-     alter                          -- alter partition assignments
-     list                           -- list partition reassignments
-
-   topic                            -- duplicate of `kcl topic` top level command
-
-   user-scram
-     alter                          -- alter user scram
-     describe                       -- describe user scram
-
- myconfig
-   unlink                           -- unlink the kcl config symlink
-   link                             -- link a kcl config symlink
-   dump                             -- dump the kcl configuration
-   help                             -- print kcl configuration help
-   ls                               -- list files in the kcl config directory
+ acl            -- list/create/delete ACLs
+ client-metrics -- manage client telemetry subscriptions (KIP-714)
+ cluster        -- cluster info/quorum/feature flags/leader elections
+ config         -- alter/describe topic, broker, group, client-metrics configs
+ consume        -- consume records (classic group, share group, or direct)
+ dtoken         -- delegation token commands
+ group          -- classic / KIP-848 consumer group operations
+ logdirs        -- per-partition log directory operations
+ misc           -- api-versions, list-offsets, raw-req, error lookups, completion
+ produce        -- produce records
+ profile        -- manage connection profiles / config
+ quota          -- alter/describe/resolve client quotas
+ reassign       -- alter/list partition reassignments
+ share-group    -- share group operations (KIP-932)
+ topic          -- list/create/describe/delete/add-partitions/trim-prefix
+ txn            -- describe active transactions / producers
+ user           -- SCRAM user credential management
 ```
+
+Output format for every command is controlled by the global `--format` flag
+(`text`, `json`, or `awk`). JSON output is stable (`{_command, _version, ...}`
+envelope) and suitable for piping into `jq`. Text output is tab-aligned;
+column names are hyphen-delimited (`GROUP-ID`, `LEADER-EPOCH`, etc.) so awk
+pipelines are straightforward.
 
 ## Examples
 
 ### Consuming
 
-#### ...from topic foo, printing the values of records
+Consume topic `foo`, print values:
 
 ```
 kcl consume foo
 ```
 
-#### ...from topic foo with advanced printing
+Advanced formatting -- key, value, and headers:
 
 ```
 kcl consume foo -f "KEY=%k, VALUE=%v, HEADERS=%{%h{ '%k'='%v' }}\n"
 ```
 
-#### ...from topics foo and bar with group grup
+Group consuming from topics `foo` and `bar`:
 
 ```
-kcl consume -g grup foo bar
+kcl consume -g mygroup foo bar
+```
+
+Share group consuming (Kafka 4.0+), peeking at records without consuming:
+
+```
+kcl consume --share-group sg1 --share-ack-type release foo
+```
+
+From a specific timestamp:
+
+```
+kcl consume foo -o @2024-01-15
+kcl consume foo -o @-1h            # 1 hour ago
+kcl consume foo -o @-30m:@now      # 30 minutes ago to now
 ```
 
 ### Producing
 
-#### ...a newline delimited value to topic foo
+Newline-delimited value to topic `foo`:
 
 ```
 echo fubar | kcl produce foo
 ```
 
-#### ...a bunch of newline delimited values in file baz to topic foo
+Values from a file:
 
 ```
 kcl produce foo < baz
 ```
 
-#### ...key bar, value foo to topic foo in an obscurely formatted way
+Produce key `k` and value `v` from a single line:
 
 ```
-echo barfoo | kcl produce foo -f'%K{3}%V{3}%v%k\n'
+echo "key: k, value: v" | kcl produce foo -f 'key: %k, value: %v\n'
 ```
 
-#### ...key bizzy, value bazzy to topic foo, pulling the key and value from a line
+Produce with headers:
 
 ```
-echo "key: bizzy, value: bazzy" | kcl produce foo  -f 'key: %k, value: %v\n'
+echo "k v 2 h1 v1 h2 v2" | kcl produce foo -f '%k %v %H %h{%k %v }\n'
 ```
 
-#### ...key k, value v, headers k1 v1 and k2 v2 to topic foo, with ascii length prefixed strings
+### Administering
 
 ```
-echo "1 k 1 v 2 2 h1 2 v1 2 h2 2 v2 " | kcl produce foo -f '%K %k %V %v %H %h{%K %k %V %v }\n'
+kcl topic create foo                              # uses cluster default partitions/replication
+kcl topic create foo -p 6 -r 3                    # 6 partitions, 3 replicas
+kcl topic describe foo                            # partitions, configs, health
+kcl topic describe --topic-id <uuid>              # lookup by UUID (KIP-516)
+kcl cluster info                                  # broker list, controller
+kcl cluster features describe                     # feature flags (KIP-584)
+kcl cluster features update share.version=1 --upgrade-type safe-downgrade
+kcl group list                                    # classic + KIP-848 + share groups
+kcl group describe mygroup
+kcl group seek mygroup --to end --yes
+kcl acl list
 ```
+
+### Error and exit codes
+
+Commands exit non-zero on any per-item failure (e.g. deleting one topic
+out of three, where one doesn't exist, exits 1). `--format json` output
+on stdout is always valid JSON; all errors go to stderr. This makes kcl
+safe to script against.

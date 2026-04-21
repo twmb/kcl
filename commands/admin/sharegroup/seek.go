@@ -17,6 +17,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/flagutil"
 	"github.com/twmb/kcl/offsetparse"
 	"github.com/twmb/kcl/out"
 )
@@ -27,7 +28,7 @@ func seekCommand(cl *client.Client) *cobra.Command {
 		toFile  string
 		topics  []string
 		dryRun  bool
-		execute bool
+		yes     bool
 	)
 
 	cmd := &cobra.Command{
@@ -52,9 +53,14 @@ because share groups have start offsets, not committed offsets.
 The --to-file flag reads target offsets from a JSON file with format:
   [{"topic": "foo", "partition": 0, "offset": 100}, ...]
 
+--topics accepts plain names or topic:partitions pairs (matching the
+kafka-share-groups.sh --topic syntax):
+  foo              all partitions of foo
+  foo:0,2          only partitions 0 and 2 of foo
+
 EXAMPLES:
   kcl share-group seek mygroup --to start --topics foo,bar
-  kcl share-group seek mygroup --to end --topics foo,bar
+  kcl share-group seek mygroup --to end --topics foo:0,1,2
   kcl share-group seek mygroup --to @-1h --topics foo,bar
   kcl share-group seek mygroup --to 100 --topics foo --dry-run
   kcl share-group seek mygroup --to-file offsets.json
@@ -70,6 +76,37 @@ EXAMPLES:
 			}
 			if hasTo && hasToFile {
 				return out.Errf(out.ExitUsage, "--to and --to-file are mutually exclusive")
+			}
+
+			topicFilter, err := flagutil.ParseTopicPartitions(flagutil.SplitTopicPartitionEntries(topics))
+			if err != nil {
+				return out.Errf(out.ExitUsage, "invalid --topics: %v", err)
+			}
+			// keepPartition returns true if (topic, partition) is
+			// in the filter. An empty filter matches everything; a
+			// topic entry with nil partitions matches all of that
+			// topic's partitions.
+			keepPartition := func(topic string, partition int32) bool {
+				if len(topicFilter) == 0 {
+					return true
+				}
+				parts, ok := topicFilter[topic]
+				if !ok {
+					return false
+				}
+				if parts == nil {
+					return true
+				}
+				for _, p := range parts {
+					if p == partition {
+						return true
+					}
+				}
+				return false
+			}
+			topicNames := make([]string, 0, len(topicFilter))
+			for t := range topicFilter {
+				topicNames = append(topicNames, t)
 			}
 
 			kclClient := cl.Client()
@@ -99,17 +136,8 @@ EXAMPLES:
 					return fmt.Errorf("unable to parse --to-file %q: %v", toFile, err)
 				}
 				for _, e := range entries {
-					if len(topics) > 0 {
-						found := false
-						for _, t := range topics {
-							if t == e.Topic {
-								found = true
-								break
-							}
-						}
-						if !found {
-							continue
-						}
+					if !keepPartition(e.Topic, e.Partition) {
+						continue
 					}
 					targets = append(targets, targetOffset{e.Topic, e.Partition, e.Offset})
 				}
@@ -125,51 +153,55 @@ EXAMPLES:
 					return out.Errf(out.ExitUsage, "+N/-N relative offsets are not supported for share groups (use start, end, N, or @timestamp)")
 				}
 
-				if len(topics) == 0 {
+				if len(topicNames) == 0 {
 					return out.Errf(out.ExitUsage, "--topics is required when using --to")
+				}
+
+				keepListed := func(lo kadm.ListedOffset) bool {
+					return lo.Err == nil && keepPartition(lo.Topic, lo.Partition)
 				}
 
 				switch spec.Start.Kind {
 				case offsetparse.KindStart:
-					listed, err := adm.ListStartOffsets(ctx, topics...)
+					listed, err := adm.ListStartOffsets(ctx, topicNames...)
 					if err != nil {
 						return fmt.Errorf("unable to list start offsets: %v", err)
 					}
 					listed.Each(func(lo kadm.ListedOffset) {
-						if lo.Err == nil {
+						if keepListed(lo) {
 							targets = append(targets, targetOffset{lo.Topic, lo.Partition, lo.Offset})
 						}
 					})
 
 				case offsetparse.KindEnd:
-					listed, err := adm.ListEndOffsets(ctx, topics...)
+					listed, err := adm.ListEndOffsets(ctx, topicNames...)
 					if err != nil {
 						return fmt.Errorf("unable to list end offsets: %v", err)
 					}
 					listed.Each(func(lo kadm.ListedOffset) {
-						if lo.Err == nil {
+						if keepListed(lo) {
 							targets = append(targets, targetOffset{lo.Topic, lo.Partition, lo.Offset})
 						}
 					})
 
 				case offsetparse.KindExact:
-					listed, err := adm.ListEndOffsets(ctx, topics...)
+					listed, err := adm.ListEndOffsets(ctx, topicNames...)
 					if err != nil {
 						return fmt.Errorf("unable to list offsets: %v", err)
 					}
 					listed.Each(func(lo kadm.ListedOffset) {
-						if lo.Err == nil {
+						if keepListed(lo) {
 							targets = append(targets, targetOffset{lo.Topic, lo.Partition, spec.Start.Value})
 						}
 					})
 
 				case offsetparse.KindTimestamp:
-					listed, err := adm.ListOffsetsAfterMilli(ctx, spec.Start.Value, topics...)
+					listed, err := adm.ListOffsetsAfterMilli(ctx, spec.Start.Value, topicNames...)
 					if err != nil {
 						return fmt.Errorf("unable to resolve timestamp to offsets: %v", err)
 					}
 					listed.Each(func(lo kadm.ListedOffset) {
-						if lo.Err == nil {
+						if keepListed(lo) {
 							targets = append(targets, targetOffset{lo.Topic, lo.Partition, lo.Offset})
 						}
 					})
@@ -203,7 +235,7 @@ EXAMPLES:
 			if dryRun {
 				return nil
 			}
-			if !execute {
+			if !yes {
 				fmt.Fprint(os.Stderr, "\nApply these offset changes? [y/N] ")
 				scanner := bufio.NewScanner(os.Stdin)
 				scanner.Scan()
@@ -271,9 +303,10 @@ EXAMPLES:
 
 	cmd.Flags().StringVar(&to, "to", "", "target offset (start, end, N, @timestamp; mutually exclusive with --to-file)")
 	cmd.Flags().StringVar(&toFile, "to-file", "", "JSON file with per-partition offsets (mutually exclusive with --to)")
-	cmd.Flags().StringSliceVar(&topics, "topics", nil, "topics to seek (required with --to; optional filter with --to-file)")
+	cmd.Flags().StringArrayVar(&topics, "topics", nil, "topics to seek; repeatable or comma-separated, entries may be topic:p1,p2 (required with --to; optional filter with --to-file)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview offset changes without applying")
-	cmd.Flags().BoolVar(&execute, "execute", false, "apply changes without interactive confirmation")
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "apply changes without interactive confirmation")
 
 	return cmd
 }
+

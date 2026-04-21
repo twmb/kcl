@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestFormatDefault(t *testing.T) {
@@ -61,11 +62,11 @@ current_profile = "prod"
 
 [profiles.prod]
 seed_brokers = ["kafka-prod:9092"]
-timeout_ms = 10000
+broker_timeout = "10s"
 
 [profiles.local]
 seed_brokers = ["localhost:9092"]
-timeout_ms = 5000
+broker_timeout = "5s"
 `), 0644)
 	if err != nil {
 		t.Fatal(err)
@@ -77,15 +78,15 @@ timeout_ms = 5000
 		format:  "text",
 		cfg: Cfg{
 			SeedBrokers:   []string{"default:9092"},
-			TimeoutMillis: 1000,
+			BrokerTimeout: Duration(time.Second),
 		},
 	}
 	c.parseCfgFile()
 	if len(c.cfg.SeedBrokers) != 1 || c.cfg.SeedBrokers[0] != "kafka-prod:9092" {
 		t.Errorf("expected prod brokers, got %v", c.cfg.SeedBrokers)
 	}
-	if c.cfg.TimeoutMillis != 10000 {
-		t.Errorf("expected prod timeout 10000, got %d", c.cfg.TimeoutMillis)
+	if c.cfg.BrokerTimeout.D() != 10*time.Second {
+		t.Errorf("expected prod broker_timeout 10s, got %v", c.cfg.BrokerTimeout.D())
 	}
 }
 
@@ -127,7 +128,7 @@ func TestCfgFileFlatBackwardCompat(t *testing.T) {
 
 	err := os.WriteFile(path, []byte(`
 seed_brokers = ["old-broker:9092"]
-timeout_ms = 3000
+broker_timeout = "3s"
 `), 0644)
 	if err != nil {
 		t.Fatal(err)
@@ -138,15 +139,15 @@ timeout_ms = 3000
 		format:  "text",
 		cfg: Cfg{
 			SeedBrokers:   []string{"default:9092"},
-			TimeoutMillis: 1000,
+			BrokerTimeout: Duration(time.Second),
 		},
 	}
 	c.parseCfgFile()
 	if len(c.cfg.SeedBrokers) != 1 || c.cfg.SeedBrokers[0] != "old-broker:9092" {
 		t.Errorf("expected old-broker, got %v", c.cfg.SeedBrokers)
 	}
-	if c.cfg.TimeoutMillis != 3000 {
-		t.Errorf("expected timeout 3000, got %d", c.cfg.TimeoutMillis)
+	if c.cfg.BrokerTimeout.D() != 3*time.Second {
+		t.Errorf("expected broker_timeout 3s, got %v", c.cfg.BrokerTimeout.D())
 	}
 }
 
@@ -156,7 +157,7 @@ func TestCfgFileNoCfgFile(t *testing.T) {
 		format:    "text",
 		cfg: Cfg{
 			SeedBrokers:   []string{"default:9092"},
-			TimeoutMillis: 5000,
+			BrokerTimeout: Duration(5 * time.Second),
 		},
 	}
 	c.parseCfgFile()

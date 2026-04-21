@@ -39,32 +39,57 @@ func listCommand(cl *client.Client) *cobra.Command {
 		Aliases: []string{"ls"},
 		Short:   "List client metrics subscription resources.",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			// ListClientMetricsResources was renamed to ListConfigResources in Kafka 4.1.
-			// Use DescribeConfigs with an empty resource name to list all.
-			req := kmsg.NewPtrDescribeConfigsRequest()
-			r := kmsg.NewDescribeConfigsRequestResource()
-			r.ResourceType = resourceTypeClientMetrics
-			r.ResourceName = ""
-			req.Resources = append(req.Resources, r)
-
-			kresp, err := req.RequestWith(context.Background(), cl.Client())
+			// Prefer ListConfigResources (KIP-1000, renamed in KIP-1142) to
+			// enumerate client-metrics resources. Fall back to the older
+			// DescribeConfigs-with-empty-name path for pre-4.1 brokers.
+			names, err := listClientMetricsNames(cl)
 			if err != nil {
-				return fmt.Errorf("unable to list client metrics: %v", err)
+				return err
 			}
-
 			table := out.NewFormattedTable(cl.Format(), "client-metrics.list", 1, "subscriptions",
-				"NAME", "CONFIGS")
-			for _, r := range kresp.Resources {
-				if err := kerr.ErrorForCode(r.ErrorCode); err != nil {
-					table.Row(r.ResourceName, err)
-					continue
-				}
-				table.Row(r.ResourceName, len(r.Configs))
+				"NAME")
+			for _, n := range names {
+				table.Row(n)
 			}
 			table.Flush()
 			return nil
 		},
 	}
+}
+
+// listClientMetricsNames returns the set of client-metrics resource
+// names, preferring ListConfigResources (KIP-1000/KIP-1142) and falling
+// back to DescribeConfigs with an empty name for older brokers.
+func listClientMetricsNames(cl *client.Client) ([]string, error) {
+	listReq := kmsg.NewPtrListConfigResourcesRequest()
+	listReq.ResourceTypes = []int8{int8(resourceTypeClientMetrics)}
+	if kresp, err := listReq.RequestWith(context.Background(), cl.Client()); err == nil {
+		if ec := kerr.ErrorForCode(kresp.ErrorCode); ec == nil {
+			var names []string
+			for _, r := range kresp.ConfigResources {
+				names = append(names, r.Name)
+			}
+			return names, nil
+		}
+	}
+
+	req := kmsg.NewPtrDescribeConfigsRequest()
+	r := kmsg.NewDescribeConfigsRequestResource()
+	r.ResourceType = resourceTypeClientMetrics
+	r.ResourceName = ""
+	req.Resources = append(req.Resources, r)
+	kresp, err := req.RequestWith(context.Background(), cl.Client())
+	if err != nil {
+		return nil, fmt.Errorf("unable to list client metrics: %v", err)
+	}
+	var names []string
+	for _, rr := range kresp.Resources {
+		if ec := kerr.ErrorForCode(rr.ErrorCode); ec != nil {
+			return nil, fmt.Errorf("DescribeConfigs error: %v", ec)
+		}
+		names = append(names, rr.ResourceName)
+	}
+	return names, nil
 }
 
 func describeCommand(cl *client.Client) *cobra.Command {

@@ -110,7 +110,7 @@ method, introduced in Kafka 2.3.0, allows modifying individual values.
 To opt into the new method, use the --inc flag. If using the old method, this
 command by default checks for existing config key/value pairs that may be lost
 in the alter and prompts if it is OK to lose those values. To skip this check,
-use the --no-confirm flag. As well, with incremental altering, keys require
+use the --yes/-y flag. As well, with incremental altering, keys require
 a prefix of either set, del, +, or - to indicate whether the value is to be
 set, deleted, added to an array, or removed from an array.
 
@@ -150,7 +150,7 @@ alter my-subscription -tcm -s match=[client_software_name=kcl]`,
 	cmd.Flags().StringArrayVar(&cfger.appendKVs, "append", nil, "append to list config key=value (incremental; repeatable)")
 	cmd.Flags().StringArrayVar(&cfger.subtractKVs, "subtract", nil, "subtract from list config key=value (incremental; repeatable)")
 	cmd.Flags().BoolVarP(&cfger.dryRun, "dry-run", "d", false, "validate the config alter request, but do not apply")
-	cmd.Flags().BoolVar(&cfger.noConfirm, "no-confirm", false, "skip confirmation of to-be-lost unspecified existing dynamic config keys")
+	cmd.Flags().BoolVarP(&cfger.noConfirm, "yes", "y", false, "skip confirmation of to-be-lost unspecified existing dynamic config keys")
 
 	return cmd
 }
@@ -284,7 +284,7 @@ func (c *cfger) alterIncremental() error {
 	resp := kresp.(*kmsg.IncrementalAlterConfigsResponse)
 
 	table := out.NewFormattedTable(c.cl.Format(), "config.alter", 1, "results",
-		"RESOURCE", "ERROR", "ERROR MESSAGE")
+		"RESOURCE", "ERROR", "ERROR-MESSAGE")
 	for _, resource := range resp.Resources {
 		errMsg := ""
 		if resource.ErrorMessage != nil {
@@ -325,7 +325,7 @@ func (c *cfger) alterOld() error {
 	resp := kresp.(*kmsg.AlterConfigsResponse)
 
 	table := out.NewFormattedTable(c.cl.Format(), "config.alter", 1, "results",
-		"RESOURCE", "ERROR", "ERROR MESSAGE")
+		"RESOURCE", "ERROR", "ERROR-MESSAGE")
 	for _, resource := range resp.Resources {
 		errMsg := ""
 		if resource.ErrorMessage != nil {

@@ -74,7 +74,6 @@ func topicCreateCommand(cl *client.Client) *cobra.Command {
 		replicationFactor int16
 		configKVs         []string
 		validateOnly      bool
-		ifNotExists       bool
 		replicaAssignment string
 	)
 
@@ -146,16 +145,14 @@ replicas each. When using --replica-assignment, do not use --num-partitions or
 				table = out.NewFormattedTable(cl.Format(), "topic.create", 1, "topics",
 					"NAME", "MESSAGE")
 			}
+			anyErr := false
 			for _, topic := range resp.Topics {
 				msg := "OK"
 				if err := kerr.ErrorForCode(topic.ErrorCode); err != nil {
-					if ifNotExists && err == kerr.TopicAlreadyExists {
-						msg = "OK (already exists)"
-					} else {
-						msg = err.Error()
-						if topic.ErrorMessage != nil {
-							msg += ": " + *topic.ErrorMessage
-						}
+					anyErr = true
+					msg = err.Error()
+					if topic.ErrorMessage != nil {
+						msg += ": " + *topic.ErrorMessage
 					}
 				}
 				if resp.Version >= 7 {
@@ -165,15 +162,17 @@ replicas each. When using --replica-assignment, do not use --num-partitions or
 				}
 			}
 			table.Flush()
+			if anyErr {
+				return out.ErrSilent
+			}
 			return nil
 		},
 	}
 
 	cmd.Flags().BoolVarP(&validateOnly, "dry-run", "d", false, "validate the topic creation request; do not create topics (Kafka 0.10.2+)")
-	cmd.Flags().Int32VarP(&numPartitions, "num-partitions", "p", 20, "number of partitions to create")
-	cmd.Flags().Int16VarP(&replicationFactor, "replication-factor", "r", 1, "number of replicas to have of each partition")
+	cmd.Flags().Int32VarP(&numPartitions, "num-partitions", "p", -1, "number of partitions to create (-1 uses the cluster default: num.partitions)")
+	cmd.Flags().Int16VarP(&replicationFactor, "replication-factor", "r", -1, "replicas per partition (-1 uses the cluster default: default.replication.factor)")
 	cmd.Flags().StringArrayVarP(&configKVs, "kv", "k", nil, "list of key=value config parameters (repeatable, e.g. -k cleanup.policy=compact -k preallocate=true)")
-	cmd.Flags().BoolVar(&ifNotExists, "if-not-exists", false, "suppress error if topic already exists")
 	cmd.Flags().StringVar(&replicaAssignment, "replica-assignment", "", "manual replica assignment as comma-separated partition groups of colon-separated broker IDs (e.g. 0:1:2,1:2:3,2:3:0)")
 
 	return cmd
@@ -236,7 +235,6 @@ EXAMPLES:
 
 func topicDeleteCommand(cl *client.Client) *cobra.Command {
 	var ids bool
-	var ifExists bool
 	var dryRun bool
 	var useRegex bool
 	cmd := &cobra.Command{
@@ -326,16 +324,14 @@ without actually deleting them.
 			resps := resp.(*kmsg.DeleteTopicsResponse).Topics
 			table := out.NewFormattedTable(cl.Format(), "topic.delete", 1, "topics",
 				"NAME", "MESSAGE")
+			anyErr := false
 			for _, topicResp := range resps {
 				msg := "OK"
 				if err := kerr.ErrorForCode(topicResp.ErrorCode); err != nil {
-					if ifExists && err == kerr.UnknownTopicOrPartition {
-						msg = "OK (did not exist)"
-					} else {
-						msg = err.Error()
-						if topicResp.ErrorMessage != nil {
-							msg += ": " + *topicResp.ErrorMessage
-						}
+					anyErr = true
+					msg = err.Error()
+					if topicResp.ErrorMessage != nil {
+						msg += ": " + *topicResp.ErrorMessage
 					}
 				}
 				topic := ""
@@ -347,11 +343,13 @@ without actually deleting them.
 				table.Row(topic, msg)
 			}
 			table.Flush()
+			if anyErr {
+				return out.ErrSilent
+			}
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&ids, "ids", false, "whether the input topics should be parsed as topic IDs")
-	cmd.Flags().BoolVar(&ifExists, "if-exists", false, "suppress error if topic does not exist")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print topics that would be deleted without actually deleting them")
 	cmd.Flags().BoolVar(&useRegex, "regex", false, "treat topic arguments as regex patterns; match against all existing topics")
 	return cmd

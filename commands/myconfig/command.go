@@ -19,6 +19,7 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "profile",
 		Short: "Manage connection profiles (use, list, create, dump, rename, delete).",
+		Long:  configHelpText(cl),
 	}
 
 	cmd.AddCommand(
@@ -29,7 +30,6 @@ func Command(cl *client.Client) *cobra.Command {
 		dumpCommand(cl),
 		renameCommand(cl),
 		deleteCommand(cl),
-		configHelpCommand(cl),
 	)
 
 	return cmd
@@ -52,7 +52,6 @@ func DeprecatedCommand(cl *client.Client) *cobra.Command {
 		dumpCommand(cl),
 		renameCommand(cl),
 		deleteCommand(cl),
-		configHelpCommand(cl),
 		linkCommand(cl),
 		unlinkCommand(cl),
 	)
@@ -240,8 +239,10 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 	}
 }
 
-func configHelpCommand(cl *client.Client) *cobra.Command {
-	configHelp := `On your machine, kcl takes configuration options by default from:
+func configHelpText(cl *client.Client) string {
+	return `Manage connection profiles (use, list, create, dump, rename, delete).
+
+On your machine, kcl takes configuration options by default from:
 
   ` + cl.DefaultCfgPath() + `
 
@@ -254,13 +255,34 @@ semantics: KCL_CONFIG_DIR, KCL_CONFIG_FILE, and KCL_CONFIG_PATH. The first
 changes the directory searched, the middle changes the file name used, and the
 last overrides the former two (as a shortcut for setting both).
 
-The repeatable -X flag allows for specifying config options directly. Any flag
-set option has higher precedence over config file options.
+
+PRIORITY (highest wins)
+
+  1. -B/--bootstrap-servers flag       (overrides seed_brokers only)
+  2. -X key=value flags                (repeatable; any config key)
+  3. KCL_<KEY> environment variables   (prefix configurable via --config-env-prefix)
+  4. Active profile ([profiles.NAME])  (selected by --profile/-C or current_profile)
+  5. Top-level config file keys        (flat layout)
+  6. Built-in defaults
+
 
 OPTIONS
 
-  seed_brokers=["localhost", "127.0.0.1:9092"]
-  timeout_ms=1000
+Top-level:
+
+  seed_brokers   list of "host:port" strings; default ["localhost:9092"]
+  broker_timeout Go duration sent to the broker in the wire TimeoutMs
+                 field of admin-write requests (CreateTopics, DeleteTopics,
+                 ElectLeaders, WriteTxnMarkers, etc.). Tells the broker how
+                 long it may work on the request before returning
+                 REQUEST_TIMED_OUT. Default 5s.
+  dial_timeout   Go duration bounding a single TCP dial attempt. Zero
+                 uses kgo's default (10s).
+  retry_timeout  Go duration bounding total client request + retries.
+                 Zero uses kgo's default (30s for most requests, 45s
+                 for group-session requests).
+
+Durations accept Go duration strings: "500ms", "5s", "1m", "2m30s".
 
 The [tls] section: ca_cert_path, client_cert_path, client_key_path,
 server_name, min_version, cipher_suites, curve_preferences, insecure.
@@ -268,16 +290,53 @@ server_name, min_version, cipher_suites, curve_preferences, insecure.
 The [sasl] section: method (plain, scram-sha-256, scram-sha-512,
 aws_msk_iam), zid, user, pass, is_token.
 
-See kcl documentation for full details on each option.
+
+TIMEOUT RELATIONSHIP
+
+  dial_timeout   - caller-side, per TCP dial attempt.
+  retry_timeout  - client-side; gates whether to START a retry, NOT a wall
+                   clock budget for the whole operation. An in-flight attempt
+                   is not cancelled when retry_timeout elapses.
+  broker_timeout - sent to broker; enforced server-side, only on requests
+                   that carry a TimeoutMs wire field.
+
+Recommended ordering:
+
+  dial_timeout <= broker_timeout <= retry_timeout
+
+If broker_timeout > retry_timeout, a broker reply that takes the full
+broker_timeout still returns successfully; retry_timeout is only consulted
+if that attempt ERRORS. Worst-case total wall time when a retry fires can
+reach ~2 * broker_timeout (first attempt runs to broker_timeout, errors,
+kgo checks retry_timeout and retries if still within budget, second attempt
+then runs to its own broker_timeout). If dial_timeout >= retry_timeout,
+retries are useless because a single failed dial already consumed the
+retry budget.
+
+
+EXAMPLES
+
+Fast-fail for CI:
+
+  [profiles.cicd]
+  seed_brokers   = ["kafka-staging:9092"]
+  dial_timeout   = "2s"
+  broker_timeout = "5s"
+  retry_timeout  = "5s"
+
+Patient debugging:
+
+  [profiles.debug]
+  seed_brokers   = ["localhost:9092"]
+  broker_timeout = "60s"
+  dial_timeout   = "10s"
+  retry_timeout  = "90s"
+
+One-off overrides:
+
+  kcl -X dial_timeout=2s -B prod:9092 topic list
+  kcl -B host1:9092,host2:9092 topic list   # same as -X seed_brokers=host1:9092,host2:9092
 `
-	return &cobra.Command{
-		Use:   "config-help",
-		Short: "Describe config file options",
-		Args:  cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
-			fmt.Println(configHelp)
-		},
-	}
 }
 
 func profileNames(cfgFile client.CfgFile) []string {

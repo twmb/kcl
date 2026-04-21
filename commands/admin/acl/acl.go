@@ -446,7 +446,7 @@ SEE ALSO:
 			}
 
 			table := out.NewFormattedTable(cl.Format(), "acl.create", 1, "results",
-				"TYPE", "NAME", "PATTERN", "PRINCIPAL", "HOST", "OPERATION", "PERMISSION", "ERROR", "ERROR MSG")
+				"TYPE", "NAME", "PATTERN", "PRINCIPAL", "HOST", "OPERATION", "PERMISSION", "ERROR", "ERROR-MSG")
 			for i, result := range resp.Results {
 				errStr, errMsg := "OK", ""
 				if err := kerr.ErrorForCode(result.ErrorCode); err != nil {
@@ -533,7 +533,7 @@ time.
 
 Use --dry-run to see which ACLs would be deleted without actually deleting
 them. By default, the command prompts for confirmation before deleting; use
---no-confirm to skip the confirmation prompt.
+--yes/-y to skip the confirmation prompt.
 
 For more detailed information about ACLs, read kcl acl --help.
 `,
@@ -697,7 +697,7 @@ For more detailed information about ACLs, read kcl acl --help.
 			}
 
 			table := out.NewFormattedTable(cl.Format(), "acl.delete", 1, "deleted",
-				"TYPE", "NAME", "PATTERN", "PRINCIPAL", "HOST", "OPERATION", "PERMISSION", "ERROR", "ERROR MSG")
+				"TYPE", "NAME", "PATTERN", "PRINCIPAL", "HOST", "OPERATION", "PERMISSION", "ERROR", "ERROR-MSG")
 			for _, acl := range result.MatchingACLs {
 				errStr, errMsg := "OK", ""
 				if err = kerr.ErrorForCode(acl.ErrorCode); err != nil {
@@ -732,7 +732,7 @@ For more detailed information about ACLs, read kcl acl --help.
 	cmd.Flags().StringVar(&operation, "operation", "", "operation filter; any matches all (alias for --op)")
 	cmd.Flags().StringVar(&permission, "perm", "", "permission filter; any matches all")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print ACLs that would be deleted without actually deleting them")
-	cmd.Flags().BoolVar(&noConfirm, "no-confirm", false, "skip confirmation prompt before deleting")
+	cmd.Flags().BoolVarP(&noConfirm, "yes", "y", false, "skip confirmation prompt before deleting")
 
 	// Ergonomic resource-specific flags.
 	var topicFlag, groupFlag, txnIDFlag, dtokenFlag string

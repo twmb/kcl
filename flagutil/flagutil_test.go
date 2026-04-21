@@ -53,6 +53,29 @@ func TestParseTopicPartitions(t *testing.T) {
 			},
 		},
 		{
+			"repeated topic merges partitions",
+			[]string{"foo:0", "foo:3,5"},
+			false,
+			func(m map[string][]int32) error {
+				ps := m["foo"]
+				if len(ps) != 3 || ps[0] != 0 || ps[1] != 3 || ps[2] != 5 {
+					return fmt.Errorf("foo partitions = %v, want [0 3 5]", ps)
+				}
+				return nil
+			},
+		},
+		{
+			"bare topic beats per-partition scope",
+			[]string{"foo:0", "foo"},
+			false,
+			func(m map[string][]int32) error {
+				if m["foo"] != nil {
+					return fmt.Errorf("bare 'foo' should yield nil partitions, got %v", m["foo"])
+				}
+				return nil
+			},
+		},
+		{
 			"empty topic name",
 			[]string{":1,2"},
 			true,
@@ -64,6 +87,18 @@ func TestParseTopicPartitions(t *testing.T) {
 			true,
 			nil,
 		},
+	}
+
+	// Separate test for SplitTopicPartitionEntries round-trip.
+	got := SplitTopicPartitionEntries([]string{"a,b,c", "d:0,1", "e"})
+	want := []string{"a", "b", "c", "d:0,1", "e"}
+	if len(got) != len(want) {
+		t.Fatalf("SplitTopicPartitionEntries: got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("SplitTopicPartitionEntries[%d] = %q, want %q", i, got[i], want[i])
+		}
 	}
 
 	for _, tt := range tests {

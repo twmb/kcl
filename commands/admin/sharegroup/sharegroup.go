@@ -336,6 +336,7 @@ Defaults: text shows all sections, awk shows offsets.
 
 					resp := shard.Resp.(*kmsg.ShareGroupDescribeResponse)
 					for _, group := range resp.Groups {
+						groupErr := kerr.ErrorForCode(group.ErrorCode)
 						if showSummary {
 							ls := lagByGroup[group.GroupID]
 							printShareGroupSummary(shard.Meta.NodeID, group, ls.totalLag, ls.partCount, ls.nonZeroLag)
@@ -348,7 +349,7 @@ Defaults: text shows all sections, awk shows offsets.
 							printShareGroupMembers(cl.Format(), group)
 						}
 
-						if showOffsets {
+						if showOffsets && groupErr == nil {
 							offsets, ok := offsetsByGroup[group.GroupID]
 							if ok {
 								if showSummary || showMembers {
@@ -408,19 +409,23 @@ func printShareGroupSummary(broker int32, group kmsg.ShareGroupDescribeResponseG
 	tw := out.NewTabWriter()
 	fmt.Fprintf(tw, "GROUP\t%s\n", group.GroupID)
 	fmt.Fprintf(tw, "COORDINATOR\t%d\n", broker)
-	fmt.Fprintf(tw, "STATE\t%s\n", group.GroupState)
-	fmt.Fprintf(tw, "EPOCH\t%d\n", group.GroupEpoch)
-	fmt.Fprintf(tw, "ASSIGNMENT-EPOCH\t%d\n", group.AssignmentEpoch)
-	fmt.Fprintf(tw, "ASSIGNOR\t%s\n", group.Assignor)
-	fmt.Fprintf(tw, "MEMBERS\t%d\n", len(group.Members))
-	fmt.Fprintf(tw, "TOTAL-LAG\t%d across %d partitions (%d non-zero)\n", totalLag, partCount, nonZeroLag)
+	// If the group errored (e.g. GROUP_ID_NOT_FOUND), skip the empty
+	// state/epoch/members fields and surface just the error.
 	if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
 		msg := err.Error()
 		if group.ErrorMessage != nil {
 			msg += ": " + *group.ErrorMessage
 		}
 		fmt.Fprintf(tw, "ERROR\t%s\n", msg)
+		tw.Flush()
+		return
 	}
+	fmt.Fprintf(tw, "STATE\t%s\n", group.GroupState)
+	fmt.Fprintf(tw, "EPOCH\t%d\n", group.GroupEpoch)
+	fmt.Fprintf(tw, "ASSIGNMENT-EPOCH\t%d\n", group.AssignmentEpoch)
+	fmt.Fprintf(tw, "ASSIGNOR\t%s\n", group.Assignor)
+	fmt.Fprintf(tw, "MEMBERS\t%d\n", len(group.Members))
+	fmt.Fprintf(tw, "TOTAL-LAG\t%d across %d partitions (%d non-zero)\n", totalLag, partCount, nonZeroLag)
 	tw.Flush()
 }
 
@@ -462,7 +467,6 @@ func formatShareMemberAssignment(member kmsg.ShareGroupDescribeResponseGroupMemb
 }
 
 func deleteCommand(cl *client.Client) *cobra.Command {
-	var ifExists bool
 	var dryRun bool
 	var useRegex bool
 	cmd := &cobra.Command{
@@ -501,9 +505,11 @@ without actually deleting them.
 			})
 			table := out.NewFormattedTable(cl.Format(), "share-group.delete", 1, "results",
 				"BROKER", "GROUP", "ERROR")
+			anyErr := false
 			for _, brokerResp := range brokerResps {
 				kresp, err := brokerResp.Resp, brokerResp.Err
 				if err != nil {
+					anyErr = true
 					table.Row(brokerResp.Meta.NodeID, "", fmt.Sprintf("unable to issue request (addr %s:%d): %v", brokerResp.Meta.Host, brokerResp.Meta.Port, err))
 					continue
 				}
@@ -511,20 +517,19 @@ without actually deleting them.
 				for _, r := range resp.Groups {
 					msg := "OK"
 					if err := kerr.ErrorForCode(r.ErrorCode); err != nil {
-						if ifExists && err == kerr.GroupIDNotFound {
-							msg = "OK (did not exist)"
-						} else {
-							msg = err.Error()
-						}
+						anyErr = true
+						msg = err.Error()
 					}
 					table.Row(brokerResp.Meta.NodeID, r.Group, msg)
 				}
 			}
 			table.Flush()
+			if anyErr {
+				return out.ErrSilent
+			}
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&ifExists, "if-exists", false, "suppress error if group does not exist")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print groups that would be deleted without actually deleting them")
 	cmd.Flags().BoolVar(&useRegex, "regex", false, "treat group arguments as regex patterns; match against all existing share groups")
 	return cmd

@@ -150,7 +150,7 @@ If no topics are specified, this lists all active reassignments.
 			}
 
 			table := out.NewFormattedTable(cl.Format(), "reassign.list", 1, "reassignments",
-				"TOPIC", "PARTITION", "CURRENT REPLICAS", "ADDING", "REMOVING")
+				"TOPIC", "PARTITION", "CURRENT-REPLICAS", "ADDING", "REMOVING")
 			for _, topic := range resp.Topics {
 				for _, p := range topic.Partitions {
 					sort.Slice(p.Replicas, func(i, j int) bool { return p.Replicas[i] < p.Replicas[j] })

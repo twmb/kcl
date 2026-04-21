@@ -268,11 +268,22 @@ func probeVersion(cl *client.Client) {
 
 func rawCommand(cl *client.Client) *cobra.Command {
 	var key int16
+	var version int16
 	var b int
 	cmd := &cobra.Command{
 		Use:   "raw-req",
 		Short: "Issue an arbitrary request parsed from JSON read from STDIN.",
-		Args:  cobra.ExactArgs(0),
+		Long: `Issue an arbitrary request parsed from JSON read from STDIN.
+
+The request body is unmarshaled from STDIN JSON. Empty input ({}) is
+valid for requests with no required fields.
+
+The wire version used is:
+  1. --version if set (pins both min and max to that version)
+  2. the JSON body's "Version" field if non-negative
+  3. the client's negotiated max version otherwise
+`,
+		Args: cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
 			req := kmsg.RequestForKey(key)
 			if req == nil {
@@ -283,18 +294,25 @@ func rawCommand(cl *client.Client) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("unable to read stdin: %v", err)
 			}
-			err = json.Unmarshal(raw, req)
-			// If the raw json specified a Version field, it
-			// overwrote our -1. We want to pin the version to
-			// what the user specified.
-			if req.GetVersion() != -1 {
+			if len(raw) > 0 {
+				if err := json.Unmarshal(raw, req); err != nil {
+					return fmt.Errorf("unable to unmarshal stdin: %v", err)
+				}
+			}
+			// Flag --version wins over JSON "Version" wins over
+			// default (no pin).
+			pinVersion := int16(-1)
+			if version >= 0 {
+				pinVersion = version
+			} else if v := req.GetVersion(); v >= 0 {
+				pinVersion = v
+			}
+			if pinVersion >= 0 {
+				req.SetVersion(pinVersion)
 				vers := kversion.Stable()
-				vers.SetMaxKeyVersion(req.Key(), req.GetVersion())
+				vers.SetMaxKeyVersion(req.Key(), pinVersion)
 				cl.AddOpt(kgo.MinVersions(vers))
 				cl.AddOpt(kgo.MaxVersions(vers))
-			}
-			if err != nil {
-				return fmt.Errorf("unable to unmarshal stdin: %v", err)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -316,6 +334,7 @@ func rawCommand(cl *client.Client) *cobra.Command {
 		},
 	}
 	cmd.Flags().Int16VarP(&key, "key", "k", -1, "request key")
+	cmd.Flags().Int16VarP(&version, "version", "v", -1, "pin the request to a specific version; overrides any Version in STDIN JSON")
 	cmd.Flags().IntVarP(&b, "broker", "b", -1, "specific broker to issue this request to, if non-negative")
 	return cmd
 }

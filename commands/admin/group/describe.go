@@ -443,18 +443,22 @@ func describeConsumerGroups(cl *client.Client, groups []string, readCommitted bo
 				tw := out.NewTabWriter()
 				fmt.Fprintf(tw, "GROUP\t%s\n", r.group.Group)
 				fmt.Fprintf(tw, "COORDINATOR\t%d\n", r.broker)
-				fmt.Fprintf(tw, "STATE\t%s\n", r.group.State)
-				fmt.Fprintf(tw, "BALANCER\t%s\n", r.group.AssignorName)
-				fmt.Fprintf(tw, "MEMBERS\t%d\n", len(r.group.Members))
-				if totalLagValid {
-					fmt.Fprintf(tw, "TOTAL-LAG\t%d\n", totalLag)
-				}
+				// On group-level error (e.g. GROUP_ID_NOT_FOUND),
+				// skip the empty state/balancer/members fields.
 				if e := kerr.ErrorForCode(r.group.ErrorCode); e != nil {
 					msg := e.Error()
 					if r.group.ErrorMessage != nil {
 						msg += ": " + *r.group.ErrorMessage
 					}
 					fmt.Fprintf(tw, "ERROR\t%s\n", msg)
+					tw.Flush()
+					continue
+				}
+				fmt.Fprintf(tw, "STATE\t%s\n", r.group.State)
+				fmt.Fprintf(tw, "BALANCER\t%s\n", r.group.AssignorName)
+				fmt.Fprintf(tw, "MEMBERS\t%d\n", len(r.group.Members))
+				if totalLagValid {
+					fmt.Fprintf(tw, "TOTAL-LAG\t%d\n", totalLag)
 				}
 				tw.Flush()
 			}
@@ -1003,18 +1007,22 @@ func printDescribed(
 				tw := out.NewTabWriter()
 				fmt.Fprintf(tw, "GROUP\t%s\n", group.Group)
 				fmt.Fprintf(tw, "COORDINATOR\t%d\n", group.Broker.NodeID)
-				fmt.Fprintf(tw, "STATE\t%s\n", group.State)
-				fmt.Fprintf(tw, "BALANCER\t%s\n", group.Protocol)
-				fmt.Fprintf(tw, "MEMBERS\t%d\n", len(group.Members))
-				if totalLagValid {
-					fmt.Fprintf(tw, "TOTAL-LAG\t%d\n", totalLag)
-				}
+				// On group-level error (e.g. GROUP_ID_NOT_FOUND),
+				// skip the empty state/balancer/members fields.
 				if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
 					msg := err.Error()
 					if group.ErrorMessage != nil {
 						msg += ": " + *group.ErrorMessage
 					}
 					fmt.Fprintf(tw, "ERROR\t%s\n", msg)
+					tw.Flush()
+					continue
+				}
+				fmt.Fprintf(tw, "STATE\t%s\n", group.State)
+				fmt.Fprintf(tw, "BALANCER\t%s\n", group.Protocol)
+				fmt.Fprintf(tw, "MEMBERS\t%d\n", len(group.Members))
+				if totalLagValid {
+					fmt.Fprintf(tw, "TOTAL-LAG\t%d\n", totalLag)
 				}
 				tw.Flush()
 			}

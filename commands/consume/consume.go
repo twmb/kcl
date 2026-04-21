@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -25,6 +26,7 @@ type consumption struct {
 
 	group           string
 	shareGroup      string
+	shareAckType    string
 	groupAlg        string
 	instanceID      string
 	regex           bool
@@ -85,6 +87,21 @@ func (c *consumption) run(topics []string) error {
 
 	if c.group != "" && c.shareGroup != "" {
 		return out.Errf(out.ExitUsage, "--group and --share-group are mutually exclusive")
+	}
+
+	var shareAck kgo.AckStatus
+	switch strings.ToLower(c.shareAckType) {
+	case "", "accept":
+		shareAck = kgo.AckAccept
+	case "release":
+		shareAck = kgo.AckRelease
+	case "reject":
+		shareAck = kgo.AckReject
+	default:
+		return out.Errf(out.ExitUsage, "--share-ack-type must be accept, release, or reject (got %q)", c.shareAckType)
+	}
+	if c.shareGroup == "" && shareAck != kgo.AckAccept {
+		return out.Errf(out.ExitUsage, "--share-ack-type is only valid with --share-group")
 	}
 
 	offset, err := c.parseOffset()
@@ -201,6 +218,7 @@ func (c *consumption) run(topics []string) error {
 		grepFilters:         grepFilters,
 		printControlRecords: c.printControlRecords,
 		timeout:             c.timeout,
+		shareAck:            shareAck,
 		done:                make(chan struct{}),
 		ctx:                 ctx,
 		cancel:              cancel,
@@ -460,6 +478,11 @@ type consumeOutput struct {
 	printControlRecords bool
 	timeout             time.Duration
 
+	// shareAck is the per-record ack status applied when consuming from
+	// a share group. Only AckRelease and AckReject need explicit marking;
+	// AckAccept is the default (applied automatically on the next poll).
+	shareAck kgo.AckStatus
+
 	pbd *pbDecoder
 
 	ctx    context.Context
@@ -521,6 +544,13 @@ func (co *consumeOutput) consume() {
 		}
 		if co.timeout > 0 && fetches.NumRecords() > 0 {
 			lastRecordTime = time.Now()
+		}
+		// Override the default AckAccept for share groups before
+		// the next poll implicitly accepts the fetched records.
+		// MarkAcks with no records applies to all records from the
+		// last poll that haven't been explicitly marked.
+		if co.shareAck != 0 && co.shareAck != kgo.AckAccept && fetches.NumRecords() > 0 {
+			co.cl.MarkAcks(co.shareAck)
 		}
 		fetches.EachError(func(t string, p int32, err error) {
 			fmt.Fprintf(os.Stderr, "fetch error %s[%d]: %v\n", t, p, err)

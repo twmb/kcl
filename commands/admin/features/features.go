@@ -70,7 +70,10 @@ version ranges and finalized feature version ranges.
 }
 
 func updateCommand(cl *client.Client) *cobra.Command {
-	var dryRun bool
+	var (
+		dryRun       bool
+		upgradeType  string
+	)
 
 	cmd := &cobra.Command{
 		Use:   "update FEATURE=VERSION...",
@@ -81,11 +84,28 @@ This command updates finalized feature flags. Each argument must be of the
 form FEATURE=VERSION, where VERSION is the new max version level for the
 feature. Set VERSION to 0 to delete a feature flag.
 
+--upgrade-type controls whether downgrades are permitted (v1+ of the API):
+  upgrade         only allow version increases (default)
+  safe-downgrade  allow lossless downgrades
+  unsafe-downgrade  allow lossy downgrades
+
 Use --dry-run to preview without applying.
 `,
 		Example: "update metadata.version=17",
 		Args:    cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
+			var upgrade int8
+			switch upgradeType {
+			case "upgrade", "":
+				upgrade = 1
+			case "safe-downgrade":
+				upgrade = 2
+			case "unsafe-downgrade":
+				upgrade = 3
+			default:
+				return fmt.Errorf("invalid --upgrade-type %q: want upgrade, safe-downgrade, unsafe-downgrade", upgradeType)
+			}
+
 			req := kmsg.NewPtrUpdateFeaturesRequest()
 			req.TimeoutMillis = cl.TimeoutMillis()
 			req.ValidateOnly = dryRun
@@ -102,6 +122,8 @@ Use --dry-run to preview without applying.
 				req.FeatureUpdates = append(req.FeatureUpdates, kmsg.UpdateFeaturesRequestFeatureUpdate{
 					Feature:         parts[0],
 					MaxVersionLevel: int16(version),
+					UpgradeType:     upgrade,
+					AllowDowngrade:  upgrade >= 2, // v0 fallback
 				})
 			}
 
@@ -136,5 +158,6 @@ Use --dry-run to preview without applying.
 	}
 
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "validate the request without applying changes")
+	cmd.Flags().StringVar(&upgradeType, "upgrade-type", "upgrade", "upgrade | safe-downgrade | unsafe-downgrade")
 	return cmd
 }
