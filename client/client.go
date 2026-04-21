@@ -8,11 +8,9 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"math"
 	"net"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -57,14 +55,57 @@ type CfgSASL struct {
 	IsToken bool   `toml:"is_token,omitempty"`
 }
 
-// cfg contains kcl options that can be defined in a file.
+// duration wraps time.Duration with TOML + -X parsing that accepts Go
+// duration strings ("5s", "500ms", "1m").
+type Duration time.Duration
+
+func (d *Duration) UnmarshalText(b []byte) error {
+	parsed, err := time.ParseDuration(string(b))
+	if err != nil {
+		return err
+	}
+	*d = Duration(parsed)
+	return nil
+}
+
+func (d Duration) MarshalText() ([]byte, error) {
+	return []byte(time.Duration(d).String()), nil
+}
+
+// D returns the underlying time.Duration.
+func (d Duration) D() time.Duration { return time.Duration(d) }
+
+// Cfg contains kcl options that can be defined in a file.
 type Cfg struct {
 	SeedBrokers []string `toml:"seed_brokers,omitempty"`
 
-	TimeoutMillis int32 `toml:"timeout_ms,omitempty"`
+	// BrokerTimeout is the wire TimeoutMs value sent to the broker
+	// in admin-style requests (e.g. CreateTopics.TimeoutMs). It
+	// tells the broker how long to wait before giving up on the
+	// server side.
+	BrokerTimeout Duration `toml:"broker_timeout,omitempty"`
+
+	// DialTimeout bounds how long kgo waits for a single TCP dial.
+	// Zero leaves kgo's default (10s).
+	DialTimeout Duration `toml:"dial_timeout,omitempty"`
+
+	// RetryTimeout bounds total time for a client request and its
+	// retries. Zero leaves kgo's default (30s for most requests,
+	// 45s for group-session requests).
+	RetryTimeout Duration `toml:"retry_timeout,omitempty"`
 
 	TLS  *CfgTLS  `toml:"tls,omitzero"`
 	SASL *CfgSASL `toml:"sasl,omitempty"`
+}
+
+// CfgFile represents the full config file, which may contain named profiles.
+type CfgFile struct {
+	// CurrentProfile is the active profile name.
+	CurrentProfile string         `toml:"current_profile,omitempty"`
+	Profiles       map[string]Cfg `toml:"profiles,omitempty"`
+
+	// Flat fields for backward compat (single-profile config).
+	Cfg
 }
 
 // Client contains kgo client options and a kgo client.
@@ -79,24 +120,59 @@ type Client struct {
 
 	asVersion string
 	asJSON    bool
+	format    string
 
 	// config options parsed and filled on load
-	defaultCfgPath string
-	cfgPath        string
-	noCfgFile      bool
-	envNoCfgFile   bool
-	envPfx         string
-	flagOverrides  []string
+	defaultCfgPath    string
+	cfgPath           string
+	noCfgFile         bool
+	envNoCfgFile      bool
+	envPfx            string
+	flagOverrides     []string
+	bootstrapServers  []string // --bootstrap-servers/-B override
+	profileName       string   // --context/-C override
+	cfgFile           CfgFile
 	cfg            Cfg
 }
 
-// AsJSON returns whether the output should be dumped as JSON if applicable.
-func (c *Client) AsJSON() bool { return c.asJSON }
+// Format returns the output format: "text", "json", or "awk".
+// If --dump-json is set and --format is not explicitly set, returns "json".
+func (c *Client) Format() string {
+	switch c.format {
+	case "text", "json", "awk":
+	default:
+		out.Die("invalid --format %q: must be text, json, or awk", c.format)
+	}
+	if c.format != "text" {
+		return c.format
+	}
+	if c.asJSON {
+		return "json"
+	}
+	return "text"
+}
 
-// TimeoutMillis is what requests that have timeouts should use.
+// AsJSON returns whether the output should be dumped as JSON if applicable.
+func (c *Client) AsJSON() bool { return c.Format() == "json" }
+
+// TimeoutMillis returns the value to put in wire TimeoutMs fields on
+// broker requests (e.g. CreateTopicsRequest.TimeoutMs). The configured
+// broker_timeout duration is rounded down to the nearest millisecond.
 func (c *Client) TimeoutMillis() int32 {
 	c.loadClientOnce()
-	return c.cfg.TimeoutMillis
+	return int32(c.cfg.BrokerTimeout.D().Milliseconds())
+}
+
+// Version is set by main via SetVersion; used to tag the kgo ClientID.
+var clientVersion = "dev"
+
+// SetVersion records the effective kcl version. Called by main once
+// it has resolved ldflags / debug.BuildInfo. The version is used as
+// part of the kgo ClientID so brokers can identify kcl in audit logs.
+func SetVersion(v string) {
+	if v != "" {
+		clientVersion = v
+	}
 }
 
 // New returns a new Client with the given config and installs some
@@ -105,10 +181,13 @@ func New(root *cobra.Command) *Client {
 	c := &Client{
 		opts: []kgo.Opt{
 			kgo.MetadataMinAge(time.Second),
+			// Tag the ClientID so brokers can see kcl in ACL
+			// audit logs and metrics.
+			kgo.ClientID("kcl/" + clientVersion),
 		},
 		cfg: Cfg{
 			SeedBrokers:   []string{"localhost:9092"},
-			TimeoutMillis: 5000,
+			BrokerTimeout: Duration(5 * time.Second),
 		},
 	}
 
@@ -136,8 +215,12 @@ func New(root *cobra.Command) *Client {
 	root.PersistentFlags().BoolVar(&c.noCfgFile, "no-config-file", false, "do not load any config file")
 	root.PersistentFlags().StringVar(&c.envPfx, "config-env-prefix", "KCL_", "environment variable prefix for config overrides (middle priority)")
 	root.PersistentFlags().StringArrayVarP(&c.flagOverrides, "config-opt", "X", nil, "flag provided config option (highest priority)")
+	root.PersistentFlags().StringSliceVarP(&c.bootstrapServers, "bootstrap-servers", "B", nil, "comma-separated list of seed brokers (overrides profile/config); shorthand for -X seed_brokers=...")
 	root.PersistentFlags().StringVar(&c.asVersion, "as-version", "", "if nonempty, which version of Kafka versions to use (e.g. '0.8.0', '2.3.0')")
+	root.PersistentFlags().StringVar(&c.format, "format", "text", "output format (text, json, awk)")
+	root.PersistentFlags().StringVarP(&c.profileName, "profile", "C", "", "use a specific config profile")
 	root.PersistentFlags().BoolVarP(&c.asJSON, "dump-json", "j", false, "dump response as json if supported")
+	root.PersistentFlags().MarkDeprecated("dump-json", "use --format json instead")
 
 	return c
 }
@@ -231,23 +314,67 @@ func (c *Client) fillOpts() {
 	}
 
 	c.AddOpt(kgo.SeedBrokers(c.cfg.SeedBrokers...))
+	if d := c.cfg.DialTimeout.D(); d > 0 {
+		c.AddOpt(kgo.DialTimeout(d))
+	}
+	if d := c.cfg.RetryTimeout.D(); d > 0 {
+		c.AddOpt(kgo.RetryTimeout(d))
+	}
 }
 
 func (c *Client) parseCfgFile() {
-	if !(c.noCfgFile || c.envNoCfgFile) {
-		md, err := toml.DecodeFile(c.cfgPath, &c.cfg)
-		if !os.IsNotExist(err) {
-			if err != nil {
-				out.Die("unable to decode config file %q: %v", c.cfgPath, err)
-			}
-			if len(md.Undecoded()) > 0 {
-				out.Die("unknown keys in toml cfg: %v", md.Undecoded())
-			}
-		} else {
-			Wizard(false)
-			os.Exit(0)
+	if c.noCfgFile || c.envNoCfgFile {
+		return
+	}
+
+	// First try decoding as a context-aware config file.
+	md, err := toml.DecodeFile(c.cfgPath, &c.cfgFile)
+	if os.IsNotExist(err) {
+		Wizard(false)
+		os.Exit(0)
+	}
+	if err != nil {
+		out.Die("unable to decode config file %q: %v", c.cfgPath, err)
+	}
+	// Warn on unknown top-level keys so typos and stale names from
+	// old configs don't get silently dropped. This catches "timeout_ms"
+	// after the rename, "tls_xxx" typos, etc.
+	if undecoded := md.Undecoded(); len(undecoded) > 0 {
+		for _, k := range undecoded {
+			fmt.Fprintf(os.Stderr, "kcl: warning: unknown config key %q in %s\n", k, c.cfgPath)
 		}
 	}
+
+	// If the file has named profiles, select the appropriate one.
+	if len(c.cfgFile.Profiles) > 0 {
+		name := c.cfgFile.CurrentProfile
+		if c.profileName != "" {
+			name = c.profileName
+		}
+		if name == "" {
+			out.Die("config has profiles but no current_profile set; use --profile or set current_profile in config")
+		}
+		p, ok := c.cfgFile.Profiles[name]
+		if !ok {
+			out.Die("profile %q not found in config file", name)
+		}
+		c.cfg = p
+		return
+	}
+
+	// No profiles: use the flat config (backward compatible).
+	c.cfg = c.cfgFile.Cfg
+}
+
+// CfgFilePath returns the path to the config file.
+func (c *Client) CfgFilePath() string {
+	return c.cfgPath
+}
+
+// LoadedCfgFile returns the full loaded config file (may include contexts).
+func (c *Client) LoadedCfgFile() CfgFile {
+	c.loadClientOnce()
+	return c.cfgFile
 }
 
 func (c *Client) processOverrides() {
@@ -264,18 +391,6 @@ func (c *Client) processOverrides() {
 		return nil
 	}
 
-	intoInt32 := func(in string, dst *int32) error {
-		i, err := strconv.Atoi(in)
-		if err != nil {
-			return err
-		}
-		if i > math.MaxInt32 || i < 0 {
-			return fmt.Errorf("invalid int32 value %s", in)
-		}
-		*dst = int32(i)
-		return nil
-	}
-
 	mktls := func(c *Cfg) {
 		if c.TLS == nil {
 			c.TLS = new(CfgTLS)
@@ -288,9 +403,24 @@ func (c *Client) processOverrides() {
 		}
 	}
 
+	intoDuration := func(v string, dst *Duration) error {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return fmt.Errorf("invalid duration %q: %v", v, err)
+		}
+		*dst = Duration(d)
+		return nil
+	}
+
 	fns := map[string]func(*Cfg, string) error{
 		"seed_brokers":          func(c *Cfg, v string) error { return intoStrSlice(v, &c.SeedBrokers) },
-		"timeout_ms":            func(c *Cfg, v string) error { return intoInt32(v, &c.TimeoutMillis) },
+		"broker_timeout":        func(c *Cfg, v string) error { return intoDuration(v, &c.BrokerTimeout) },
+		"dial_timeout":          func(c *Cfg, v string) error { return intoDuration(v, &c.DialTimeout) },
+		"retry_timeout":         func(c *Cfg, v string) error { return intoDuration(v, &c.RetryTimeout) },
+		// Removed in favor of duration-based names above.
+		"timeout_ms": func(c *Cfg, v string) error {
+			return fmt.Errorf("timeout_ms was renamed to broker_timeout and now takes a Go duration (e.g. -X broker_timeout=5s); please update your config or -X flags")
+		},
 		"use_tls":               func(c *Cfg, _ string) error { mktls(c); return nil },
 		"tls_ca_cert_path":      func(c *Cfg, v string) error { mktls(c); c.TLS.CACert = v; return nil },
 		"tls_client_cert_path":  func(c *Cfg, v string) error { mktls(c); c.TLS.ClientCertPath = v; return nil },
@@ -334,6 +464,11 @@ func (c *Client) processOverrides() {
 
 	parse(envOverrides)
 	parse(c.flagOverrides)
+	// -B/--bootstrap-servers is applied last so it wins over any
+	// profile/config/-X setting of seed_brokers.
+	if len(c.bootstrapServers) > 0 {
+		c.cfg.SeedBrokers = c.bootstrapServers
+	}
 }
 
 func (c *Client) maybeAddMaxVersions() {

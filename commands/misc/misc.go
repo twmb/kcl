@@ -54,17 +54,18 @@ func errcodeCommand() *cobra.Command {
 		Use:   "errcode CODE",
 		Short: "Print the name and description for an error code",
 		Args:  cobra.ExactArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			code, err := strconv.Atoi(args[0])
 			if err != nil {
-				out.Die("unable to parse error code: %v", err)
+				return fmt.Errorf("unable to parse error code: %v", err)
 			}
 			if code == 0 {
 				fmt.Println("NONE")
-				return
+				return nil
 			}
 			kerr := kerr.ErrorForCode(int16(code)).(*kerr.Error)
 			fmt.Printf("%s\n%s\n", kerr.Message, kerr.Description)
+			return nil
 		},
 	}
 }
@@ -75,15 +76,15 @@ func errtextCommand() *cobra.Command {
 		Use:   "errtext [ERROR_NAME]",
 		Short: "Print the name, code and description for an error name or all errors",
 		Args:  cobra.MaximumNArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			var text string
 			if list {
 				if len(args) != 0 {
-					out.Die("invalid extra args while list is set")
+					return out.Errf(out.ExitUsage, "invalid extra args while list is set")
 				}
 			} else {
 				if len(args) != 1 {
-					out.Die("missing error text to search for")
+					return out.Errf(out.ExitUsage, "missing error text to search for")
 				} else {
 					text = client.Strnorm(args[0])
 				}
@@ -99,16 +100,17 @@ func errtextCommand() *cobra.Command {
 				}
 
 				if verbose {
-					fmt.Printf("trying %s...\n", kerr.Message)
+					fmt.Fprintf(os.Stderr, "trying %s...\n", kerr.Message)
 				}
 				if client.Strnorm(kerr.Message) == text {
 					fmt.Printf("%s (%d)\n%s\n", kerr.Message, kerr.Code, kerr.Description)
-					return
+					return nil
 				}
 			}
 			if !list {
-				out.Die("Unknown error text.")
+				return fmt.Errorf("Unknown error text.")
 			}
+			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&list, "list", false, "rather than comparing, list all errors and their descriptions")
@@ -138,7 +140,7 @@ fi
 This command supports completion for bash, zsh, fish, and powershell.
 `,
 		Args: cobra.ExactArgs(0),
-		Run: func(cmd *cobra.Command, _ []string) {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			switch kind {
 			case "bash":
 				cmd.Root().GenBashCompletion(os.Stdout)
@@ -149,8 +151,9 @@ This command supports completion for bash, zsh, fish, and powershell.
 			case "powershell":
 				cmd.Root().GenPowerShellCompletion(os.Stdout)
 			default:
-				out.Die("unrecognized autocomplete kind %q", kind)
+				return out.Errf(out.ExitUsage, "unrecognized autocomplete kind %q", kind)
 			}
+			return nil
 		},
 	}
 
@@ -167,42 +170,46 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 		Use:   "api-versions",
 		Short: "Print broker API versions for each Kafka request type (Kafka 0.10.0+).",
 		Args:  cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			var v *kversion.Versions
 			if version == "" {
 				kresp, err := cl.Client().Request(context.Background(), apiVersionsRequest())
-				out.MaybeDie(err, "unable to request API versions: %v", err)
-				if cl.AsJSON() {
-					out.ExitJSON(kresp)
+				if err != nil {
+					return fmt.Errorf("unable to request API versions: %v", err)
 				}
 				resp := kresp.(*kmsg.ApiVersionsResponse)
 				v = kversion.FromApiVersionsResponse(resp)
 			} else {
 				v = kversion.FromString(version)
 				if v == nil {
-					out.Die("unknown version %q", version)
+					return out.Errf(out.ExitUsage, "unknown version %q", version)
 				}
 			}
-
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
 
 			if keys {
-				fmt.Fprintf(tw, "NAME\tKEY\tMAX\n")
+				table := out.NewFormattedTable(cl.Format(), "misc.api-versions", 1, "api_versions",
+					"NAME", "KEY", "MAX")
+				v.EachMaxKeyVersion(func(k, ver int16) {
+					kind := kmsg.NameForKey(k)
+					if kind == "" {
+						kind = "Unknown"
+					}
+					table.Row(kind, k, ver)
+				})
+				table.Flush()
 			} else {
-				fmt.Fprintf(tw, "NAME\tMAX\n")
+				table := out.NewFormattedTable(cl.Format(), "misc.api-versions", 1, "api_versions",
+					"NAME", "MAX")
+				v.EachMaxKeyVersion(func(k, ver int16) {
+					kind := kmsg.NameForKey(k)
+					if kind == "" {
+						kind = "Unknown"
+					}
+					table.Row(kind, ver)
+				})
+				table.Flush()
 			}
-			v.EachMaxKeyVersion(func(k, v int16) {
-				kind := kmsg.NameForKey(k)
-				if kind == "" {
-					kind = "Unknown"
-				}
-				if keys {
-					fmt.Fprintf(tw, "%s\t%d\t%d\n", kind, k, v)
-				} else {
-					fmt.Fprintf(tw, "%s\t%d\n", kind, v)
-				}
-			})
+			return nil
 		},
 	}
 
@@ -215,7 +222,7 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 func probeVersionCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "probe-version",
-		Short: "Probe and print the version of Kafka running (incompatable with --as-version)",
+		Short: "Probe and print the version of Kafka running (incompatible with --as-version)",
 		Args:  cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
 			probeVersion(cl)
@@ -261,30 +268,52 @@ func probeVersion(cl *client.Client) {
 
 func rawCommand(cl *client.Client) *cobra.Command {
 	var key int16
+	var version int16
 	var b int
 	cmd := &cobra.Command{
 		Use:   "raw-req",
 		Short: "Issue an arbitrary request parsed from JSON read from STDIN.",
-		Args:  cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
+		Long: `Issue an arbitrary request parsed from JSON read from STDIN.
+
+The request body is unmarshaled from STDIN JSON. Empty input ({}) is
+valid for requests with no required fields.
+
+The wire version used is:
+  1. --version if set (pins both min and max to that version)
+  2. the JSON body's "Version" field if non-negative
+  3. the client's negotiated max version otherwise
+`,
+		Args: cobra.ExactArgs(0),
+		RunE: func(_ *cobra.Command, _ []string) error {
 			req := kmsg.RequestForKey(key)
 			if req == nil {
-				out.Die("request key %d unknown", key)
+				return out.Errf(out.ExitUsage, "request key %d unknown", key)
 			}
 			req.SetVersion(-1)
 			raw, err := io.ReadAll(os.Stdin)
-			out.MaybeDie(err, "unable to read stdin: %v", err)
-			err = json.Unmarshal(raw, req)
-			// If the raw json specified a Version field, it
-			// overwrote our -1. We want to pin the version to
-			// what the user specified.
-			if req.GetVersion() != -1 {
+			if err != nil {
+				return fmt.Errorf("unable to read stdin: %v", err)
+			}
+			if len(raw) > 0 {
+				if err := json.Unmarshal(raw, req); err != nil {
+					return fmt.Errorf("unable to unmarshal stdin: %v", err)
+				}
+			}
+			// Flag --version wins over JSON "Version" wins over
+			// default (no pin).
+			pinVersion := int16(-1)
+			if version >= 0 {
+				pinVersion = version
+			} else if v := req.GetVersion(); v >= 0 {
+				pinVersion = v
+			}
+			if pinVersion >= 0 {
+				req.SetVersion(pinVersion)
 				vers := kversion.Stable()
-				vers.SetMaxKeyVersion(req.Key(), req.GetVersion())
+				vers.SetMaxKeyVersion(req.Key(), pinVersion)
 				cl.AddOpt(kgo.MinVersions(vers))
 				cl.AddOpt(kgo.MaxVersions(vers))
 			}
-			out.MaybeDie(err, "unable to unmarshal stdin: %v", err)
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			var r interface {
@@ -295,11 +324,17 @@ func rawCommand(cl *client.Client) *cobra.Command {
 				r = cl.Client().Broker(b)
 			}
 			kresp, err := r.Request(ctx, req)
-			out.MaybeDie(err, "response error: %v", err)
-			out.ExitJSON(kresp)
+			if err != nil {
+				return fmt.Errorf("response error: %v", err)
+			}
+			out.MarshalJSON("misc.raw-req", 1, map[string]any{
+				"response": kresp,
+			})
+			return nil
 		},
 	}
 	cmd.Flags().Int16VarP(&key, "key", "k", -1, "request key")
+	cmd.Flags().Int16VarP(&version, "version", "v", -1, "pin the request to a specific version; overrides any Version in STDIN JSON")
 	cmd.Flags().IntVarP(&b, "broker", "b", -1, "specific broker to issue this request to, if non-negative")
 	return cmd
 }
@@ -310,22 +345,29 @@ func listOffsetsCommand(cl *client.Client) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "list-offsets",
-		Short: "List start and end offsets for partitions.",
-		Long: `List start and end offsets for topics or partitions (Kafka 0.8.0+).
+		Short: "List start, stable, and end offsets for partitions.",
+		Long: `List start, stable, and end offsets for topics or partitions (Kafka 0.10.0+).
 
 The input format is topic:#,#,# or just topic. If a topic is given without
 partitions, a metadata request is issued to figure out all partitions for the
-topic and the output will include the start and end offsets for all partitions.
+topic and the output will include the offsets for all partitions.
 
 Multiple topics can be listed, and multiple partitions per topic can be listed.
 
+The STABLE column shows the last stable offset (the offset up to which consumers
+with read_committed isolation can read). If STABLE differs from END, there is an
+open transaction on that partition.
+
 If --with-epochs is true, the start and end offsets will have /### following
-the offset number, where ### corresponds to the broker epoch at at that given
+the offset number, where ### corresponds to the broker epoch at that given
 offset.
 `,
 		Example: "list-offsets foo:1,2,3 bar:0",
-		Run: func(_ *cobra.Command, topicParts []string) {
-			tps := loadTopicParts(cl, topicParts)
+		RunE: func(_ *cobra.Command, topicParts []string) error {
+			tps, err := loadTopicParts(cl, topicParts)
+			if err != nil {
+				return err
+			}
 
 			reqStart := &kmsg.ListOffsetsRequest{
 				ReplicaID:      -1,
@@ -335,17 +377,18 @@ offset.
 				ReplicaID:      -1,
 				IsolationLevel: 0,
 			}
+			reqStable := &kmsg.ListOffsetsRequest{
+				ReplicaID:      -1,
+				IsolationLevel: 1, // read_committed => last stable offset
+			}
 			if readCommitted {
 				reqStart.IsolationLevel = 1
 				reqEnd.IsolationLevel = 1
 			}
 			for topic, partitions := range tps {
-				topicReqStart := kmsg.ListOffsetsRequestTopic{
-					Topic: topic,
-				}
-				topicReqEnd := kmsg.ListOffsetsRequestTopic{
-					Topic: topic,
-				}
+				topicReqStart := kmsg.ListOffsetsRequestTopic{Topic: topic}
+				topicReqEnd := kmsg.ListOffsetsRequestTopic{Topic: topic}
+				topicReqStable := kmsg.ListOffsetsRequestTopic{Topic: topic}
 				for _, partition := range partitions {
 					topicReqStart.Partitions = append(topicReqStart.Partitions, kmsg.ListOffsetsRequestTopicPartition{
 						Partition:          partition,
@@ -359,14 +402,21 @@ offset.
 						Timestamp:          -1, // latest
 						MaxNumOffsets:      1,
 					})
+					topicReqStable.Partitions = append(topicReqStable.Partitions, kmsg.ListOffsetsRequestTopicPartition{
+						Partition:          partition,
+						CurrentLeaderEpoch: -1,
+						Timestamp:          -1, // latest with read_committed = last stable
+						MaxNumOffsets:      1,
+					})
 				}
 				reqStart.Topics = append(reqStart.Topics, topicReqStart)
 				reqEnd.Topics = append(reqEnd.Topics, topicReqEnd)
+				reqStable.Topics = append(reqStable.Topics, topicReqStable)
 			}
 
-			var startResps, endResps []kgo.ResponseShard
+			var startResps, endResps, stableResps []kgo.ResponseShard
 			var wg sync.WaitGroup
-			wg.Add(2)
+			wg.Add(3)
 			go func() {
 				defer wg.Done()
 				startResps = cl.Client().RequestSharded(context.Background(), reqStart)
@@ -375,6 +425,10 @@ offset.
 				defer wg.Done()
 				endResps = cl.Client().RequestSharded(context.Background(), reqEnd)
 			}()
+			go func() {
+				defer wg.Done()
+				stableResps = cl.Client().RequestSharded(context.Background(), reqStable)
+			}()
 			wg.Wait()
 
 			type startEnd struct {
@@ -382,6 +436,7 @@ offset.
 				broker           int32
 				startOffset      int64
 				startLeaderEpoch int32
+				stableOffset     int64
 				endOffset        int64
 				endLeaderEpoch   int32
 			}
@@ -390,7 +445,7 @@ offset.
 
 			for _, brokerResp := range startResps {
 				if brokerResp.Err != nil {
-					fmt.Printf("unable to list start offsets from broker %d (%s:%d): %v\n", brokerResp.Meta.NodeID, brokerResp.Meta.Host, brokerResp.Meta.Port, brokerResp.Err)
+					fmt.Fprintf(os.Stderr, "unable to list start offsets from broker %d (%s:%d): %v\n", brokerResp.Meta.NodeID, brokerResp.Meta.Host, brokerResp.Meta.Port, brokerResp.Err)
 					continue
 				}
 				startResp := brokerResp.Resp.(*kmsg.ListOffsetsResponse)
@@ -416,7 +471,7 @@ offset.
 
 			for _, brokerResp := range endResps {
 				if brokerResp.Err != nil {
-					fmt.Printf("unable to list end offsets from broker %d (%s:%d): %v\n", brokerResp.Meta.NodeID, brokerResp.Meta.Host, brokerResp.Meta.Port, brokerResp.Err)
+					fmt.Fprintf(os.Stderr, "unable to list end offsets from broker %d (%s:%d): %v\n", brokerResp.Meta.NodeID, brokerResp.Meta.Host, brokerResp.Meta.Port, brokerResp.Err)
 					continue
 				}
 				endResp := brokerResp.Resp.(*kmsg.ListOffsetsResponse)
@@ -451,6 +506,28 @@ offset.
 				}
 			}
 
+			for _, brokerResp := range stableResps {
+				if brokerResp.Err != nil {
+					fmt.Fprintf(os.Stderr, "unable to list stable offsets from broker %d (%s:%d): %v\n", brokerResp.Meta.NodeID, brokerResp.Meta.Host, brokerResp.Meta.Port, brokerResp.Err)
+					continue
+				}
+				stableResp := brokerResp.Resp.(*kmsg.ListOffsetsResponse)
+				for _, topic := range stableResp.Topics {
+					topicStartEnds := startEnds[topic.Topic]
+					if topicStartEnds == nil {
+						continue
+					}
+					for _, partition := range topic.Partitions {
+						partStartEnd, ok := topicStartEnds[partition.Partition]
+						if !ok {
+							continue
+						}
+						partStartEnd.stableOffset = partition.Offset
+						topicStartEnds[partition.Partition] = partStartEnd
+					}
+				}
+			}
+
 			type partStartEnd struct {
 				part int32
 				startEnd
@@ -470,38 +547,28 @@ offset.
 			}
 			sort.Slice(sorted, func(i, j int) bool { return sorted[i].topic < sorted[j].topic })
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
-			fmt.Fprintf(tw, "BROKER\tTOPIC\tPARTITION\tSTART\tEND\tERROR\n")
+			table := out.NewFormattedTable(cl.Format(), "misc.list-offsets", 1, "offsets",
+				"BROKER", "TOPIC", "PARTITION", "START", "STABLE", "END", "ERROR")
 
 			for _, topic := range sorted {
 				for _, part := range topic.parts {
 					if part.err != nil {
-						fmt.Fprintf(tw, "%d\t%s\t%d\t\t\t%v\n", part.broker, topic.topic, part.part, part.err)
+						table.Row(part.broker, topic.topic, part.part, "", "", "", part.err)
 						continue
 					}
+					var startStr, endStr string
 					if withEpochs {
-						fmt.Fprintf(tw, "%d\t%s\t%d\t%d/%d\t%d/%d\t\n",
-							part.broker,
-							topic.topic,
-							part.part,
-							part.startOffset,
-							part.startLeaderEpoch,
-							part.endOffset,
-							part.endLeaderEpoch,
-						)
+						startStr = fmt.Sprintf("%d/%d", part.startOffset, part.startLeaderEpoch)
+						endStr = fmt.Sprintf("%d/%d", part.endOffset, part.endLeaderEpoch)
 					} else {
-						fmt.Fprintf(tw, "%d\t%s\t%d\t%d\t%d\t\n",
-							part.broker,
-							topic.topic,
-							part.part,
-							part.startOffset,
-							part.endOffset,
-						)
+						startStr = fmt.Sprintf("%d", part.startOffset)
+						endStr = fmt.Sprintf("%d", part.endOffset)
 					}
+					table.Row(part.broker, topic.topic, part.part, startStr, part.stableOffset, endStr, "")
 				}
 			}
+			table.Flush()
+			return nil
 		},
 	}
 
@@ -525,8 +592,11 @@ it does, read the documentation for kmsg.OffsetForLeaderEpochRequest.
 `,
 
 		Example: "offset-for-leader-epoch foo bar biz:0,1,2",
-		Run: func(_ *cobra.Command, topicParts []string) {
-			tps := loadTopicParts(cl, topicParts)
+		RunE: func(_ *cobra.Command, topicParts []string) error {
+			tps, err := loadTopicParts(cl, topicParts)
+			if err != nil {
+				return err
+			}
 
 			req := &kmsg.OffsetForLeaderEpochRequest{
 				ReplicaID: -1,
@@ -546,14 +616,12 @@ it does, read the documentation for kmsg.OffsetForLeaderEpochRequest.
 			}
 
 			shards := cl.Client().RequestSharded(context.Background(), req)
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
-			fmt.Fprintf(tw, "BROKER\tTOPIC\tPARTITION\tLEADER EPOCH\tEND OFFSET\tERROR\n")
+			table := out.NewFormattedTable(cl.Format(), "misc.offset-for-leader-epoch", 1, "epochs",
+				"BROKER", "TOPIC", "PARTITION", "LEADER-EPOCH", "END-OFFSET", "ERROR")
 
 			for _, shard := range shards {
 				if shard.Err != nil {
-					fmt.Printf("unable to issue request to broker %d (%s:%d): %v\n", shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
+					fmt.Fprintf(os.Stderr, "unable to issue request to broker %d (%s:%d): %v\n", shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
 					continue
 				}
 
@@ -567,7 +635,7 @@ it does, read the documentation for kmsg.OffsetForLeaderEpochRequest.
 						if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
 							msg = err.Error()
 						}
-						fmt.Fprintf(tw, "%d\t%s\t%d\t%d\t%d\t%s\n",
+						table.Row(
 							shard.Meta.NodeID,
 							topic.Topic,
 							partition.Partition,
@@ -578,6 +646,8 @@ it does, read the documentation for kmsg.OffsetForLeaderEpochRequest.
 					}
 				}
 			}
+			table.Flush()
+			return nil
 		},
 	}
 
@@ -587,9 +657,11 @@ it does, read the documentation for kmsg.OffsetForLeaderEpochRequest.
 	return cmd
 }
 
-func loadTopicParts(cl *client.Client, topicParts []string) map[string][]int32 {
+func loadTopicParts(cl *client.Client, topicParts []string) (map[string][]int32, error) {
 	tps, err := flagutil.ParseTopicPartitions(topicParts)
-	out.MaybeDie(err, "unable to parse topic partitions: %v", err)
+	if err != nil {
+		return nil, fmt.Errorf("unable to parse topic partitions: %v", err)
+	}
 
 	var metaTopics []kmsg.MetadataRequestTopic
 	for topic, partitions := range tps {
@@ -604,11 +676,13 @@ func loadTopicParts(cl *client.Client, topicParts []string) map[string][]int32 {
 			req.Topics = nil
 		}
 		kresp, err := cl.Client().Request(context.Background(), req)
-		out.MaybeDie(err, "unable to get metadata: %v", err)
+		if err != nil {
+			return nil, fmt.Errorf("unable to get metadata: %v", err)
+		}
 		resp := kresp.(*kmsg.MetadataResponse)
 		for _, topic := range resp.Topics {
 			if topic.Topic == nil {
-				out.Die("metadata returned nil topic when we did not fetch with topic IDs")
+				return nil, fmt.Errorf("metadata returned nil topic when we did not fetch with topic IDs")
 			}
 			if req.Topics == nil && topic.IsInternal {
 				continue
@@ -618,5 +692,5 @@ func loadTopicParts(cl *client.Client, topicParts []string) map[string][]int32 {
 			}
 		}
 	}
-	return tps
+	return tps, nil
 }

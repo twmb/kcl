@@ -1,33 +1,147 @@
-// Package myconfig contains kcl config file related subcommands.
+// Package myconfig contains kcl config/profile related subcommands.
 package myconfig
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
 
 	"github.com/twmb/kcl/client"
-	"github.com/twmb/kcl/out"
 )
 
+// Command returns the "profile" command (the primary config interface).
 func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "myconfig",
-		Short: "kcl configuration commands",
+		Use:   "profile",
+		Short: "Manage connection profiles (use, list, create, dump, rename, delete).",
+		Long:  configHelpText(cl),
 	}
 
-	cmd.AddCommand(linkCommand(cl))
-	cmd.AddCommand(unlinkCommand(cl))
-	cmd.AddCommand(dumpCommand(cl))
-	cmd.AddCommand(helpCommand(cl))
-	cmd.AddCommand(listCommand(cl))
-	cmd.AddCommand(createCommand(cl))
+	cmd.AddCommand(
+		useCommand(cl),
+		listCommand(cl),
+		currentCommand(cl),
+		createCommand(cl),
+		dumpCommand(cl),
+		renameCommand(cl),
+		deleteCommand(cl),
+	)
 
 	return cmd
+}
+
+// DeprecatedCommand returns a hidden "myconfig" alias for backward compat.
+func DeprecatedCommand(cl *client.Client) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:        "myconfig",
+		Short:      "kcl configuration commands",
+		Deprecated: "use 'kcl profile' instead",
+		Hidden:     true,
+	}
+
+	cmd.AddCommand(
+		useCommand(cl),
+		listCommand(cl),
+		currentCommand(cl),
+		createCommand(cl),
+		dumpCommand(cl),
+		renameCommand(cl),
+		deleteCommand(cl),
+		linkCommand(cl),
+		unlinkCommand(cl),
+	)
+
+	return cmd
+}
+
+func useCommand(cl *client.Client) *cobra.Command {
+	return &cobra.Command{
+		Use:   "use NAME",
+		Short: "Switch the active profile",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			name := args[0]
+			cfgPath := cl.CfgFilePath()
+
+			var cfgFile client.CfgFile
+			if _, err := toml.DecodeFile(cfgPath, &cfgFile); err != nil {
+				return fmt.Errorf("unable to read config: %v", err)
+			}
+
+			if len(cfgFile.Profiles) == 0 {
+				return fmt.Errorf("config file has no profiles; add [profiles.NAME] sections to your config first")
+			}
+			if _, ok := cfgFile.Profiles[name]; !ok {
+				return fmt.Errorf("profile %q not found; available: %v", name, profileNames(cfgFile))
+			}
+
+			cfgFile.CurrentProfile = name
+			if err := writeCfgFile(cfgPath, cfgFile); err != nil {
+				return err
+			}
+			fmt.Fprintf(os.Stderr, "Switched to profile %q\n", name)
+			return nil
+		},
+	}
+}
+
+func listCommand(cl *client.Client) *cobra.Command {
+	return &cobra.Command{
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List all profiles",
+		Args:    cobra.ExactArgs(0),
+		RunE: func(_ *cobra.Command, _ []string) error {
+			cfgPath := cl.CfgFilePath()
+
+			var cfgFile client.CfgFile
+			if _, err := toml.DecodeFile(cfgPath, &cfgFile); err != nil {
+				return fmt.Errorf("unable to read config: %v", err)
+			}
+
+			if len(cfgFile.Profiles) == 0 {
+				fmt.Fprintln(os.Stderr, "No profiles configured. Config uses flat format.")
+				return nil
+			}
+
+			for _, n := range profileNames(cfgFile) {
+				if n == cfgFile.CurrentProfile {
+					fmt.Println("* " + n)
+				} else {
+					fmt.Println("  " + n)
+				}
+			}
+			return nil
+		},
+	}
+}
+
+func currentCommand(cl *client.Client) *cobra.Command {
+	return &cobra.Command{
+		Use:   "current",
+		Short: "Print the active profile name",
+		Args:  cobra.ExactArgs(0),
+		RunE: func(_ *cobra.Command, _ []string) error {
+			cfgPath := cl.CfgFilePath()
+
+			var cfgFile client.CfgFile
+			if _, err := toml.DecodeFile(cfgPath, &cfgFile); err != nil {
+				return fmt.Errorf("unable to read config: %v", err)
+			}
+
+			if cfgFile.CurrentProfile == "" {
+				fmt.Fprintln(os.Stderr, "(no profile set)")
+			} else {
+				fmt.Println(cfgFile.CurrentProfile)
+			}
+			return nil
+		},
+	}
 }
 
 func createCommand(cl *client.Client) *cobra.Command {
@@ -35,7 +149,7 @@ func createCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "create",
 		Aliases: []string{"setup", "wizard"},
-		Short:   "Interactive kcl configuration setup",
+		Short:   "Interactive configuration setup",
 		Args:    cobra.MaximumNArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
 			client.Wizard(noHelp)
@@ -48,7 +162,7 @@ func createCommand(cl *client.Client) *cobra.Command {
 func dumpCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "dump",
-		Short: "dump the loaded configuration",
+		Short: "Dump the loaded configuration",
 		Args:  cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
 			toml.NewEncoder(os.Stdout).Encode(cl.DiskCfg())
@@ -56,8 +170,79 @@ func dumpCommand(cl *client.Client) *cobra.Command {
 	}
 }
 
-func helpCommand(cl *client.Client) *cobra.Command {
-	var configHelp = `On your machine, kcl takes configuration options by default from:
+func renameCommand(cl *client.Client) *cobra.Command {
+	return &cobra.Command{
+		Use:   "rename OLD NEW",
+		Short: "Rename a profile",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			oldName, newName := args[0], args[1]
+			cfgPath := cl.CfgFilePath()
+
+			var cfgFile client.CfgFile
+			if _, err := toml.DecodeFile(cfgPath, &cfgFile); err != nil {
+				return fmt.Errorf("unable to read config: %v", err)
+			}
+
+			cfg, ok := cfgFile.Profiles[oldName]
+			if !ok {
+				return fmt.Errorf("profile %q not found", oldName)
+			}
+			if _, exists := cfgFile.Profiles[newName]; exists {
+				return fmt.Errorf("profile %q already exists", newName)
+			}
+
+			delete(cfgFile.Profiles, oldName)
+			cfgFile.Profiles[newName] = cfg
+			if cfgFile.CurrentProfile == oldName {
+				cfgFile.CurrentProfile = newName
+			}
+
+			if err := writeCfgFile(cfgPath, cfgFile); err != nil {
+				return err
+			}
+			fmt.Fprintf(os.Stderr, "Renamed profile %q to %q\n", oldName, newName)
+			return nil
+		},
+	}
+}
+
+func deleteCommand(cl *client.Client) *cobra.Command {
+	return &cobra.Command{
+		Use:   "delete NAME",
+		Short: "Delete a profile",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			name := args[0]
+			cfgPath := cl.CfgFilePath()
+
+			var cfgFile client.CfgFile
+			if _, err := toml.DecodeFile(cfgPath, &cfgFile); err != nil {
+				return fmt.Errorf("unable to read config: %v", err)
+			}
+
+			if _, ok := cfgFile.Profiles[name]; !ok {
+				return fmt.Errorf("profile %q not found", name)
+			}
+
+			delete(cfgFile.Profiles, name)
+			if cfgFile.CurrentProfile == name {
+				cfgFile.CurrentProfile = ""
+			}
+
+			if err := writeCfgFile(cfgPath, cfgFile); err != nil {
+				return err
+			}
+			fmt.Fprintf(os.Stderr, "Deleted profile %q\n", name)
+			return nil
+		},
+	}
+}
+
+func configHelpText(cl *client.Client) string {
+	return `Manage connection profiles (use, list, create, dump, rename, delete).
+
+On your machine, kcl takes configuration options by default from:
 
   ` + cl.DefaultCfgPath() + `
 
@@ -70,286 +255,191 @@ semantics: KCL_CONFIG_DIR, KCL_CONFIG_FILE, and KCL_CONFIG_PATH. The first
 changes the directory searched, the middle changes the file name used, and the
 last overrides the former two (as a shortcut for setting both).
 
-The repeatable -X flag allows for specifying config options directly. Any flag
-set option has higher precedence over config file options.
 
-Options are described below, with examples being how they would look in a
-config.toml. Overrides generally look the same, but quotes can be dropped and
-arrays do not use brackets (-X foo=bar,baz).
+PRIORITY (highest wins)
 
-For overrides of an option in a nested section, lowercase and underscore-suffix
-any option you want to override. For example, tls_ca_cert_path overrides
-ca_cert_path in the tls section.
+  1. -B/--bootstrap-servers flag       (overrides seed_brokers only)
+  2. -X key=value flags                (repeatable; any config key)
+  3. KCL_<KEY> environment variables   (prefix configurable via --config-env-prefix)
+  4. Active profile ([profiles.NAME])  (selected by --profile/-C or current_profile)
+  5. Top-level config file keys        (flat layout)
+  6. Built-in defaults
 
-Environment variables can be set to override the config as well. Environment
-variables take middle priority (higher than the config file, lower than config
-file overrides from the -X flag). The default environment variable prefix is
-KCL_ but can be overridden with the --config-env-prefix flag.  Environment
-variable overrides operate similarly to the -X flag, but are all uppercase. For
-example, KCL_TLS_CA_CERT_PATH overrides ca_cert_path in the tls section.
-
-For tls specifically, one additional option exists for flags/environment
-variables: use_tls=true or KCL_USE_TLS with any value. This will opt in to
-using TLS without any additional options (ca cert, client certs, server name).
-This would be used if you are connecting to brokers that are using certs from
-well known CAs.
 
 OPTIONS
 
-  seed_brokers=["localhost", "127.0.0.1:9092"]
-     An inital set of brokers to use for connecting to your Kafka cluster.
+Top-level:
 
-  timeout_ms=1000
-     Timeout to use for any command that takes a timeout.
+  seed_brokers   list of "host:port" strings; default ["localhost:9092"]
+  broker_timeout Go duration sent to the broker in the wire TimeoutMs
+                 field of admin-write requests (CreateTopics, DeleteTopics,
+                 ElectLeaders, WriteTxnMarkers, etc.). Tells the broker how
+                 long it may work on the request before returning
+                 REQUEST_TIMED_OUT. Default 5s.
+  dial_timeout   Go duration bounding a single TCP dial attempt. Zero
+                 uses kgo's default (10s).
+  retry_timeout  Go duration bounding total client request + retries.
+                 Zero uses kgo's default (30s for most requests, 45s
+                 for group-session requests).
 
-The [tls] section
+Durations accept Go duration strings: "500ms", "5s", "1m", "2m30s".
 
-  ca_cert_path="/path/to/my/ca_pem.cert"
-     Path to a CA cert to load and use for connecting to brokers over TLS.
+The [tls] section: ca_cert_path, client_cert_path, client_key_path,
+server_name, min_version, cipher_suites, curve_preferences, insecure.
 
-  client_cert_path="/path/to/my/client_pem.cert"
-     Path to a client cert to load and use for connecting to brokers over TLS.
-     This must be paired with tls_client_key_path.
+The [sasl] section: method (plain, scram-sha-256, scram-sha-512,
+aws_msk_iam), zid, user, pass, is_token.
 
-  client_key_path="/path/to/my/client_pem.key"
-     Path to a client key to load and use for connecting to brokers over TLS.
-     This must be paired with tls_client_cert_path.
 
-  server_name="127.0.0.1"
-     Server name to use for connecting to brokers over TLS.
+TIMEOUT RELATIONSHIP
 
-  min_version="v1.2"
-     Minimum TLS version to use for negotiating. The default is v1.2.
-     This accepts v1.0 through v1.3, with or without the v prefix.
+  dial_timeout   - caller-side, per TCP dial attempt.
+  retry_timeout  - client-side; gates whether to START a retry, NOT a wall
+                   clock budget for the whole operation. An in-flight attempt
+                   is not cancelled when retry_timeout elapses.
+  broker_timeout - sent to broker; enforced server-side, only on requests
+                   that carry a TimeoutMs wire field.
 
-  cipher_suites="tls_ecdhe_ecdsa_with_aes_256_gcm_sha384, RSA_WITH_AES_128_GCM_SHA256"
-     Comma delimited cipher suites to use for negotiating, overriding the
-     golang default. Underscores and dots can be anywhere, and the names
-     can be upper or lowercase and can optionally have a TLS_ prefix.
-     The names are taken from Go's crypto/tls constants, which can be
-     seen here: https://golang.org/pkg/crypto/tls/#pkg-constants.
+Recommended ordering:
 
-  curve_preferences="x25519"
-     Comma delimited curve preferences to use for negotiating, overriding the
-     golang default. Underscores and dots can be anywhere, and the names can be
-     upper or lowercase.
-     The names are taken from Go's crypto/tls CurveID constants, which can be
-     seen here: https://golang.org/pkg/crypto/tls/#CurveID
+  dial_timeout <= broker_timeout <= retry_timeout
 
-The [sasl] section
+If broker_timeout > retry_timeout, a broker reply that takes the full
+broker_timeout still returns successfully; retry_timeout is only consulted
+if that attempt ERRORS. Worst-case total wall time when a retry fires can
+reach ~2 * broker_timeout (first attempt runs to broker_timeout, errors,
+kgo checks retry_timeout and retries if still within budget, second attempt
+then runs to its own broker_timeout). If dial_timeout >= retry_timeout,
+retries are useless because a single failed dial already consumed the
+retry budget.
 
-  method="scram_sha_256"
-     SASL method to use. Must be paired with sasl_user and sasl_pass. Possible
-     values are "plain", "scram-sha-256", "scram-sha-512", or "aws_msk_iam".
-     Dashes and underscores are stripped, and what remains is lowercased.
 
-  zid="zid"
-  user="user"
-  pass="pass"
-     SASL authzid (always optional), user, and pass.
+EXAMPLES
 
-     Note that these options are not relevant for AWS_MSK_IAM authentication,
-     as that auth flow uses ~/.aws/credentials or environment variables.
+Fast-fail for CI:
 
-  is_token=false
-     Specifies that the sasl user and pass came from a delegation token.
-     This is only relevant for scram methods.
+  [profiles.cicd]
+  seed_brokers   = ["kafka-staging:9092"]
+  dial_timeout   = "2s"
+  broker_timeout = "5s"
+  retry_timeout  = "5s"
+
+Patient debugging:
+
+  [profiles.debug]
+  seed_brokers   = ["localhost:9092"]
+  broker_timeout = "60s"
+  dial_timeout   = "10s"
+  retry_timeout  = "90s"
+
+One-off overrides:
+
+  kcl -X dial_timeout=2s -B prod:9092 topic list
+  kcl -B host1:9092,host2:9092 topic list   # same as -X seed_brokers=host1:9092,host2:9092
 `
-	return &cobra.Command{
-		Use:   "help",
-		Short: "describe kcl config file options",
-		Args:  cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
-			fmt.Println(configHelp)
-		},
-	}
 }
 
+func profileNames(cfgFile client.CfgFile) []string {
+	names := make([]string, 0, len(cfgFile.Profiles))
+	for n := range cfgFile.Profiles {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func writeCfgFile(path string, cfgFile client.CfgFile) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("unable to write config: %v", err)
+	}
+	defer f.Close()
+	if err := toml.NewEncoder(f).Encode(cfgFile); err != nil {
+		return fmt.Errorf("unable to encode config: %v", err)
+	}
+	return nil
+}
+
+// linkCommand is the legacy symlink-based context switching.
 func linkCommand(cl *client.Client) *cobra.Command {
 	dir := filepath.Dir(cl.DefaultCfgPath())
-
 	return &cobra.Command{
-		Use:     "link NAME",
-		Aliases: []string{"use"},
-
-		Short: "Link a config in " + dir + " to " + cl.DefaultCfgPath(),
-		Long: `Link a config in ` + dir + ` to ` + cl.DefaultCfgPath() + `.
-
-This command allows you to easily swap kcl configs. It will look for any file
-NAME or NAME.toml (favoring .toml) in the config directory and link it to the
-default config path.
-`,
-		ValidArgsFunction: func(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
-			defaultCfg := filepath.Base(cl.DefaultCfgPath())
-			dir := filepath.Dir(cl.DefaultCfgPath())
-			dirents, err := os.ReadDir(dir)
-			if err != nil {
-				return nil, cobra.ShellCompDirectiveError
-			}
-			files := []string{}
-			for _, dirent := range dirents {
-				name := dirent.Name()
-				if name == defaultCfg {
-					continue
-				}
-				files = append(files, name)
-			}
-			return files, cobra.ShellCompDirectiveDefault
-		},
-		Args: cobra.ExactArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
+		Use:        "link NAME",
+		Short:      "Link a config file (deprecated: use 'profile use')",
+		Deprecated: "use 'kcl profile use' instead",
+		Hidden:     true,
+		Args:       cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
 			if cl.DefaultCfgPath() == "" {
-				out.Die("cannot link config; unable to determine home dir")
+				return fmt.Errorf("cannot link config; unable to determine home dir")
 			}
-
 			existing, err := os.Lstat(cl.DefaultCfgPath())
 			if err != nil {
 				if !os.IsNotExist(err) {
-					out.Die("stat err for existing config path %q: %v", cl.DefaultCfgPath(), err)
+					return fmt.Errorf("stat err for existing config path %q: %v", cl.DefaultCfgPath(), err)
 				}
-				// not exists: we can create symlink
-			} else {
-				if existing.Mode()&os.ModeSymlink == 0 {
-					out.Die("stat shows that existing config at %q is not a symlink", cl.DefaultCfgPath())
-				}
+			} else if existing.Mode()&os.ModeSymlink == 0 {
+				return fmt.Errorf("existing config at %q is not a symlink", cl.DefaultCfgPath())
 			}
-
 			dirents, err := os.ReadDir(dir)
-			out.MaybeDie(err, "unable to read config dir %q: %v", dir, err)
-
+			if err != nil {
+				return fmt.Errorf("unable to read config dir %q: %v", dir, err)
+			}
 			use := args[0]
 			exact := strings.HasSuffix(use, ".toml")
 			found := false
-			for _, dirent := range dirents {
-				if exact && dirent.Name() == use {
+			for _, d := range dirents {
+				if exact && d.Name() == use {
 					found = true
 					break
 				}
-
-				// With inexact matching, we favor
-				// foo.toml over foo if both exist.
-				noExt := strings.TrimSuffix(dirent.Name(), ".toml")
-				if noExt == use {
+				if strings.TrimSuffix(d.Name(), ".toml") == use {
 					found = true
-					if len(dirent.Name()) > len(use) {
-						use = dirent.Name()
+					if len(d.Name()) > len(use) {
+						use = d.Name()
 					}
 				}
 			}
-
 			if !found {
-				out.Die("could not find requested config %q", args[0])
+				return fmt.Errorf("could not find requested config %q", args[0])
 			}
-
 			if existing != nil {
-				if err := os.Remove(cl.DefaultCfgPath()); err != nil {
-					out.Die("unable to remove old symlink at %q: %v", cl.DefaultCfgPath(), err)
-				}
+				os.Remove(cl.DefaultCfgPath())
 			}
-
 			src := filepath.Join(dir, use)
 			if err := os.Symlink(src, cl.DefaultCfgPath()); err != nil {
-				out.Die("unable to create symlink from %q to %q: %v", src, cl.DefaultCfgPath(), err)
+				return fmt.Errorf("unable to symlink: %v", err)
 			}
-
-			fmt.Printf("linked %q to %q\n", src, cl.DefaultCfgPath())
+			fmt.Fprintf(os.Stderr, "linked %q to %q\n", src, cl.DefaultCfgPath())
+			return nil
 		},
 	}
 }
 
 func unlinkCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
-		Use:     "unlink",
-		Aliases: []string{"clear"},
-		Short:   "Remove " + cl.DefaultCfgPath() + " if it is a symlink",
-		Args:    cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
-			if cl.DefaultCfgPath() == "" {
-				out.Die("cannot use a config; unable to determine config dir")
-			}
-
+		Use:        "unlink",
+		Short:      "Remove config symlink (deprecated: use 'profile use')",
+		Deprecated: "use 'kcl profile use' instead",
+		Hidden:     true,
+		Args:       cobra.ExactArgs(0),
+		RunE: func(_ *cobra.Command, _ []string) error {
 			existing, err := os.Lstat(cl.DefaultCfgPath())
 			if err != nil {
-				if !os.IsNotExist(err) {
-					out.Die("stat err for existing config path %q: %v", cl.DefaultCfgPath(), err)
+				if os.IsNotExist(err) {
+					fmt.Fprintf(os.Stderr, "no symlink found at %q\n", cl.DefaultCfgPath())
+					return nil
 				}
-				fmt.Printf("no symlink found at %q\n", cl.DefaultCfgPath())
-				return
+				return fmt.Errorf("stat err: %v", err)
 			}
-
 			if existing.Mode()&os.ModeSymlink == 0 {
-				out.Die("stat shows that existing config at %q is not a symlink", cl.DefaultCfgPath())
+				return fmt.Errorf("existing config at %q is not a symlink", cl.DefaultCfgPath())
 			}
-
 			if err := os.Remove(cl.DefaultCfgPath()); err != nil {
-				out.Die("unable to remove symlink at %q: %v", cl.DefaultCfgPath(), err)
+				return fmt.Errorf("unable to remove symlink: %v", err)
 			}
-			fmt.Printf("unlinked config symlink %q\n", cl.DefaultCfgPath())
-		},
-	}
-}
-
-func listCommand(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
-		Use:     "list",
-		Aliases: []string{"ls"},
-		Short:   "List all files in configuration directory" + cl.DefaultCfgPath(),
-		Args:    cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
-
-			defaultBase := filepath.Base(cl.DefaultCfgPath())
-
-			var (
-				defaultIsSymlink bool
-				symlinkTarget    string
-			)
-			func() {
-				existing, err := os.Lstat(cl.DefaultCfgPath())
-				if err != nil {
-					return // default config path does not exist
-				}
-				if existing.Mode()&os.ModeSymlink == 0 {
-					return // not a symlink
-				}
-				defaultIsSymlink = true
-
-				target, err := os.Readlink(cl.DefaultCfgPath())
-				if err != nil {
-					return // broken symlink
-				}
-				symlinkTarget = target
-
-				// If the symlink target is within our config dir,
-				// drop the config dir path.
-				if target == filepath.Join(filepath.Dir(cl.DefaultCfgPath()), filepath.Base(target)) {
-					symlinkTarget = filepath.Base(target)
-				}
-			}()
-
-			if defaultIsSymlink {
-				fmt.Println("*" + defaultBase + "@")
-			}
-
-			dir := filepath.Dir(cl.DefaultCfgPath())
-			dirents, err := os.ReadDir(dir)
-			out.MaybeDie(err, "unable to read config dir %q: %v", dir, err)
-			for _, dirent := range dirents {
-				name := dirent.Name()
-				if name == defaultBase {
-					// If the default is a symlink, we
-					// print expanded information above.
-					if defaultIsSymlink {
-						continue
-					}
-					fmt.Println("*" + defaultBase)
-					continue
-				}
-				if defaultIsSymlink && name == symlinkTarget {
-					fmt.Println("**" + name)
-					continue
-				}
-				fmt.Println(name)
-			}
+			fmt.Fprintf(os.Stderr, "unlinked config symlink %q\n", cl.DefaultCfgPath())
+			return nil
 		},
 	}
 }

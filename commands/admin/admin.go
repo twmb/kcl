@@ -3,12 +3,8 @@ package admin
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
-	"regexp"
-	"strconv"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -20,9 +16,11 @@ import (
 	"github.com/twmb/kcl/commands/admin/clientquotas"
 	"github.com/twmb/kcl/commands/admin/configs"
 	"github.com/twmb/kcl/commands/admin/dtoken"
+	"github.com/twmb/kcl/commands/admin/features"
 	"github.com/twmb/kcl/commands/admin/group"
 	"github.com/twmb/kcl/commands/admin/logdirs"
 	"github.com/twmb/kcl/commands/admin/partas"
+	"github.com/twmb/kcl/commands/admin/sharegroup"
 	"github.com/twmb/kcl/commands/admin/topic"
 	"github.com/twmb/kcl/commands/admin/txn"
 	"github.com/twmb/kcl/commands/admin/userscram"
@@ -32,23 +30,28 @@ import (
 
 func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "admin",
-		Aliases: []string{"adm", "a"},
-		Short:   "Admin utility commands.",
+		Use:        "admin",
+		Aliases:    []string{"adm", "a"},
+		Short:      "Admin utility commands.",
+		Deprecated: "use top-level commands instead (e.g., 'kcl group list' instead of 'kcl admin group list')",
+		Hidden:     true,
 	}
 
 	cmd.AddCommand(
-		deleteRecordsCommand(cl),
-		electLeaderCommand(cl),
+		ElectLeadersCommand(cl),
+		DescribeClusterCommand(cl),
+		DescribeQuorumCommand(cl),
 
 		acl.Command(cl),
 		clientquotas.Command(cl),
 		configs.Command(cl),
 		dtoken.Command(cl),
+		features.Command(cl),
 		group.Command(cl),
 		topic.Command(cl),
 		logdirs.Command(cl),
 		partas.Command(cl),
+		sharegroup.Command(cl),
 		userscram.Command(cl),
 		txn.Command(cl),
 	)
@@ -56,10 +59,10 @@ func Command(cl *client.Client) *cobra.Command {
 	return cmd
 }
 
-func electLeaderCommand(cl *client.Client) *cobra.Command {
+func ElectLeadersCommand(cl *client.Client) *cobra.Command {
 	var allPartitions bool
 	var unclean bool
-	var run bool
+	var dryRun bool
 
 	cmd := &cobra.Command{
 		Use:   "elect-leaders",
@@ -73,14 +76,20 @@ pass any topic flags, and you must use the --all-partitions flag.
 The format for triggering topic partitions is "foo:1,2,3", where foo is a
 topic and 1,2,3 are partition numbers.
 
-To avoid accidental triggers, this command requires a --run flag to run.
+Use --dry-run to preview without applying.
 `,
-		Example: "elect-leaders --run foo:1,2,3 bar:9",
-		Run: func(_ *cobra.Command, topicParts []string) {
+		Example: "elect-leaders foo:1,2,3 bar:9",
+		RunE: func(_ *cobra.Command, topicParts []string) error {
 			tps, err := flagutil.ParseTopicPartitions(topicParts)
-			out.MaybeDie(err, "unable to parse topic partitions: %v", err)
-			if !run {
-				out.Die("use --run to actually run this command")
+			if err != nil {
+				return fmt.Errorf("unable to parse topic partitions: %v", err)
+			}
+			if dryRun {
+				fmt.Fprintln(os.Stderr, "Dry run: would elect leaders for the following partitions:")
+				for topic, parts := range tps {
+					fmt.Fprintf(os.Stderr, "  %s: %v\n", topic, parts)
+				}
+				return nil
 			}
 
 			req := &kmsg.ElectLeadersRequest{
@@ -94,7 +103,7 @@ To avoid accidental triggers, this command requires a --run flag to run.
 			if allPartitions {
 				topics = nil
 			} else if len(topics) == 0 {
-				out.Die("no topics requested for leader election, and not triggering all; nothing to do")
+				return fmt.Errorf("no topics requested for leader election, and not triggering all; nothing to do")
 			}
 
 			for topic, partitions := range tps {
@@ -105,19 +114,17 @@ To avoid accidental triggers, this command requires a --run flag to run.
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to elect leaders: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
+			if err != nil {
+				return fmt.Errorf("unable to elect leaders: %v", err)
 			}
 
 			resp := kresp.(*kmsg.ElectLeadersResponse)
 			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-				out.Die("%v", err)
+				return fmt.Errorf("%v", err)
 			}
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
+			table := out.NewFormattedTable(cl.Format(), "cluster.elect-leaders", 1, "results",
+				"TOPIC", "PARTITION", "ERROR", "MESSAGE")
 			for _, topic := range resp.Topics {
 				for _, partition := range topic.Partitions {
 					errKind := ""
@@ -128,171 +135,282 @@ To avoid accidental triggers, this command requires a --run flag to run.
 					if partition.ErrorMessage != nil {
 						msg = *partition.ErrorMessage
 					}
-					fmt.Fprintf(tw, "%s\t%d\t%v\t%s\n",
-						topic.Topic,
-						partition.Partition,
-						errKind,
-						msg,
-					)
+					table.Row(topic.Topic, partition.Partition, errKind, msg)
 				}
 			}
+			table.Flush()
+			return nil
 		},
 	}
 
 	cmd.Flags().BoolVar(&allPartitions, "all-partitions", false, "trigger leader election on all topics for all partitions")
 	cmd.Flags().BoolVar(&unclean, "unclean", false, "allow unclean leader election (Kafka 2.4.0+)")
-	cmd.Flags().BoolVar(&run, "run", false, "actually run the command (avoids accidental elections without this flag)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview which partitions would have leaders elected without applying")
 
 	return cmd
 }
 
-func deleteRecordsCommand(cl *client.Client) *cobra.Command {
-	var jsonFile string
+func DescribeClusterCommand(cl *client.Client) *cobra.Command {
+	var includeAuthorizedOps bool
+	var section string
 
 	cmd := &cobra.Command{
-		Use:   "delete-records",
-		Short: "Delete records for topics.",
-		Long: `Delete records for topics (Kafka 0.11.0+).
+		Use:   "describe-cluster",
+		Short: "Describe the Kafka cluster (Kafka 3.0+).",
+		Long: `Describe the Kafka cluster (Kafka 3.0+).
 
-Normally, Kafka records are deleted based off time or log file size. Sometimes,
-that does not play well with processing. To address this limitation, Kafka
-added record deleting in 0.11.0.
-
-Deleting records works by deleting all segments whose end offsets are earlier
-than the requested delete offset, and then disallowing reads earlier than the
-requested start offset in a delete request.
-
-This function works either by reading file of record offsets to delete or by
-parsing the passed args. The arg format is topic:p#,o# (hopefully obvious).
-The file format is as follows:
-
-  [
-    {
-      "topic": "string",
-      "partition": int32,
-      "offset": int64
-    },
-    ...
-  ]
-
-It is possible to use both args and the file.
-
-Record deletion works on a fan out basis: each broker containing partitions for
-record deletion needs to be issued a request. This does that appropriately.
+This command prints the cluster ID, controller ID, and a table of all brokers
+in the cluster.
 `,
-
-		Example: `delete-records foo:p0,o120 foo:p1,o3888
-		
-delete-records --json-file records.json`,
-
-		Run: func(_ *cobra.Command, args []string) {
-			tpos, err := parseTopicPartitionOffsets(args)
-			out.MaybeDie(err, "unable to parse topic partition offsets: %v", err)
-
-			if jsonFile != "" {
-				type fileReq struct {
-					Topic     string `json:"topic"`
-					Partition int32  `json:"partition"`
-					Offset    int64  `json:"offset"`
-				}
-				var fileReqs []fileReq
-				raw, err := os.ReadFile(jsonFile)
-				out.MaybeDie(err, "unable to read json file: %v", err)
-				err = json.Unmarshal(raw, &fileReqs)
-				out.MaybeDie(err, "unable to unmarshal json file: %v", err)
-				for _, fileReq := range fileReqs {
-					tpos[fileReq.Topic] = append(tpos[fileReq.Topic], partitionOffset{fileReq.Partition, fileReq.Offset})
-				}
+		Args: cobra.ExactArgs(0),
+		RunE: func(_ *cobra.Command, _ []string) error {
+			// Validate --section.
+			switch section {
+			case "", "cluster", "brokers":
+			default:
+				return out.Errf(out.ExitUsage, "invalid --section %q: must be cluster or brokers", section)
 			}
 
-			if len(tpos) == 0 {
-				out.Die("no records requested for deletion")
+			showCluster := section == "" || section == "cluster"
+			showBrokers := section == "" || section == "brokers"
+
+			req := kmsg.NewPtrDescribeClusterRequest()
+			req.IncludeClusterAuthorizedOperations = includeAuthorizedOps
+
+			kresp, err := cl.Client().Request(context.Background(), req)
+			if err != nil {
+				return fmt.Errorf("unable to describe cluster: %v", err)
 			}
 
-			// Create and fire off a bunch of concurrent requests...
-			type respErr struct {
-				broker int32
-				resp   kmsg.Response
-				err    error
-			}
-			req := &kmsg.DeleteRecordsRequest{
-				TimeoutMillis: cl.TimeoutMillis(),
-			}
-			for topic, partitionOffsets := range tpos {
-				reqTopic := kmsg.DeleteRecordsRequestTopic{
-					Topic: topic,
+			resp := kresp.(*kmsg.DescribeClusterResponse)
+			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+				if cl.Format() == "json" {
+					msg := err.Error()
+					if resp.ErrorMessage != nil {
+						msg += ": " + *resp.ErrorMessage
+					}
+					out.DieJSON("cluster.describe", err.Error(), msg)
 				}
-				for _, partitionOffset := range partitionOffsets {
-					reqTopic.Partitions = append(reqTopic.Partitions, kmsg.DeleteRecordsRequestTopicPartition{
-						Partition: partitionOffset.partition,
-						Offset:    partitionOffset.offset,
-					})
+				additional := ""
+				if resp.ErrorMessage != nil {
+					additional = ": " + *resp.ErrorMessage
 				}
-				req.Topics = append(req.Topics, reqTopic)
+				return fmt.Errorf("%s%s", err, additional)
 			}
 
-			brokerResps := cl.Client().RequestSharded(context.Background(), req)
-
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
-			for _, brokerResp := range brokerResps {
-				fmt.Fprintf(tw, "BROKER\tTOPIC\tPARTITION\tNEW LOW WATERMARK\tERROR\n")
-
-				kresp, err := brokerResp.Resp, brokerResp.Err
-				if err != nil {
-					fmt.Fprintf(tw, "%d\t\t\t\t%s\n",
-						brokerResp.Meta.NodeID, fmt.Sprintf("unable to issue request: %s", err.Error()))
-					continue
+			switch cl.Format() {
+			case "json":
+				type brokerJSON struct {
+					ID   int32  `json:"id"`
+					Host string `json:"host"`
+					Port int32  `json:"port"`
+					Rack string `json:"rack,omitempty"`
 				}
-
-				resp := kresp.(*kmsg.DeleteRecordsResponse)
-
-				for _, topic := range resp.Topics {
-					for _, partition := range topic.Partitions {
-						msg := "OK"
-						if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
-							msg = err.Error()
-						}
-						fmt.Fprintf(tw, "%d\t%s\t%d\t%d\t%s\n",
-							brokerResp.Meta.NodeID, topic.Topic, partition.Partition, partition.LowWatermark, msg)
+				brokers := make([]brokerJSON, len(resp.Brokers))
+				for i, b := range resp.Brokers {
+					brokers[i] = brokerJSON{ID: b.NodeID, Host: b.Host, Port: b.Port}
+					if b.Rack != nil {
+						brokers[i].Rack = *b.Rack
 					}
 				}
+				fields := map[string]any{
+					"cluster_id":    resp.ClusterID,
+					"controller_id": resp.ControllerID,
+					"brokers":       brokers,
+				}
+				if includeAuthorizedOps {
+					fields["authorized_operations"] = resp.ClusterAuthorizedOperations
+				}
+				out.MarshalJSON("cluster.describe", 1, fields)
+
+			case "awk":
+				awkSection := section
+				if awkSection == "" {
+					awkSection = "brokers"
+				}
+				switch awkSection {
+				case "cluster":
+					fmt.Printf("%s\t%d\n", resp.ClusterID, resp.ControllerID)
+				case "brokers":
+					for _, broker := range resp.Brokers {
+						var rack string
+						if broker.Rack != nil {
+							rack = *broker.Rack
+						}
+						fmt.Printf("%d\t%s\t%d\t%s\n", broker.NodeID, broker.Host, broker.Port, rack)
+					}
+				}
+
+			default:
+				if showCluster {
+					fmt.Printf("CLUSTER ID: %s\n", resp.ClusterID)
+					fmt.Printf("CONTROLLER: %d\n", resp.ControllerID)
+					if includeAuthorizedOps {
+						fmt.Printf("AUTHORIZED OPS: %d\n", resp.ClusterAuthorizedOperations)
+					}
+				}
+
+				if showBrokers {
+					if showCluster {
+						fmt.Println()
+					}
+					tw := out.BeginTabWrite()
+					fmt.Fprintf(tw, "ID\tHOST\tPORT\tRACK\n")
+					for _, broker := range resp.Brokers {
+						var rack string
+						if broker.Rack != nil {
+							rack = *broker.Rack
+						}
+						fmt.Fprintf(tw, "%d\t%s\t%d\t%s\n", broker.NodeID, broker.Host, broker.Port, rack)
+					}
+					tw.Flush()
+				}
 			}
+			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&jsonFile, "json-file", "", "if non-empty, a json file to read deletions from")
-
+	cmd.Flags().StringVar(&section, "section", "", "output section (cluster, brokers; default: all for text, brokers for awk)")
+	cmd.Flags().BoolVar(&includeAuthorizedOps, "include-authorized-ops", false, "include cluster authorized operations in the response")
 	return cmd
 }
 
-type partitionOffset struct {
-	partition int32
-	offset    int64
-}
+func DescribeQuorumCommand(cl *client.Client) *cobra.Command {
+	var section string
 
-func parseTopicPartitionOffsets(list []string) (map[string][]partitionOffset, error) {
-	rePo := regexp.MustCompile(`^p(\d+),o(-?\d+)$`)
+	cmd := &cobra.Command{
+		Use:   "describe-quorum",
+		Short: "Describe the KRaft quorum (Kafka 3.0+).",
+		Long: `Describe the KRaft quorum (Kafka 3.0+).
 
-	tpos := make(map[string][]partitionOffset)
-	for _, item := range list {
-		split := strings.SplitN(item, ":", 2)
-		if len(split[0]) == 0 {
-			return nil, fmt.Errorf("item %q invalid empty topic", item)
-		}
-		if len(split) == 1 {
-			return nil, fmt.Errorf("item %q invalid empty partition offsets", item)
-		}
+This command describes the quorum status for the __cluster_metadata partition,
+including the leader, epoch, high watermark, and information about voters
+and observers.
+`,
+		Args: cobra.ExactArgs(0),
+		RunE: func(_ *cobra.Command, _ []string) error {
+			// Validate --section.
+			switch section {
+			case "", "voters", "observers":
+			default:
+				return out.Errf(out.ExitUsage, "invalid --section %q: must be voters or observers", section)
+			}
 
-		matches := rePo.FindStringSubmatch(split[1])
-		if len(matches) == 0 {
-			return nil, fmt.Errorf("item %q partition offset %q does not match p(\\d+)o(-?\\d+)", item, split[1])
-		}
-		partition, _ := strconv.Atoi(matches[1])
-		offset, _ := strconv.Atoi(matches[2])
+			showVoters := section == "" || section == "voters"
+			showObservers := section == "" || section == "observers"
 
-		tpos[split[0]] = append(tpos[split[0]], partitionOffset{int32(partition), int64(offset)})
+			req := kmsg.NewPtrDescribeQuorumRequest()
+			req.Topics = []kmsg.DescribeQuorumRequestTopic{{
+				Topic:      "__cluster_metadata",
+				Partitions: []kmsg.DescribeQuorumRequestTopicPartition{{Partition: 0}},
+			}}
+
+			kresp, err := cl.Client().Request(context.Background(), req)
+			if err != nil {
+				return fmt.Errorf("unable to describe quorum: %v", err)
+			}
+
+			resp := kresp.(*kmsg.DescribeQuorumResponse)
+			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+				additional := ""
+				if resp.ErrorMessage != nil {
+					additional = ": " + *resp.ErrorMessage
+				}
+				return fmt.Errorf("%s%s", err, additional)
+			}
+
+			switch cl.Format() {
+			case "json":
+				type replicaJSON struct {
+					ReplicaID             int32 `json:"replica_id"`
+					LogEndOffset          int64 `json:"log_end_offset"`
+					LastFetchTimestamp    int64 `json:"last_fetch_timestamp"`
+					LastCaughtUpTimestamp int64 `json:"last_caught_up_timestamp"`
+				}
+				type partJSON struct {
+					Topic         string        `json:"topic"`
+					Partition     int32         `json:"partition"`
+					Leader        int32         `json:"leader"`
+					LeaderEpoch   int32         `json:"leader_epoch"`
+					HighWatermark int64         `json:"high_watermark"`
+					Voters        []replicaJSON `json:"voters,omitempty"`
+					Observers     []replicaJSON `json:"observers,omitempty"`
+				}
+				var parts []partJSON
+				for _, topic := range resp.Topics {
+					for _, p := range topic.Partitions {
+						pj := partJSON{
+							Topic: topic.Topic, Partition: p.Partition,
+							Leader: p.LeaderID, LeaderEpoch: p.LeaderEpoch,
+							HighWatermark: p.HighWatermark,
+						}
+						for _, v := range p.CurrentVoters {
+							pj.Voters = append(pj.Voters, replicaJSON{v.ReplicaID, v.LogEndOffset, v.LastFetchTimestamp, v.LastCaughtUpTimestamp})
+						}
+						for _, o := range p.Observers {
+							pj.Observers = append(pj.Observers, replicaJSON{o.ReplicaID, o.LogEndOffset, o.LastFetchTimestamp, o.LastCaughtUpTimestamp})
+						}
+						parts = append(parts, pj)
+					}
+				}
+				out.MarshalJSON("cluster.describe-quorum", 1, map[string]any{"partitions": parts})
+
+			case "awk":
+				for _, topic := range resp.Topics {
+					for _, p := range topic.Partitions {
+						if showVoters {
+							for _, v := range p.CurrentVoters {
+								fmt.Printf("%s\t%d\tvoter\t%d\t%d\t%d\t%d\n", topic.Topic, p.Partition, v.ReplicaID, v.LogEndOffset, v.LastFetchTimestamp, v.LastCaughtUpTimestamp)
+							}
+						}
+						if showObservers {
+							for _, o := range p.Observers {
+								fmt.Printf("%s\t%d\tobserver\t%d\t%d\t%d\t%d\n", topic.Topic, p.Partition, o.ReplicaID, o.LogEndOffset, o.LastFetchTimestamp, o.LastCaughtUpTimestamp)
+							}
+						}
+					}
+				}
+
+			default:
+				for _, topic := range resp.Topics {
+					for _, p := range topic.Partitions {
+						if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
+							fmt.Printf("%s partition %d: %v\n", topic.Topic, p.Partition, err)
+							continue
+						}
+						fmt.Printf("%s partition %d: leader %d, epoch %d, high-watermark %d\n",
+							topic.Topic, p.Partition, p.LeaderID, p.LeaderEpoch, p.HighWatermark)
+
+						if showVoters && len(p.CurrentVoters) > 0 {
+							fmt.Println()
+							fmt.Println("VOTERS:")
+							tw := out.BeginTabWrite()
+							fmt.Fprintf(tw, "  REPLICA\tLOG-END-OFFSET\tLAST-FETCH-TIMESTAMP\tLAST-CAUGHT-UP-TIMESTAMP\n")
+							for _, v := range p.CurrentVoters {
+								fmt.Fprintf(tw, "  %d\t%d\t%d\t%d\n",
+									v.ReplicaID, v.LogEndOffset, v.LastFetchTimestamp, v.LastCaughtUpTimestamp)
+							}
+							tw.Flush()
+						}
+
+						if showObservers && len(p.Observers) > 0 {
+							fmt.Println()
+							fmt.Println("OBSERVERS:")
+							tw := out.BeginTabWrite()
+							fmt.Fprintf(tw, "  REPLICA\tLOG-END-OFFSET\tLAST-FETCH-TIMESTAMP\tLAST-CAUGHT-UP-TIMESTAMP\n")
+							for _, o := range p.Observers {
+								fmt.Fprintf(tw, "  %d\t%d\t%d\t%d\n",
+									o.ReplicaID, o.LogEndOffset, o.LastFetchTimestamp, o.LastCaughtUpTimestamp)
+							}
+							tw.Flush()
+						}
+					}
+				}
+			}
+			return nil
+		},
 	}
-	return tpos, nil
+
+	cmd.Flags().StringVar(&section, "section", "", "output section (voters, observers; default: all)")
+	return cmd
 }

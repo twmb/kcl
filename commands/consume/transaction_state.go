@@ -88,6 +88,12 @@ func (co *consumeOutput) formatTransactionStateV0(dst []byte, r *kgo.Record) ([]
 
 		fmt.Fprintf(tw, "\tLastUpdateTimestamp\t%d\n", v.LastUpdateTimestamp)
 		fmt.Fprintf(tw, "\tStartTimestamp\t%d\n", v.StartTimestamp)
+		if v.Version >= 1 {
+			fmt.Fprintf(tw, "\tPreviousProducerID\t%d\n", v.PreviousProducerID)
+			fmt.Fprintf(tw, "\tNextProducerID\t%d\n", v.NextProducerID)
+			fmt.Fprintf(tw, "\tNextProducerEpoch\t%d\n", v.NextProducerEpoch)
+			fmt.Fprintf(tw, "\tClientTransactionVersion\t%d\n", v.ClientTransactionVersion)
+		}
 		tw.Flush()
 
 		return w.Bytes(), true

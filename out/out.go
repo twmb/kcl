@@ -1,15 +1,13 @@
-// Package out contains simple functions to print messages out and maybe die.
+// Package out contains output formatting and error handling for kcl commands.
 package out
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 	"text/tabwriter"
-
-	"github.com/twmb/franz-go/pkg/kerr"
 )
 
 // BeginTabWrite returns a new tabwriter that prints to stdout.
@@ -22,72 +20,81 @@ func BeginTabWriteTo(w io.Writer) *tabwriter.Writer {
 	return tabwriter.NewWriter(w, 6, 4, 2, ' ', 0)
 }
 
-// Exit calls os.Exit(1).
-func Exit() {
-	os.Exit(1)
+// Standard exit codes.
+const (
+	ExitOK    = 0 // success
+	ExitError = 1 // general / Kafka-level error
+	ExitUsage = 2 // invalid usage (bad flags, args, parse errors)
+)
+
+// ExitError is an error with a specific exit code. Commands should return
+// these to indicate non-default exit codes.
+type ExitCodeError struct {
+	Code int
+	Err  error
+}
+
+func (e *ExitCodeError) Error() string { return e.Err.Error() }
+func (e *ExitCodeError) Unwrap() error { return e.Err }
+
+// Errf returns an error that, when handled by HandleError, exits with the
+// given code.
+func Errf(code int, format string, args ...any) error {
+	return &ExitCodeError{Code: code, Err: fmt.Errorf(format, args...)}
+}
+
+// ErrSilent is a sentinel error that causes HandleError to exit non-zero
+// without printing anything. Commands return this when they have already
+// written per-item errors to stderr and just need a non-zero exit code
+// so callers (shells, LLMs, CI) can detect failure.
+var ErrSilent = &ExitCodeError{Code: ExitError, Err: errors.New("")}
+
+// HandleError formats an error for output and calls os.Exit. If format is
+// "json", the error is written as JSON to stdout. Otherwise it is written
+// as plain text to stderr. The exit code is extracted from ExitCodeError
+// if present, otherwise defaults to 1. ErrSilent exits non-zero without
+// printing anything.
+func HandleError(err error, format string) {
+	code := ExitError
+	var ce *ExitCodeError
+	if errors.As(err, &ce) {
+		code = ce.Code
+	}
+	if err == ErrSilent {
+		os.Exit(code)
+	}
+	if format == FormatJSON {
+		writeJSON(map[string]any{
+			"error": err.Error(),
+			"code":  code,
+		})
+	} else {
+		fmt.Fprintln(os.Stderr, err)
+	}
+	os.Exit(code)
 }
 
 // MaybeDie, if err is non-nil, prints the message and exits with 1.
-func MaybeDie(err error, msg string, args ...interface{}) {
+//
+// Deprecated: Commands should return errors instead. This remains for use
+// in goroutines and callbacks where returning an error is not possible.
+func MaybeDie(err error, msg string, args ...any) {
 	if err != nil {
 		Die(msg, args...)
 	}
 }
 
 // Die prints a message to stderr and exits with 1.
-func Die(msg string, args ...interface{}) {
-	fmt.Fprintf(os.Stderr, msg+"\n", args...)
-	os.Exit(1)
-}
-
-// ExitErrJSON prints a message to stderr, dumps json to stdout, and exits with 1.
-func ExitErrJSON(j interface{}, msg string, args ...interface{}) {
-	fmt.Fprintf(os.Stderr, msg+"\n", args...)
-	DumpJSON(j)
-	os.Exit(1)
-}
-
-// ExitJSON dumps json to stdout and exits with 0.
-func ExitJSON(j interface{}) {
-	DumpJSON(j)
-	os.Exit(0)
-}
-
-// DumpJSON prints json to stderr. This exits with 1 if the input is unmarshalable.
-func DumpJSON(j interface{}) {
-	out, err := json.MarshalIndent(j, "", "  ")
-	MaybeDie(err, "unable to json marshal response: %v", err)
-	fmt.Printf("%s\n", out)
-}
-
-// ErrAndMsg prints OK to stdout if code is 0, otherwise the error name to
-// stderr as well as a message if non-nil.
 //
-// This returns true if the code was an error.
-func ErrAndMsg(code int16, msg *string) bool {
-	if err := kerr.ErrorForCode(code); err != nil {
-		additional := ""
-		if msg != nil {
-			additional = ": " + *msg
-		}
-		fmt.Fprintf(os.Stderr, "%s%s\n", err, additional)
-		return true
-	}
-	fmt.Println("OK")
-	return false
+// Deprecated: Commands should return errors instead. This remains for use
+// in goroutines and callbacks where returning an error is not possible.
+func Die(msg string, args ...any) {
+	fmt.Fprintf(os.Stderr, msg+"\n", args...)
+	os.Exit(1)
 }
 
-func MaybeExitErrMsg(code int16, msg *string) {
-	if err := kerr.ErrorForCode(code); err != nil {
-		additional := ""
-		if msg != nil {
-			additional = ": " + *msg
-		}
-		Die("%s%s\n", err, additional)
-	}
-}
 
-func args2strings(args []interface{}) []string {
+func args2strings(args []any) []string {
 	sargs := make([]string, len(args))
 	for i, arg := range args {
 		sargs[i] = fmt.Sprint(arg)
@@ -120,7 +127,7 @@ func NewTabWriter() *TabWriter {
 }
 
 // Print stringifies the arguments and calls PrintStrings.
-func (t *TabWriter) Print(args ...interface{}) {
+func (t *TabWriter) Print(args ...any) {
 	t.PrintStrings(args2strings(args)...)
 }
 
@@ -131,6 +138,6 @@ func (t *TabWriter) PrintStrings(args ...string) {
 }
 
 // Line prints a newline in our tab writer. This will reset tab spacing.
-func (t *TabWriter) Line(sprint ...interface{}) {
+func (t *TabWriter) Line(sprint ...any) {
 	fmt.Fprint(t.Writer, append(sprint, "\n")...)
 }

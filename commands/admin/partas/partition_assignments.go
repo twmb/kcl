@@ -15,8 +15,9 @@ import (
 
 func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "partas",
-		Short: "Alter or list partition (re)assignments.",
+		Use:     "reassign",
+		Aliases: []string{"partas"},
+		Short:   "Alter or list partition (re)assignments.",
 	}
 	cmd.AddCommand(listPartitionReassignments(cl))
 	cmd.AddCommand(alterPartitionAssignments(cl))
@@ -41,9 +42,11 @@ If a replica list is empty for a specific partition, this cancels any active
 reassignment for that partition.
 `,
 		Example: "alter 'foo:1->1,2,3' 'bar:2->3,4,5;5->3,4,5'",
-		Run: func(_ *cobra.Command, topicPartReplicas []string) {
+		RunE: func(_ *cobra.Command, topicPartReplicas []string) error {
 			tprs, err := flagutil.ParseTopicPartitionReplicas(topicPartReplicas)
-			out.MaybeDie(err, "unable to parse topic partitions replicas: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to parse topic partitions replicas: %v", err)
+			}
 
 			req := &kmsg.AlterPartitionAssignmentsRequest{
 				TimeoutMillis: cl.TimeoutMillis(),
@@ -64,19 +67,21 @@ reassignment for that partition.
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to alter partition assignments: %v", err)
-			resp := kresp.(*kmsg.AlterPartitionAssignmentsResponse)
-			if cl.AsJSON() {
-				out.ExitJSON(resp)
+			if err != nil {
+				return fmt.Errorf("unable to alter partition assignments: %v", err)
 			}
+			resp := kresp.(*kmsg.AlterPartitionAssignmentsResponse)
 
 			if resp.ErrorCode != 0 {
-				out.ErrAndMsg(resp.ErrorCode, resp.ErrorMessage)
-				out.Exit()
+				additional := ""
+				if resp.ErrorMessage != nil {
+					additional = ": " + *resp.ErrorMessage
+				}
+				return fmt.Errorf("%s%s", kerr.ErrorForCode(resp.ErrorCode), additional)
 			}
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
+			table := out.NewFormattedTable(cl.Format(), "reassign.alter", 1, "results",
+				"TOPIC", "PARTITION", "STATUS", "DETAIL")
 			for _, topic := range resp.Topics {
 				for _, partition := range topic.Partitions {
 					msg := "OK"
@@ -87,9 +92,11 @@ reassignment for that partition.
 					if partition.ErrorMessage != nil {
 						detail = *partition.ErrorMessage
 					}
-					fmt.Fprintf(tw, "%s\t%d\t%s\t%s\n", topic.Topic, partition.Partition, msg, detail)
+					table.Row(topic.Topic, partition.Partition, msg, detail)
 				}
 			}
+			table.Flush()
+			return nil
 		},
 	}
 }
@@ -109,16 +116,18 @@ where the numbers correspond to partitions for a topic.
 
 If no topics are specified, this lists all active reassignments.
 `,
-		Run: func(_ *cobra.Command, topicParts []string) {
+		RunE: func(_ *cobra.Command, topicParts []string) error {
 			tps, err := flagutil.ParseTopicPartitions(topicParts)
-			out.MaybeDie(err, "unable to parse topic partitions: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to parse topic partitions: %v", err)
+			}
 
 			req := &kmsg.ListPartitionReassignmentsRequest{
 				TimeoutMillis: cl.TimeoutMillis(),
 			}
 			for topic, partitions := range tps {
 				if len(partitions) == 0 {
-					out.Die("topic %s has no partitions specified to list", topic)
+					return fmt.Errorf("topic %s has no partitions specified to list", topic)
 				}
 				req.Topics = append(req.Topics, kmsg.ListPartitionReassignmentsRequestTopic{
 					Topic:      topic,
@@ -127,28 +136,31 @@ If no topics are specified, this lists all active reassignments.
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to list partition reassignments: %v", err)
-			resp := kresp.(*kmsg.ListPartitionReassignmentsResponse)
-			if cl.AsJSON() {
-				out.ExitJSON(resp)
+			if err != nil {
+				return fmt.Errorf("unable to list partition reassignments: %v", err)
 			}
+			resp := kresp.(*kmsg.ListPartitionReassignmentsResponse)
 
 			if resp.ErrorCode != 0 {
-				out.ErrAndMsg(resp.ErrorCode, resp.ErrorMessage)
-				out.Exit()
+				additional := ""
+				if resp.ErrorMessage != nil {
+					additional = ": " + *resp.ErrorMessage
+				}
+				return fmt.Errorf("%s%s", kerr.ErrorForCode(resp.ErrorCode), additional)
 			}
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-			fmt.Fprint(tw, "TOPIC\tPARTITION\tCURRENT REPLICAS\tADDING\tREMOVING\n")
+			table := out.NewFormattedTable(cl.Format(), "reassign.list", 1, "reassignments",
+				"TOPIC", "PARTITION", "CURRENT-REPLICAS", "ADDING", "REMOVING")
 			for _, topic := range resp.Topics {
 				for _, p := range topic.Partitions {
 					sort.Slice(p.Replicas, func(i, j int) bool { return p.Replicas[i] < p.Replicas[j] })
 					sort.Slice(p.AddingReplicas, func(i, j int) bool { return p.AddingReplicas[i] < p.AddingReplicas[j] })
 					sort.Slice(p.RemovingReplicas, func(i, j int) bool { return p.RemovingReplicas[i] < p.RemovingReplicas[j] })
-					fmt.Fprintf(tw, "%s\t%d\t%v\t%v\t%v\n", topic.Topic, p.Partition, p.Replicas, p.AddingReplicas, p.RemovingReplicas)
+					table.Row(topic.Topic, p.Partition, fmt.Sprint(p.Replicas), fmt.Sprint(p.AddingReplicas), fmt.Sprint(p.RemovingReplicas))
 				}
 			}
+			table.Flush()
+			return nil
 		},
 	}
 }

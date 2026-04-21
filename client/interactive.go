@@ -131,7 +131,7 @@ func Wizard(noHelp bool) {
 
 	s := newScanner()
 	cfg := Cfg{
-		TimeoutMillis: 10000,
+		BrokerTimeout: Duration(10 * time.Second),
 	}
 
 	for {

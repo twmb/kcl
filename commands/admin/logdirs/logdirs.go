@@ -25,8 +25,32 @@ func Command(cl *client.Client) *cobra.Command {
 	return cmd
 }
 
+func humanSize(bytes int64) string {
+	const (
+		kb = 1024
+		mb = kb * 1024
+		gb = mb * 1024
+		tb = gb * 1024
+	)
+	switch {
+	case bytes >= tb:
+		return fmt.Sprintf("%.1fTB", float64(bytes)/float64(tb))
+	case bytes >= gb:
+		return fmt.Sprintf("%.1fGB", float64(bytes)/float64(gb))
+	case bytes >= mb:
+		return fmt.Sprintf("%.1fMB", float64(bytes)/float64(mb))
+	case bytes >= kb:
+		return fmt.Sprintf("%.1fKB", float64(bytes)/float64(kb))
+	default:
+		return fmt.Sprintf("%dB", bytes)
+	}
+}
+
 func describeCommand(cl *client.Client) *cobra.Command {
 	var broker int32
+	var humanReadable bool
+	var sortBySize bool
+	var aggregateInto string
 	cmd := &cobra.Command{
 		Use:     "describe",
 		Aliases: []string{"d"},
@@ -71,11 +95,13 @@ describe foo
 
 describe // describes all`,
 
-		Run: func(_ *cobra.Command, topics []string) {
+		RunE: func(_ *cobra.Command, topics []string) error {
 			var req kmsg.DescribeLogDirsRequest
 			if topics != nil {
 				tps, err := flagutil.ParseTopicPartitions(topics)
-				out.MaybeDie(err, "improper topic partitions format on: %v", err)
+				if err != nil {
+					return fmt.Errorf("improper topic partitions format on: %v", err)
+				}
 
 				// For any topic that has no partitions
 				// specified, we describe *all* partitions.
@@ -90,10 +116,12 @@ describe // describes all`,
 				}
 				if len(metaReq.Topics) > 0 {
 					metaResp, err := metaReq.RequestWith(context.Background(), cl.Client())
-					out.MaybeDie(err, "unable to request metadata: %v", err)
+					if err != nil {
+						return fmt.Errorf("unable to request metadata: %v", err)
+					}
 					for _, topic := range metaResp.Topics {
 						if topic.Topic == nil {
-							out.Die("metadata returned nil topic when we did not fetch with topic IDs")
+							return fmt.Errorf("metadata returned nil topic when we did not fetch with topic IDs")
 						}
 						for _, partition := range topic.Partitions {
 							tps[*topic.Topic] = append(tps[*topic.Topic], partition.Partition)
@@ -111,48 +139,132 @@ describe // describes all`,
 
 			kresps := cl.Client().RequestSharded(context.Background(), &req)
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
-			fmt.Fprintf(tw, "BROKER\tERR\tDIR\tTOPIC\tPARTITION\tSIZE\tOFFSET LAG\tIS FUTURE\n")
+			type logdirRow struct {
+				broker    int32
+				dir       string
+				topic     string
+				partition int32
+				size      int64
+				offsetLag int64
+				isFuture  bool
+				err       error
+			}
+			var rows []logdirRow
 
 			for _, kresp := range kresps {
 				if kresp.Err != nil {
-					fmt.Fprintf(tw, "%d\t%v\t\t\t\t\t\t\n", kresp.Meta.NodeID, kresp.Err)
+					rows = append(rows, logdirRow{broker: kresp.Meta.NodeID, err: kresp.Err})
 					continue
 				}
-
 				resp := kresp.Resp.(*kmsg.DescribeLogDirsResponse)
-
-				sort.Slice(resp.Dirs, func(i, j int) bool { return resp.Dirs[i].Dir < resp.Dirs[j].Dir })
 				for _, dir := range resp.Dirs {
-
 					if err := kerr.ErrorForCode(dir.ErrorCode); err != nil {
-						fmt.Fprintf(tw, "%d\t%v\t%s\t\t\t\t\t\n", kresp.Meta.NodeID, err, dir.Dir)
+						rows = append(rows, logdirRow{broker: kresp.Meta.NodeID, dir: dir.Dir, err: err})
 						continue
 					}
-
-					sort.Slice(dir.Topics, func(i, j int) bool { return dir.Topics[i].Topic < dir.Topics[j].Topic })
 					for _, topic := range dir.Topics {
-						sort.Slice(topic.Partitions, func(i, j int) bool { return topic.Partitions[i].Partition < topic.Partitions[j].Partition })
 						for _, partition := range topic.Partitions {
-							fmt.Fprintf(tw, "%d\t\t%s\t%s\t%d\t%d\t%d\t%v\n",
-								kresp.Meta.NodeID,
-								dir.Dir,
-								topic.Topic,
-								partition.Partition,
-								partition.Size,
-								partition.OffsetLag,
-								partition.IsFuture,
-							)
+							rows = append(rows, logdirRow{
+								broker:    kresp.Meta.NodeID,
+								dir:       dir.Dir,
+								topic:     topic.Topic,
+								partition: partition.Partition,
+								size:      partition.Size,
+								offsetLag: partition.OffsetLag,
+								isFuture:  partition.IsFuture,
+							})
 						}
 					}
 				}
 			}
+
+			if sortBySize {
+				sort.Slice(rows, func(i, j int) bool { return rows[i].size > rows[j].size })
+			} else {
+				sort.Slice(rows, func(i, j int) bool {
+					if rows[i].broker != rows[j].broker {
+						return rows[i].broker < rows[j].broker
+					}
+					if rows[i].dir != rows[j].dir {
+						return rows[i].dir < rows[j].dir
+					}
+					if rows[i].topic != rows[j].topic {
+						return rows[i].topic < rows[j].topic
+					}
+					return rows[i].partition < rows[j].partition
+				})
+			}
+
+			// Aggregate mode: sum sizes by broker, dir, or topic.
+			if aggregateInto != "" {
+				type aggEntry struct {
+					key  string
+					size int64
+				}
+				agg := make(map[string]int64)
+				for _, r := range rows {
+					if r.err != nil {
+						continue
+					}
+					var key string
+					switch aggregateInto {
+					case "broker":
+						key = fmt.Sprintf("%d", r.broker)
+					case "dir":
+						key = fmt.Sprintf("%d:%s", r.broker, r.dir)
+					case "topic":
+						key = r.topic
+					default:
+						return out.Errf(out.ExitUsage, "--aggregate-into must be broker, dir, or topic")
+					}
+					agg[key] += r.size
+				}
+				var entries []aggEntry
+				for k, v := range agg {
+					entries = append(entries, aggEntry{k, v})
+				}
+				sort.Slice(entries, func(i, j int) bool {
+					if sortBySize {
+						return entries[i].size > entries[j].size
+					}
+					return entries[i].key < entries[j].key
+				})
+				header := strings.ToUpper(aggregateInto)
+				aggTable := out.NewFormattedTable(cl.Format(), "logdirs.describe", 1, "dirs",
+					header, "SIZE")
+				for _, e := range entries {
+					sizeStr := fmt.Sprintf("%d", e.size)
+					if humanReadable {
+						sizeStr = humanSize(e.size)
+					}
+					aggTable.Row(e.key, sizeStr)
+				}
+				aggTable.Flush()
+				return nil
+			}
+
+			table := out.NewFormattedTable(cl.Format(), "logdirs.describe", 1, "dirs",
+				"BROKER", "ERR", "DIR", "TOPIC", "PARTITION", "SIZE", "OFFSET-LAG", "IS-FUTURE")
+			for _, r := range rows {
+				if r.err != nil {
+					table.Row(r.broker, r.err, r.dir, "", "", "", "", "")
+					continue
+				}
+				sizeStr := fmt.Sprintf("%d", r.size)
+				if humanReadable {
+					sizeStr = humanSize(r.size)
+				}
+				table.Row(r.broker, "", r.dir, r.topic, r.partition, sizeStr, r.offsetLag, r.isFuture)
+			}
+			table.Flush()
+			return nil
 		},
 	}
 
 	cmd.Flags().Int32VarP(&broker, "broker", "b", -1, "a specific broker to direct the request to")
+	cmd.Flags().BoolVarP(&humanReadable, "human-readable", "H", false, "print sizes in human-readable format (KB, MB, GB)")
+	cmd.Flags().BoolVar(&sortBySize, "sort-by-size", false, "sort output by partition size (largest first)")
+	cmd.Flags().StringVar(&aggregateInto, "aggregate-into", "", "aggregate sizes by dimension (broker, dir, topic)")
 	return cmd
 }
 
@@ -175,15 +287,17 @@ which allows you to alter replicas.
 
 		Example: `alter foo:1,2,3=/dir bar:6=/dir2 baz:9=/dir`,
 
-		Run: func(_ *cobra.Command, topics []string) {
+		RunE: func(_ *cobra.Command, topics []string) error {
 			dests := make(map[string]map[string][]int32)
 			for _, topic := range topics {
 				parts := strings.Split(topic, "=")
 				if len(parts) != 2 {
-					out.Die("improper format for dest-dir = split (expected two strings after split, got %d)", len(parts))
+					return fmt.Errorf("improper format for dest-dir = split (expected two strings after split, got %d)", len(parts))
 				}
 				tps, err := flagutil.ParseTopicPartitions([]string{parts[0]})
-				out.MaybeDie(err, "improper topic partitions format on %q: %v", parts[0], err)
+				if err != nil {
+					return fmt.Errorf("improper topic partitions format on %q: %v", parts[0], err)
+				}
 				dest := parts[1]
 				existing := dests[dest]
 				if existing == nil {
@@ -215,29 +329,24 @@ which allows you to alter replicas.
 			} else {
 				kresp, err = cl.Client().Request(context.Background(), &req)
 			}
-			out.MaybeDie(err, "unable to alter replica log dirs: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
+			if err != nil {
+				return fmt.Errorf("unable to alter replica log dirs: %v", err)
 			}
 
 			resp := kresp.(*kmsg.AlterReplicaLogDirsResponse)
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
-			fmt.Fprintf(tw, "TOPIC\tPARTITION\tERROR\n")
+			table := out.NewFormattedTable(cl.Format(), "logdirs.alter", 1, "results",
+				"TOPIC", "PARTITION", "ERROR")
 			for _, topic := range resp.Topics {
 				for _, partition := range topic.Partitions {
 					msg := ""
 					if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
 						msg = err.Error()
 					}
-					fmt.Fprintf(tw, "%s\t%d\t%s\n",
-						topic.Topic,
-						partition.Partition,
-						msg,
-					)
+					table.Row(topic.Topic, partition.Partition, msg)
 				}
 			}
+			table.Flush()
+			return nil
 		},
 	}
 	cmd.Flags().Int32VarP(&broker, "broker", "b", -1, "a specific broker to direct the request to")

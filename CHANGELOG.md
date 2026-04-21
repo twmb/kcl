@@ -1,3 +1,198 @@
+v0.17.0
+===
+
+This is a large release with many intentional breaking changes across
+the flag, config, and command surface. Treat it as a beta: it may look
+unchanging, but real feedback against this new command space may drive
+further breaks in subsequent releases before kcl settles. If you use
+kcl via shell scripts or automation, read this list carefully before
+upgrading, and please file issues when something feels wrong.
+
+### BREAKING -- command surface
+
+* `kcl myconfig` is renamed to `kcl profile`. The `myconfig` name still
+  resolves (hidden deprecated alias), but new documentation and
+  completions use `profile`. Subcommands flattened: `profile use`,
+  `profile list`, `profile current`, `profile create`, `profile dump`,
+  `profile rename`, `profile delete` (plus `profile link` / `unlink`
+  under the deprecated `myconfig` tree for legacy symlink workflows).
+  Full config reference is the Long description of `kcl profile --help`
+  (the separate `profile config-help` subcommand has been removed).
+* `kcl transact` (interactive transactional consume+process+produce) is
+  removed. It had a tangled format story and limited use. Build a
+  bespoke transaction loop via `kadm` or `franz-go` directly if needed.
+* `kcl admin delete-records` is removed. Use `kcl topic trim-prefix`.
+* `kcl admin topic alter-config` is removed; use `kcl config alter -tt
+  TOPIC ...`.
+* `kcl txn unstick-lso` is removed (obsolete pre-KIP-890 workaround).
+  To force-close a stuck transaction, use `WriteTxnMarkers` via kadm.
+* `kcl streams-group` commands are removed (KIP-1071 Kafka Streams
+  group protocol is out of scope for kcl).
+* `kcl cluster info` is renamed to `kcl cluster metadata` (the old
+  "cluster metadata" alias at top level is hidden).
+* Resource commands (topic, group, share-group, acl, cluster, config,
+  quota, logdirs, reassign, user, dtoken, client-metrics, txn) are
+  promoted to the top level. They still exist under `kcl admin` as
+  hidden aliases.
+* `kcl share-group` subcommands were consolidated to match `kcl group`:
+  `list`, `describe`, `seek`, `delete`, `offset-delete`.
+
+### BREAKING -- flags
+
+* Confirmation prompts are standardized on `--yes`/`-y`.
+  - `group seek`, `share-group seek`: `--execute` renamed to `--yes`/`-y`.
+  - `topic trim-prefix`, `config alter`, `acl delete`: `--no-confirm`
+    renamed to `--yes`/`-y`.
+* `--if-exists` / `--if-not-exists` removed from create/delete commands.
+  Reliable non-zero exit codes plus structured JSON output replace them.
+* `-b` shorthand removed from `consume --balancer` (long form still
+  works). `-b` is now free for per-command broker-ID flags where used,
+  and `-B/--bootstrap-servers` is available globally to override the
+  seed brokers without editing a profile.
+* `--run` flag removed; `--dry-run` standardized across commands as
+  the inverse "don't apply" toggle.
+* `--configs` / `--all` flags removed from `kcl topic describe`. Use
+  the new `--section [summary|partitions|configs]` flag instead.
+* ACL `create` flag surface redesigned for ergonomics (short flags like
+  `-t topic`, `-g group`, `--allow-principal`, etc.). Old flag names
+  are gone; see `kcl acl create --help`.
+
+### BREAKING -- output, exit codes, formats
+
+* Output format is unified under global `--format text|json|awk`.
+  Per-command formatters have been removed. All commands migrated.
+* Exit codes simplified to `{0, 1, 2}`: 0 success, 1 error, 2 usage.
+  Commands return non-zero on any per-item failure (previously
+  `topic delete` on a mix of existing and missing topics returned 0).
+* `--format json` output is guaranteed valid JSON on stdout; errors
+  and diagnostics are written to stderr. Commands that previously
+  printed informational lines to stdout have been migrated.
+* Column headers no longer contain spaces. `GROUP ID` is now `GROUP-ID`,
+  `LAST SEQUENCE` is now `LAST-SEQUENCE`, etc. awk pipelines that
+  indexed columns are unaffected (awk output has no headers); text-mode
+  consumers parsing headers need to update.
+* Record format package (`-f` verbs) replaced with `franz-go`'s
+  `kgo.RecordFormatter` / `kgo.RecordReader`. Behavior is near-identical
+  with richer documentation and consistent parsing across consume and
+  produce.
+
+### BREAKING -- config file
+
+* `timeout_ms` (integer milliseconds) is replaced by `broker_timeout`
+  (Go duration string: "5s", "500ms", "1m"). Using the old key produces
+  a loud migration error.
+* Unknown config keys in the TOML file now produce a warning on stderr
+  (via the BurntSushi `MetaData.Undecoded` path). This surfaces typos
+  and stale names that were previously silently dropped.
+* Two new duration keys: `dial_timeout` (bounds a single TCP dial) and
+  `retry_timeout` (bounds total client request + retries). Both default
+  to kgo's defaults (10s / 30s) when unset.
+
+### NEW
+
+* `kcl fake`: start an in-process fake Kafka cluster (via `kfake`) with
+  `--ports`, `--num-brokers`, `-l/--log-level`, `-d/--data-dir`,
+  `--sync` (fsync writes), `--as-version`, `-c/--broker-config`,
+  `--seed-topic NAME:PARTITIONS`, `--allow-auto-topic-creation`,
+  `--cluster-id`, `--pprof`. Useful for testing without Docker.
+* Global `-B/--bootstrap-servers`: seed brokers override,
+  comma-separated.
+* Global ClientID tagging: every request advertises `kcl/<version>` so
+  brokers can identify kcl in ACL audit logs and metrics. Version is
+  resolved from ldflags, falling back to `runtime/debug.BuildInfo` so
+  `go install github.com/twmb/kcl@vX.Y.Z` automatically tags the binary.
+* Global `--help-json`: dumps the full command tree (names, flags,
+  examples) as JSON for tooling / LLM integration.
+* Named profiles with `--profile/-C` and `current_profile` in the TOML
+  file. Profiles support full per-cluster config (seed brokers, TLS,
+  SASL, timeouts). See `kcl profile --help`.
+* `kcl topic describe`: new command with summary, partitions, and
+  configs sections, lag-style per-partition table, `--stable` for
+  read-committed offsets, `--with-overrides` to filter to topics that
+  have dynamic configs, `--under-replicated`, `--unavailable`,
+  `--under-min-isr`, `--at-min-isr` health filters, `--topic-id UUID`
+  for KIP-516 lookup by topic ID (32 hex or dashed 8-4-4-4-12).
+* `kcl topic create`: `-p/--num-partitions` and `-r/--replication-factor`
+  default to `-1`, which the wire protocol interprets as "use cluster
+  default" (`num.partitions`, `default.replication.factor`). Matches
+  `kafka-topics.sh --create`.
+* `kcl topic trim-prefix`: delete records before an offset/timestamp
+  (a friendly wrapper around `DeleteRecords`).
+* `kcl group seek`: new command to reset committed offsets with
+  `--to start|end|N|+N|-N|@TIMESTAMP`, `--to-group other-group` to
+  copy from another group, `--to-file` for per-partition JSON input,
+  `--allow-new-topics` toggle, `--topics foo:0,1,2` per-partition
+  scoping.
+* `kcl group describe`: default shows per-partition lag; `--section
+  [summary|lag|members]` for narrower output; `--consumer-protocol`
+  describe flag for KIP-848 groups; lag filters and type filters.
+* `kcl group offset-delete --from-file` for bulk operations (KIP-496).
+* `kcl share-group` subtree (KIP-932, Kafka 4.0+): `list`, `describe`
+  (with `-v` for offsets and lag), `seek`, `delete`, `offset-delete`.
+* `kcl consume --share-group NAME`: consume from a share group.
+* `kcl consume --share-ack-type [accept|release|reject]`: control how
+  share-group records are acked. `release` peeks (returns records to
+  the pool with incremented delivery count); `reject` archives
+  permanently (exercises KIP-932 delivery count limits / DLQ flows).
+* `kcl consume -G/--grep`: client-side filter with syntax like
+  `k:pattern`, `v:pattern`, `hk:name=value`, `t:topic`, with `!` for
+  negation, repeatable and AND'd.
+* `kcl consume -o @TIMESTAMP` / `-o @T1:T2`: timestamp-based consume
+  start/end offsets via the new shared `offsetparse` package.
+* `kcl cluster`: new subcommands -- `describe-cluster`, `describe-quorum`
+  (KIP-595/836), `features describe|update` with `--upgrade-type
+  [upgrade|safe-downgrade|unsafe-downgrade]` for KIP-584 feature flag
+  management, `add-controller` / `remove-controller` (KIP-853), and
+  `elect-leaders`.
+* `kcl client-metrics` subtree (KIP-714): `list`, `describe`, `alter`,
+  `delete`. `list` prefers `ListConfigResources` (KIP-1000/1142) with
+  a `DescribeConfigs` fallback for older brokers.
+* `kcl txn`: `list`, `describe`, `describe-producers` for active
+  transaction inspection.
+* `kcl config`: group and client-metrics entity types added
+  (`-t g/group`, `-t cm/client-metrics`).
+* `kcl acl create`: redesigned with ergonomic flags, now supports
+  `--delegation-token` resources and all operation types.
+* `kcl misc raw-req`: `-v/--version` flag to pin the wire version for
+  the request. Empty stdin is now accepted for requests with no body.
+* `kcl produce`: `-t/--topic` flag (alternative to positional arg),
+  `-H/--header key=value` repeatable static headers.
+
+### FIXES / UX
+
+* Root-level `SilenceUsage: true`: runtime errors no longer dump cobra
+  usage boilerplate. Argument/flag parse errors still show usage.
+* `group describe` / `share-group describe` skip empty state fields on
+  group-level errors (e.g. `GROUP_ID_NOT_FOUND`) instead of showing
+  empty `STATE:` / `EPOCH: 0` around the error.
+* `kfake` Metadata handler fix: a request passing both a topic name
+  and its TopicID previously emitted partitions twice in the merged
+  response entry; now deduped.
+* Informational output moved to stderr across the board so stdout is
+  reserved for machine-readable data.
+* On dev/dirty builds, `kcl --version` prints `dev+abc1234[-dirty]`
+  instead of the full Go pseudo-version.
+* `flagutil.ParseTopicPartitions`: duplicate topic entries now merge
+  (e.g. `--topics foo:0 --topics foo:3` yields `foo: [0, 3]` instead
+  of losing the first entry); a bare-topic entry wins over any
+  per-partition scope for the same topic.
+* Hidden `topic consume` / `topic produce` aliases added for
+  discoverability of the top-level commands.
+* `misc list-offsets` always shows the STABLE column.
+
+### UPSTREAM
+
+* Bumps `franz-go` to v1.21.0, `kadm` to v1.18.0, `kmsg` to v1.13.1,
+  and `kfake` to the latest pseudo-version (which carries the new
+  handlers: WriteTxnMarkers, UpdateFeatures, ListConfigResources,
+  DescribeTopicPartitions).
+* Bumps aws-sdk-go-v2 family, cobra, pflag, protoreflect, crypto,
+  sync, compression libraries.
+* Drops the local `go.work` / `go.work.sum` and the replace directives
+  that pointed at a sibling `../franz-go` checkout, so a bare
+  `go install github.com/twmb/kcl@latest` resolves cleanly.
+* Migrated from AWS SDK v1 to v2 for MSK IAM auth.
+
 v0.16.0
 ===
 

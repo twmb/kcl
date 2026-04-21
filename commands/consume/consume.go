@@ -3,16 +3,13 @@ package consume
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"os"
 	"os/signal"
-	"regexp"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
-	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -20,7 +17,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	"github.com/twmb/kcl/client"
-	"github.com/twmb/kcl/format"
+	"github.com/twmb/kcl/offsetparse"
 	"github.com/twmb/kcl/out"
 )
 
@@ -28,6 +25,8 @@ type consumption struct {
 	cl *client.Client
 
 	group           string
+	shareGroup      string
+	shareAckType    string
 	groupAlg        string
 	instanceID      string
 	regex           bool
@@ -36,19 +35,26 @@ type consumption struct {
 	num             int
 	numPerPartition int
 	format          string
-	escapeChar      string
 	rack            string
 
-	readUncommitted bool
+	readUncommitted     bool
+	printControlRecords bool
+	timeout             time.Duration
 
-	fetchMaxBytes int32
-	fetchMaxWait  time.Duration
+	fetchMaxBytes          int32
+	fetchMaxPartitionBytes int32
+	fetchMaxWait           time.Duration
 
 	start int64 // if exact range
 	end   int64 // if exact range
 
 	untilOffset    int
 	addUntilOffset bool
+
+	startTimestampMillis int64 // >=0 if start is timestamp-based
+	endTimestampMillis   int64 // >=0 if end is timestamp-based
+
+	grepPatterns []string
 
 	protoFile    string
 	protoMessage string
@@ -59,13 +65,15 @@ func Command(cl *client.Client) *cobra.Command {
 	return (&consumption{cl: cl}).command()
 }
 
-func (c *consumption) run(topics []string) {
-	if len(c.escapeChar) == 0 {
-		out.Die("invalid empty escape character")
-	}
-	escape, size := utf8.DecodeRuneInString(c.escapeChar)
-	if size != len(c.escapeChar) {
-		out.Die("invalid multi character escape character")
+func (c *consumption) run(topics []string) error {
+	// Compile grep filters.
+	var grepFilters []grepFilter
+	if len(c.grepPatterns) > 0 {
+		var err error
+		grepFilters, err = parseGrepFilters(c.grepPatterns)
+		if err != nil {
+			return fmt.Errorf("%v", err)
+		}
 	}
 
 	var isConsumerOffsets, isTransactionState bool
@@ -74,16 +82,38 @@ func (c *consumption) run(topics []string) {
 		isTransactionState = isTransactionState || topic == "__transaction_state"
 	}
 	if (isConsumerOffsets || isTransactionState) && len(topics) != 1 {
-		out.Die("__consumer_offsets or __transaction_state must be the only topic listed when trying to consume it")
+		return out.Errf(out.ExitUsage, "__consumer_offsets or __transaction_state must be the only topic listed when trying to consume it")
 	}
 
-	offset := c.parseOffset()
+	if c.group != "" && c.shareGroup != "" {
+		return out.Errf(out.ExitUsage, "--group and --share-group are mutually exclusive")
+	}
+
+	var shareAck kgo.AckStatus
+	switch strings.ToLower(c.shareAckType) {
+	case "", "accept":
+		shareAck = kgo.AckAccept
+	case "release":
+		shareAck = kgo.AckRelease
+	case "reject":
+		shareAck = kgo.AckReject
+	default:
+		return out.Errf(out.ExitUsage, "--share-ack-type must be accept, release, or reject (got %q)", c.shareAckType)
+	}
+	if c.shareGroup == "" && shareAck != kgo.AckAccept {
+		return out.Errf(out.ExitUsage, "--share-ack-type is only valid with --share-group")
+	}
+
+	offset, err := c.parseOffset()
+	if err != nil {
+		return err
+	}
 	c.cl.AddOpt(kgo.ConsumeResetOffset(offset))
 	if len(c.partitions) == 0 {
 		c.cl.AddOpt(kgo.ConsumeTopics(topics...))
 	} else {
-		if len(c.group) != 0 {
-			out.Die("incompatible flag assignment: group consuming cannot be used with direct partition consuming")
+		if c.group != "" || c.shareGroup != "" {
+			return out.Errf(out.ExitUsage, "incompatible flag assignment: group consuming cannot be used with direct partition consuming")
 		}
 		offsets := make(map[string]map[int32]kgo.Offset)
 		for _, topic := range topics {
@@ -110,7 +140,7 @@ func (c *consumption) run(topics []string) {
 	case "cooperative-sticky":
 		balancer = kgo.CooperativeStickyBalancer()
 	default:
-		out.Die("unrecognized group balancer %q", c.groupAlg)
+		return out.Errf(out.ExitUsage, "unrecognized group balancer %q", c.groupAlg)
 	}
 	c.cl.AddOpt(kgo.Balancers(balancer))
 
@@ -121,15 +151,22 @@ func (c *consumption) run(topics []string) {
 	sigs := make(chan os.Signal, 2)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 
-	if isConsumerOffsets || isTransactionState {
+	if isConsumerOffsets || isTransactionState || c.printControlRecords {
 		c.cl.AddOpt(kgo.KeepControlRecords())
 	} else if !c.readUncommitted {
 		c.cl.AddOpt(kgo.FetchIsolationLevel(kgo.ReadCommitted()))
 	}
 
 	c.cl.AddOpt(kgo.FetchMaxBytes(c.fetchMaxBytes))
+	if c.fetchMaxPartitionBytes > 0 {
+		c.cl.AddOpt(kgo.FetchMaxPartitionBytes(c.fetchMaxPartitionBytes))
+	}
 	c.cl.AddOpt(kgo.FetchMaxWait(c.fetchMaxWait))
 	c.cl.AddOpt(kgo.Rack(c.rack))
+
+	if c.shareGroup != "" {
+		c.cl.AddOpt(kgo.ShareGroup(c.shareGroup))
+	}
 
 	isGroup := len(c.group) > 0 && !(isConsumerOffsets || isTransactionState)
 	if isGroup {
@@ -143,27 +180,124 @@ func (c *consumption) run(topics []string) {
 	cl := c.cl.Client()
 
 	ctx, cancel := context.WithCancel(context.Background())
+	var keepCancel bool
+	defer func() {
+		if !keepCancel {
+			cancel()
+		}
+	}()
+
+	// Resolve timestamp-based start offsets via ListOffsetsAfterMilli.
+	if c.startTimestampMillis >= 0 {
+		adm := kadm.NewClient(cl)
+		tsOffsets, err := adm.ListOffsetsAfterMilli(ctx, c.startTimestampMillis, topics...)
+		if err != nil {
+			return fmt.Errorf("unable to resolve timestamp to offsets: %v", err)
+		}
+
+		setMap := make(map[string]map[int32]kgo.EpochOffset)
+		for topic, parts := range tsOffsets {
+			setMap[topic] = make(map[int32]kgo.EpochOffset)
+			for partition, lo := range parts {
+				setMap[topic][partition] = kgo.EpochOffset{
+					Epoch:  lo.LeaderEpoch,
+					Offset: lo.Offset,
+				}
+			}
+		}
+		cl.SetOffsets(setMap)
+	}
+
 	co := &consumeOutput{
-		cl:              cl,
-		numPerPartition: c.numPerPartition,
-		max:             c.num,
-		start:           c.start,
-		end:             c.end,
-		group:           c.group,
-		done:            make(chan struct{}),
-		ctx:             ctx,
-		cancel:          cancel,
+		cl:                  cl,
+		numPerPartition:     c.numPerPartition,
+		max:                 c.num,
+		start:               c.start,
+		end:                 c.end,
+		group:               c.group,
+		grepFilters:         grepFilters,
+		printControlRecords: c.printControlRecords,
+		timeout:             c.timeout,
+		shareAck:            shareAck,
+		done:                make(chan struct{}),
+		ctx:                 ctx,
+		cancel:              cancel,
 	}
 	if c.protoFile != "" {
 		var err error
 		co.pbd, err = newPBDecoder(c.protoFile, c.protoMessage)
-		out.MaybeDie(err, "unable to unmarshal pb: %v", err)
+		if err != nil {
+			return fmt.Errorf("unable to unmarshal pb: %v", err)
+		}
+	}
+
+	// Resolve timestamp-based end offsets.
+	if c.endTimestampMillis >= 0 {
+		adm := kadm.NewClient(cl)
+		endTsOffsets, err := adm.ListOffsetsAfterMilli(ctx, c.endTimestampMillis, topics...)
+		if err != nil {
+			return fmt.Errorf("unable to resolve end timestamp to offsets: %v", err)
+		}
+
+		// Filter to requested partitions if specified.
+		if len(c.partitions) > 0 {
+			for t, ps := range endTsOffsets {
+				for p := range ps {
+					found := false
+					for _, part := range c.partitions {
+						if part == p {
+							found = true
+							break
+						}
+					}
+					if !found {
+						delete(endTsOffsets[t], p)
+					}
+				}
+			}
+		}
+
+		// Remove empty partitions where start >= end.
+		if c.startTimestampMillis >= 0 {
+			startAdm := kadm.NewClient(cl)
+			startOffsets, err := startAdm.ListOffsetsAfterMilli(ctx, c.startTimestampMillis, topics...)
+			if err != nil {
+				return fmt.Errorf("unable to resolve start timestamp for filtering: %v", err)
+			}
+			for t, ps := range startOffsets {
+				for p, so := range ps {
+					if eo, ok := endTsOffsets[t][p]; ok {
+						if so.Offset >= eo.Offset {
+							delete(endTsOffsets[t], p)
+						}
+					}
+				}
+			}
+		}
+
+		// Remove topics with no remaining partitions.
+		empty := true
+		for t, ps := range endTsOffsets {
+			if len(ps) > 0 {
+				empty = false
+			} else {
+				delete(endTsOffsets, t)
+			}
+		}
+		if empty {
+			os.Exit(0)
+		}
+
+		co.untilOffset = true
+		co.untilOffsets = endTsOffsets
 	}
 
 	if c.untilOffset > -1 {
 		adm := kadm.NewClient(cl)
 		offsets, err := adm.ListEndOffsets(ctx, topics...)
-		out.MaybeDie(err, "unable to list end offsets: %v", err)
+		if err != nil {
+			return fmt.Errorf("unable to list end offsets: %v", err)
+		}
 
 		// Remove any partitions that are not being consumed.
 		if len(c.partitions) > 0 {
@@ -185,7 +319,9 @@ func (c *consumption) run(topics []string) {
 		}
 
 		startOffsets, err := adm.ListStartOffsets(ctx, topics...)
-		out.MaybeDie(err, "unable to list start offsets: %v", err)
+		if err != nil {
+			return fmt.Errorf("unable to list start offsets: %v", err)
+		}
 
 		for t, ps := range startOffsets {
 			for p := range ps {
@@ -233,15 +369,18 @@ func (c *consumption) run(topics []string) {
 	} else if isTransactionState {
 		co.buildTransactionStateFormatFn()
 	} else {
-		fn, err := format.ParseWriteFormat(c.format, escape)
-		out.MaybeDie(err, "%v", err)
-		var out []byte
+		f, err := kgo.NewRecordFormatter(c.format)
+		if err != nil {
+			return fmt.Errorf("%v", err)
+		}
+		var buf []byte
 		co.format = func(r *kgo.Record, p *kgo.FetchPartition) {
-			out = fn(out[:0], r, p)
-			os.Stdout.Write(out)
+			buf = f.AppendPartitionRecord(buf[:0], p, r)
+			os.Stdout.Write(buf)
 		}
 	}
 
+	keepCancel = true // ownership transferred to co / signal handler
 	go co.consume()
 
 	<-sigs
@@ -257,64 +396,66 @@ func (c *consumption) run(topics []string) {
 	case <-sigs:
 	case <-done:
 	}
+	return nil
 }
 
-func (c *consumption) parseOffset() kgo.Offset {
-	c.end = -1
-	c.untilOffset = -1 // Default to -1 to indicate a noop on this option.
-	o := kgo.NewOffset()
-	switch {
-	case c.offset == "start":
-		o = o.AtStart()
-	case c.offset == "end":
-		o = o.AtEnd()
-	case strings.HasPrefix(c.offset, "end-"):
-		v, err := strconv.Atoi(c.offset[4:])
-		out.MaybeDie(err, "unable to parse relative end offset number in %q: %v", c.offset, err)
-		o = o.AtEnd().Relative(int64(-v))
-	case strings.HasPrefix(c.offset, "start+"):
-		v, err := strconv.Atoi(c.offset[6:])
-		out.MaybeDie(err, "unable to parse relative start offset number in %q: %v", c.offset, err)
-		o = o.AtStart().Relative(int64(v))
-	case strings.HasPrefix(c.offset, ":end"):
-		o = o.AtStart()
-		// Handle the exact match case.
-		if c.offset == ":end" {
-			c.untilOffset = 0
-			return o
-		}
-		// Parse a format like :end-2 - consume until the end of the partition (current HWM) minus 2.
-		// e.g. if the LSO is 6, consume through offset 4.
-		if len(c.offset) < 6 {
-			out.MaybeDie(errors.New("invalid offset provided"), "must be of the form :end[-/+]<num>")
-		}
-		op := string(c.offset[4])
-		if op != "+" && op != "-" {
-			out.MaybeDie(errors.New("invalid offset provided"), "must be of the form :end[-/+]<num>")
-		}
-		v, err := strconv.Atoi(c.offset[5:])
-		out.MaybeDie(err, "unable to parse relative until offset number in %q: %v", c.offset, err)
-		if op == "+" {
-			c.addUntilOffset = true
-		}
-		// Something like :end--2.
-		if v < 0 {
-			v = -v
-		}
-		c.untilOffset = v
-	default:
-		match := regexp.MustCompile(`^(\d+)(?:-(\d+))?$`).FindStringSubmatch(c.offset)
-		if len(match) == 0 {
-			out.Die("unable to parse exact or range offset in %q", c.offset)
-		}
-		at, _ := strconv.ParseInt(match[1], 10, 64)
-		c.start = at
-		if match[2] != "" {
-			c.end, _ = strconv.ParseInt(match[2], 10, 64)
-		}
-		o = o.At(at)
+func (c *consumption) parseOffset() (kgo.Offset, error) {
+	spec, err := offsetparse.Parse(c.offset, time.Now())
+	if err != nil {
+		return kgo.Offset{}, fmt.Errorf("unable to parse offset %q: %v", c.offset, err)
 	}
-	return o
+
+	c.end = -1
+	c.untilOffset = -1
+	c.startTimestampMillis = -1
+	c.endTimestampMillis = -1
+
+	o := kgo.NewOffset()
+
+	switch spec.Start.Kind {
+	case offsetparse.KindStart:
+		o = o.AtStart()
+		if spec.Start.Delta != 0 {
+			o = o.Relative(spec.Start.Delta)
+		}
+	case offsetparse.KindEnd:
+		o = o.AtEnd()
+		if spec.Start.Delta != 0 {
+			o = o.Relative(spec.Start.Delta)
+		}
+	case offsetparse.KindExact:
+		o = o.At(spec.Start.Value)
+		c.start = spec.Start.Value
+	case offsetparse.KindRelative:
+		// For consume: +N means N after start, -N means N before end.
+		if spec.Start.Value >= 0 {
+			o = o.AtStart().Relative(spec.Start.Value)
+		} else {
+			o = o.AtEnd().Relative(spec.Start.Value)
+		}
+	case offsetparse.KindTimestamp:
+		c.startTimestampMillis = spec.Start.Value
+		o = o.AtStart() // placeholder; resolved via SetOffsets after client creation
+	}
+
+	if spec.End != nil {
+		switch spec.End.Kind {
+		case offsetparse.KindEnd:
+			c.untilOffset = 0
+			if spec.End.Delta > 0 {
+				c.addUntilOffset = true
+				c.untilOffset = int(spec.End.Delta)
+			} else if spec.End.Delta < 0 {
+				c.untilOffset = int(-spec.End.Delta)
+			}
+		case offsetparse.KindExact:
+			c.end = spec.End.Value
+		case offsetparse.KindTimestamp:
+			c.endTimestampMillis = spec.End.Value
+		}
+	}
+
+	return o, nil
 }
 
 type consumeOutput struct {
@@ -332,6 +473,15 @@ type consumeOutput struct {
 
 	untilOffset  bool
 	untilOffsets kadm.ListedOffsets
+
+	grepFilters         []grepFilter
+	printControlRecords bool
+	timeout             time.Duration
+
+	// shareAck is the per-record ack status applied when consuming from
+	// a share group. Only AckRelease and AckReject need explicit marking;
+	// AckAccept is the default (applied automatically on the next poll).
+	shareAck kgo.AckStatus
 
 	pbd *pbDecoder
 
@@ -360,13 +510,51 @@ func (co *consumeOutput) consume() {
 		}
 	}
 
+	var lastRecordTime time.Time
+	if co.timeout > 0 {
+		lastRecordTime = time.Now()
+	}
+
+	var printedWaiting bool
+
 	for atomic.LoadUint32(&co.quit) == 0 {
 		if len(co.untilOffsets) != 0 && len(offsetsRemaining) == 0 {
 			os.Exit(0)
 		}
 
+		// Check timeout: exit if no records received within the duration.
+		if co.timeout > 0 && time.Since(lastRecordTime) > co.timeout {
+			os.Exit(0)
+		}
+
+		// If polling takes more than 1s with no records, print a
+		// one-time hint so the user knows we're not hung.
+		var idleTimer *time.Timer
+		if !printedWaiting {
+			idleTimer = time.AfterFunc(3*time.Second, func() {
+				fmt.Fprintln(os.Stderr, "waiting for new records...")
+				printedWaiting = true
+			})
+		}
+
 		fetches := co.cl.PollFetches(co.ctx)
-		// TODO Errors(), print to stderr
+
+		if idleTimer != nil {
+			idleTimer.Stop()
+		}
+		if co.timeout > 0 && fetches.NumRecords() > 0 {
+			lastRecordTime = time.Now()
+		}
+		// Override the default AckAccept for share groups before
+		// the next poll implicitly accepts the fetched records.
+		// MarkAcks with no records applies to all records from the
+		// last poll that haven't been explicitly marked.
+		if co.shareAck != 0 && co.shareAck != kgo.AckAccept && fetches.NumRecords() > 0 {
+			co.cl.MarkAcks(co.shareAck)
+		}
+		fetches.EachError(func(t string, p int32, err error) {
+			fmt.Fprintf(os.Stderr, "fetch error %s[%d]: %v\n", t, p, err)
+		})
 		fetches.EachPartition(func(p kgo.FetchTopicPartition) {
 			partEndOffset := int64(-1)
 			if co.untilOffset {
@@ -414,8 +602,14 @@ func (co *consumeOutput) consume() {
 					perPartitionSeen[tp] = seen
 				}
 
-				// Only increment the count and write if it is not a control message.
-				if !r.Attrs.IsControl() {
+				// Apply grep filters.
+				if len(co.grepFilters) > 0 && !matchAll(co.grepFilters, r) {
+					return
+				}
+
+				// Only increment the count and write if it is not a control message
+				// (unless --print-control-records is set).
+				if co.printControlRecords || !r.Attrs.IsControl() {
 					co.num++
 					if co.pbd != nil {
 						r.Value, _ = co.pbd.jsonString(r.Value)

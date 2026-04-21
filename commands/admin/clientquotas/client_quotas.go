@@ -15,8 +15,9 @@ import (
 
 func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "client-quotas",
-		Short: "Alter, describe, or resolve client quotas.",
+		Use:     "quota",
+		Aliases: []string{"client-quotas"},
+		Short:   "Alter, describe, or resolve client quotas.",
 	}
 	cmd.AddCommand(describeClientQuotas(cl))
 	cmd.AddCommand(alterClientQuotas(cl))
@@ -54,7 +55,7 @@ filter specified by flags is returned.
 `,
 		Args: cobra.ExactArgs(0),
 
-		Run: func(_ *cobra.Command, _ []string) {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			req := &kmsg.DescribeClientQuotasRequest{
 				Strict: strict,
 			}
@@ -68,12 +69,12 @@ filter specified by flags is returned.
 			for _, name := range names {
 				split := strings.SplitN(name, "=", 2)
 				if len(split) != 2 {
-					out.Die("name %q missing value", split[0])
+					return out.Errf(out.ExitUsage, "name %q missing value", split[0])
 				}
 				k, v := split[0], split[1]
 				k = strings.ToLower(k)
 				if !validType[k] {
-					out.Die("name type %q is invalid (allowed: user, client-id, ip)", split[0])
+					return out.Errf(out.ExitUsage, "name type %q is invalid (allowed: user, client-id, ip)", split[0])
 				}
 				req.Components = append(req.Components, kmsg.DescribeClientQuotasRequestComponent{
 					EntityType: k,
@@ -84,7 +85,7 @@ filter specified by flags is returned.
 
 			for _, def := range defaults {
 				if !validType[def] {
-					out.Die("default type %q is invalid (allowed: user, client-id, ip)", def)
+					return out.Errf(out.ExitUsage, "default type %q is invalid (allowed: user, client-id, ip)", def)
 				}
 				req.Components = append(req.Components, kmsg.DescribeClientQuotasRequestComponent{
 					EntityType: def,
@@ -94,7 +95,7 @@ filter specified by flags is returned.
 
 			for _, a := range any {
 				if !validType[a] {
-					out.Die("any type %q is invalid (allowed: user, client-id, ip)", a)
+					return out.Errf(out.ExitUsage, "any type %q is invalid (allowed: user, client-id, ip)", a)
 				}
 				req.Components = append(req.Components, kmsg.DescribeClientQuotasRequestComponent{
 					EntityType: a,
@@ -103,38 +104,37 @@ filter specified by flags is returned.
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to describe client quotas: %v", err)
-			resp := kresp.(*kmsg.DescribeClientQuotasResponse)
-			if cl.AsJSON() {
-				out.ExitJSON(resp)
+			if err != nil {
+				return fmt.Errorf("unable to describe client quotas: %v", err)
 			}
+			resp := kresp.(*kmsg.DescribeClientQuotasResponse)
 
 			if resp.ErrorCode != 0 {
-				out.ErrAndMsg(resp.ErrorCode, resp.ErrorMessage)
-				out.Exit()
+				additional := ""
+				if resp.ErrorMessage != nil {
+					additional = ": " + *resp.ErrorMessage
+				}
+				return fmt.Errorf("%s%s", kerr.ErrorForCode(resp.ErrorCode), additional)
 			}
 
+			table := out.NewFormattedTable(cl.Format(), "quota.describe", 1, "quotas",
+				"ENTITY", "KEY", "VALUE")
 			for _, entry := range resp.Entries {
-				fmt.Print("{")
-				for i, entity := range entry.Entity {
-					if i > 0 {
-						fmt.Print(", ")
-					}
-					fmt.Print(entity.Type)
-					fmt.Print("=")
+				var entityParts []string
+				for _, entity := range entry.Entity {
 					name := "<default>"
 					if entity.Name != nil {
 						name = *entity.Name
 					}
-					fmt.Print(name)
+					entityParts = append(entityParts, entity.Type+"="+name)
 				}
-				fmt.Println("}")
-
+				entityStr := "{" + strings.Join(entityParts, ", ") + "}"
 				for _, value := range entry.Values {
-					fmt.Printf("%s=%v\n", value.Key, value.Value)
+					table.Row(entityStr, value.Key, value.Value)
 				}
-				fmt.Println()
 			}
+			table.Flush()
+			return nil
 		},
 	}
 
@@ -150,7 +150,7 @@ func alterClientQuotas(cl *client.Client) *cobra.Command {
 	var (
 		names    []string
 		defaults []string
-		run      bool
+		dryRun   bool
 		adds     []string
 		deletes  []string
 	)
@@ -169,17 +169,17 @@ matches, this runs an alter on anything that matches.
 `,
 		Args: cobra.ExactArgs(0),
 
-		Run: func(_ *cobra.Command, _ []string) {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			req := &kmsg.AlterClientQuotasRequest{
 				Entries:      []kmsg.AlterClientQuotasRequestEntry{{}},
-				ValidateOnly: !run,
+				ValidateOnly: dryRun,
 			}
 
 			if len(names) == 0 && len(defaults) == 0 {
-				out.Die("at least one name or default must be specified")
+				return out.Errf(out.ExitUsage, "at least one name or default must be specified")
 			}
 			if len(adds) == 0 && len(deletes) == 0 {
-				out.Die("at least one add or delete must be specified")
+				return out.Errf(out.ExitUsage, "at least one add or delete must be specified")
 			}
 
 			ent := &req.Entries[0]
@@ -193,12 +193,12 @@ matches, this runs an alter on anything that matches.
 			for _, name := range names {
 				split := strings.SplitN(name, "=", 2)
 				if len(split) != 2 {
-					out.Die("name %q missing value", split[0])
+					return out.Errf(out.ExitUsage, "name %q missing value", split[0])
 				}
 				k, v := split[0], split[1]
 				k = strings.ToLower(k)
 				if !validType[k] {
-					out.Die("name type %q is invalid (allowed: user, client-id, ip)", split[0])
+					return out.Errf(out.ExitUsage, "name type %q is invalid (allowed: user, client-id, ip)", split[0])
 				}
 				ent.Entity = append(ent.Entity, kmsg.AlterClientQuotasRequestEntryEntity{
 					Type: k,
@@ -208,7 +208,7 @@ matches, this runs an alter on anything that matches.
 
 			for _, def := range defaults {
 				if !validType[def] {
-					out.Die("default type %q is invalid (allowed: user, client-id, ip)", def)
+					return out.Errf(out.ExitUsage, "default type %q is invalid (allowed: user, client-id, ip)", def)
 				}
 				ent.Entity = append(ent.Entity, kmsg.AlterClientQuotasRequestEntryEntity{
 					Type: def,
@@ -218,11 +218,13 @@ matches, this runs an alter on anything that matches.
 			for _, add := range adds {
 				split := strings.SplitN(add, "=", 2)
 				if len(split) != 2 {
-					out.Die("add %q missing value", split[0])
+					return out.Errf(out.ExitUsage, "add %q missing value", split[0])
 				}
 				k, v := split[0], split[1]
 				f, err := strconv.ParseFloat(v, 64)
-				out.MaybeDie(err, "unable to parse add %q: %v", k, err)
+				if err != nil {
+					return fmt.Errorf("unable to parse add %q: %v", k, err)
+				}
 				ent.Ops = append(ent.Ops, kmsg.AlterClientQuotasRequestEntryOp{
 					Key:   k,
 					Value: f,
@@ -237,43 +239,37 @@ matches, this runs an alter on anything that matches.
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to alter client quotas: %v", err)
-			resp := kresp.(*kmsg.AlterClientQuotasResponse)
-			if cl.AsJSON() {
-				out.ExitJSON(resp)
+			if err != nil {
+				return fmt.Errorf("unable to alter client quotas: %v", err)
 			}
+			resp := kresp.(*kmsg.AlterClientQuotasResponse)
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
+			table := out.NewFormattedTable(cl.Format(), "quota.alter", 1, "results",
+				"ENTITY", "STATUS", "MESSAGE")
 			for _, entry := range resp.Entries {
-				fmt.Fprint(tw, "{")
-				for i, entity := range entry.Entity {
-					if i > 0 {
-						fmt.Fprint(tw, ", ")
-					}
-					fmt.Fprint(tw, entity.Type)
-					fmt.Fprint(tw, "=")
+				var entityParts []string
+				for _, entity := range entry.Entity {
 					name := "<default>"
 					if entity.Name != nil {
 						name = *entity.Name
 					}
-					fmt.Fprint(tw, name)
+					entityParts = append(entityParts, entity.Type+"="+name)
 				}
-				fmt.Fprint(tw, "}\t")
+				entityStr := "{" + strings.Join(entityParts, ", ") + "}"
 
 				code := "OK"
 				if err := kerr.ErrorForCode(entry.ErrorCode); err != nil {
 					code = err.Error()
 				}
-				fmt.Fprintf(tw, "%s\t", code)
 
 				msg := ""
 				if entry.ErrorMessage != nil {
 					msg = *entry.ErrorMessage
 				}
-				fmt.Fprintf(tw, "%s\n", msg)
+				table.Row(entityStr, code, msg)
 			}
+			table.Flush()
+			return nil
 		},
 	}
 
@@ -281,7 +277,7 @@ matches, this runs an alter on anything that matches.
 	cmd.Flags().StringArrayVar(&defaults, "default", nil, "type for default matching, where type is user, client-id, or ip; repeatable")
 	cmd.Flags().StringArrayVar(&adds, "add", nil, "key=value quota to add, where the value is a float64; repeatable")
 	cmd.Flags().StringArrayVar(&deletes, "delete", nil, "key quota to delete; repeatable")
-	cmd.Flags().BoolVar(&run, "run", false, "whether to actually run the alter vs. the default to validate only")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "validate the request without applying changes")
 
 	return cmd
 }

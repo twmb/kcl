@@ -74,7 +74,7 @@ SimpleAuthorizer.
 
 		Example: "create -r admin1 -r User:admin2",
 		Args:    cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			req := &kmsg.CreateDelegationTokenRequest{
 				MaxLifetimeMillis: maxLifetimeMillis,
 			}
@@ -91,24 +91,24 @@ SimpleAuthorizer.
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to create delegation token: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
+			if err != nil {
+				return fmt.Errorf("unable to create delegation token: %v", err)
 			}
 			resp := kresp.(*kmsg.CreateDelegationTokenResponse)
 			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-				out.Die("%v", err)
+				return fmt.Errorf("%v", err)
 			}
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
-			fmt.Fprintf(tw, "PRINCIPAL\t%s:%s\n", resp.PrincipalType, resp.PrincipalName)
-			fmt.Fprintf(tw, "ISSUED\t%s\n", millisToStr(resp.IssueTimestamp))
-			fmt.Fprintf(tw, "EXPIRY\t%s\n", millisToStr(resp.ExpiryTimestamp))
-			fmt.Fprintf(tw, "MAX AGE\t%s\n", millisToStr(resp.MaxTimestamp))
-			fmt.Fprintf(tw, "TOKEN ID\t%s\n", resp.TokenID)
-			fmt.Fprintf(tw, "base64(HMAC)\t%s\n", base64.StdEncoding.EncodeToString(resp.HMAC))
+			table := out.NewFormattedTable(cl.Format(), "dtoken.create", 1, "tokens",
+				"FIELD", "VALUE")
+			table.Row("PRINCIPAL", fmt.Sprintf("%s:%s", resp.PrincipalType, resp.PrincipalName))
+			table.Row("ISSUED", millisToStr(resp.IssueTimestamp))
+			table.Row("EXPIRY", millisToStr(resp.ExpiryTimestamp))
+			table.Row("MAX AGE", millisToStr(resp.MaxTimestamp))
+			table.Row("TOKEN ID", resp.TokenID)
+			table.Row("base64(HMAC)", base64.StdEncoding.EncodeToString(resp.HMAC))
+			table.Flush()
+			return nil
 		},
 	}
 
@@ -126,28 +126,30 @@ func renewTokenCommand(cl *client.Client) *cobra.Command {
 		Short:   "Renew a delegation token (Kafka 1.1.0+)",
 		Example: "renew [base64 hmac here]",
 		Args:    cobra.ExactArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			decoded, err := base64.StdEncoding.DecodeString(args[0])
-			out.MaybeDie(err, "unable to base64 decode hmac: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to base64 decode hmac: %v", err)
+			}
 			req := &kmsg.RenewDelegationTokenRequest{
 				HMAC:            decoded,
 				RenewTimeMillis: renewTimeMillis,
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to renew delegation token: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
+			if err != nil {
+				return fmt.Errorf("unable to renew delegation token: %v", err)
 			}
 			resp := kresp.(*kmsg.RenewDelegationTokenResponse)
 			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-				out.Die("%v", err)
+				return fmt.Errorf("%v", err)
 			}
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
-			fmt.Fprintf(tw, "EXPIRY\t%s\n", millisToStr(resp.ExpiryTimestamp))
+			table := out.NewFormattedTable(cl.Format(), "dtoken.renew", 1, "results",
+				"FIELD", "VALUE")
+			table.Row("EXPIRY", millisToStr(resp.ExpiryTimestamp))
+			table.Flush()
+			return nil
 		},
 	}
 
@@ -164,28 +166,30 @@ func expireTokenCommand(cl *client.Client) *cobra.Command {
 		Short:   "Change a delegation token expiry time (Kafka 1.1.0+)",
 		Example: "expire [base64 hmac here]",
 		Args:    cobra.ExactArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
+		RunE: func(_ *cobra.Command, args []string) error {
 			decoded, err := base64.StdEncoding.DecodeString(args[0])
-			out.MaybeDie(err, "unable to base64 decode hmac: %v", err)
+			if err != nil {
+				return fmt.Errorf("unable to base64 decode hmac: %v", err)
+			}
 			req := &kmsg.ExpireDelegationTokenRequest{
 				HMAC:               decoded,
 				ExpiryPeriodMillis: expiryPeriodMillis,
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to expire delegation token: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
+			if err != nil {
+				return fmt.Errorf("unable to expire delegation token: %v", err)
 			}
 			resp := kresp.(*kmsg.ExpireDelegationTokenResponse)
 			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-				out.Die("%v", err)
+				return fmt.Errorf("%v", err)
 			}
 
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-
-			fmt.Fprintf(tw, "EXPIRY\t%s\n", millisToStr(resp.ExpiryTimestamp))
+			table := out.NewFormattedTable(cl.Format(), "dtoken.expire", 1, "results",
+				"FIELD", "VALUE")
+			table.Row("EXPIRY", millisToStr(resp.ExpiryTimestamp))
+			table.Flush()
+			return nil
 		},
 	}
 
@@ -205,7 +209,7 @@ func describeTokensCommand(cl *client.Client) *cobra.Command {
 
 describe -o User:admin // to display tokens owned by the admin user`,
 		Args: cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			req := new(kmsg.DescribeDelegationTokenRequest)
 			for _, owner := range owners {
 				ptyp, pname := "User", owner
@@ -220,23 +224,17 @@ describe -o User:admin // to display tokens owned by the admin user`,
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), req)
-			out.MaybeDie(err, "unable to describe delegation tokens: %v", err)
-			if cl.AsJSON() {
-				out.ExitJSON(kresp)
+			if err != nil {
+				return fmt.Errorf("unable to describe delegation tokens: %v", err)
 			}
 			resp := kresp.(*kmsg.DescribeDelegationTokenResponse)
 			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-				out.Die("%v", err)
+				return fmt.Errorf("%v", err)
 			}
 
+			table := out.NewFormattedTable(cl.Format(), "dtoken.describe", 1, "tokens",
+				"PRINCIPAL", "ISSUED", "EXPIRY", "MAX AGE", "TOKEN ID", "base64(HMAC)", "RENEWERS")
 			for _, detail := range resp.TokenDetails {
-				tw := out.BeginTabWrite()
-				fmt.Fprintf(tw, "PRINCIPAL\t%s:%s\n", detail.PrincipalType, detail.PrincipalName)
-				fmt.Fprintf(tw, "ISSUED\t%s\n", millisToStr(detail.IssueTimestamp))
-				fmt.Fprintf(tw, "EXPIRY\t%s\n", millisToStr(detail.ExpiryTimestamp))
-				fmt.Fprintf(tw, "MAX AGE\t%s\n", millisToStr(detail.MaxTimestamp))
-				fmt.Fprintf(tw, "TOKEN ID\t%s\n", detail.TokenID)
-				fmt.Fprintf(tw, "base64(HMAC)\t%s\n", base64.StdEncoding.EncodeToString(detail.HMAC))
 				var renewers []string
 				for _, renewer := range detail.Renewers {
 					renewers = append(renewers, fmt.Sprintf("%s:%s", renewer.PrincipalType, renewer.PrincipalName))
@@ -244,10 +242,18 @@ describe -o User:admin // to display tokens owned by the admin user`,
 				if len(renewers) == 0 {
 					renewers = append(renewers, fmt.Sprintf("%s:%s", detail.PrincipalType, detail.PrincipalName))
 				}
-				fmt.Fprintf(tw, "RENEWERS\t%s\n", "["+strings.Join(renewers, ", ")+"]")
-				tw.Flush()
-				fmt.Println()
+				table.Row(
+					fmt.Sprintf("%s:%s", detail.PrincipalType, detail.PrincipalName),
+					millisToStr(detail.IssueTimestamp),
+					millisToStr(detail.ExpiryTimestamp),
+					millisToStr(detail.MaxTimestamp),
+					detail.TokenID,
+					base64.StdEncoding.EncodeToString(detail.HMAC),
+					"["+strings.Join(renewers, ", ")+"]",
+				)
 			}
+			table.Flush()
+			return nil
 		},
 	}
 
