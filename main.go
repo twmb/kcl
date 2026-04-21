@@ -25,6 +25,7 @@ import (
 	"github.com/twmb/kcl/commands/admin/userscram"
 	"github.com/twmb/kcl/commands/cluster"
 	"github.com/twmb/kcl/commands/consume"
+	"github.com/twmb/kcl/commands/fake"
 	"github.com/twmb/kcl/commands/metadata"
 	"github.com/twmb/kcl/commands/misc"
 	"github.com/twmb/kcl/commands/myconfig"
@@ -175,6 +176,7 @@ Command completion is available at:
 		partas.Command(cl),
 		userscram.Command(cl),
 		txn.Command(cl),
+		fake.Command(),
 	)
 
 	allCommands(root, func(cmd *cobra.Command) {
