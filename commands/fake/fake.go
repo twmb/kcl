@@ -42,9 +42,9 @@ func Command() *cobra.Command {
 		Long: `Start an in-process kfake cluster for testing.
 
 kcl fake runs a kfake cluster in-process and prints the listen addresses
-to stdout. By default it starts three brokers on kfake-chosen ports on
-127.0.0.1. Point any Kafka client at the printed addresses; SIGINT or
-SIGTERM exits cleanly.
+to stdout. By default it starts three brokers on 127.0.0.1 ports
+9092,9093,9094. Point any Kafka client at the printed addresses; SIGINT
+or SIGTERM exits cleanly.
 
 This is NOT a production broker. kfake implements the user-facing Kafka
 protocol surface (produce, fetch, groups, transactions, ACLs, share
@@ -64,7 +64,7 @@ Default three-broker cluster:
 
 Pick specific ports (the number of ports determines broker count):
 
-  kcl fake --ports 9092,9093,9094
+  kcl fake --ports 19092,19093,19094
   kcl fake --ports 9092                # single broker
 
 Persistent cluster:
@@ -111,10 +111,7 @@ Tune log verbosity for debugging:
 				return out.Errf(out.ExitUsage, "%v", err)
 			}
 
-			numBrokers := 3
-			if len(ports) > 0 {
-				numBrokers = len(ports)
-			}
+			numBrokers := len(ports)
 
 			// Default auto-created / seeded partition count scales with
 			// broker count so the cluster distributes work meaningfully:
@@ -130,9 +127,7 @@ Tune log verbosity for debugging:
 				kfake.NumBrokers(numBrokers),
 				kfake.DefaultNumPartitions(defaultParts),
 				kfake.WithLogger(kfake.BasicLogger(os.Stderr, level)),
-			}
-			if len(ports) > 0 {
-				opts = append(opts, kfake.Ports(ports...))
+				kfake.Ports(ports...),
 			}
 			if dataDir != "" {
 				opts = append(opts, kfake.DataDir(dataDir))
@@ -214,7 +209,7 @@ Tune log verbosity for debugging:
 		},
 	}
 
-	cmd.Flags().IntSliceVar(&ports, "ports", nil, "ports for brokers (comma-separated; broker count = number of ports; default: 3 brokers on kfake-chosen ports)")
+	cmd.Flags().IntSliceVar(&ports, "ports", []int{9092, 9093, 9094}, "ports for brokers (comma-separated; broker count = number of ports)")
 	cmd.Flags().StringVarP(&logLevel, "log-level", "l", "none", "kfake log level: none, error, warn, info, debug")
 	cmd.Flags().StringVarP(&dataDir, "data-dir", "d", "", "persist state under this directory across restarts (default: in-memory only)")
 	cmd.Flags().BoolVar(&syncWrites, "sync", false, "fsync every write for immediate durability (slower)")
