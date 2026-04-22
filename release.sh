@@ -9,14 +9,14 @@ VERSION="$(git describe --tags --always --dirty)"
 LDFLAGS="-X main.version=${VERSION}"
 
 build() {
-	local os="$1" arch="$2" exe="$3"
-	CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -ldflags "$LDFLAGS" -o "$exe"
-	gzip -9 "$exe"
-	mv "$exe.gz" "kcl_${os}_${arch}.gz"
+	local os="$1" arch="$2" suffix="${3:-}"
+	local out="kcl_${os}_${arch}${suffix}"
+	CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -ldflags "$LDFLAGS" -o "$out"
+	gzip -9 -f "$out"
 }
 
-build windows amd64 kcl.exe
-build darwin  amd64 kcl
-build darwin  arm64 kcl
-build linux   amd64 kcl
-build linux   arm64 kcl
+build windows amd64 .exe
+build darwin  amd64
+build darwin  arm64
+build linux   amd64
+build linux   arm64
