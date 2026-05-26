@@ -309,10 +309,17 @@ The wire version used is:
 			}
 			if pinVersion >= 0 {
 				req.SetVersion(pinVersion)
-				vers := kversion.Stable()
-				vers.SetMaxKeyVersion(req.Key(), pinVersion)
-				cl.AddOpt(kgo.MinVersions(vers))
-				cl.AddOpt(kgo.MaxVersions(vers))
+				maxVers := kversion.Stable()
+				maxVers.SetMaxKeyVersion(req.Key(), pinVersion)
+				cl.AddOpt(kgo.MaxVersions(maxVers))
+				// MinVersions is consulted per-request, including
+				// the internal requests franz-go issues (e.g.
+				// Metadata for routing). Only pin the user's key;
+				// leave other keys unset so they negotiate normally
+				// against the broker's actual supported versions.
+				minVers := &kversion.Versions{}
+				minVers.SetMaxKeyVersion(req.Key(), pinVersion)
+				cl.AddOpt(kgo.MinVersions(minVers))
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
