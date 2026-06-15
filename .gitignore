@@ -3,3 +3,9 @@ dev
 kcl
 TODO
 baz
+
+# Local development workspace pinning ../franz-go and ../avro working trees.
+# Required until the unreleased pkg/sr (srfake.NewHandler) and twmb/avro APIs
+# are tagged; references machine-local paths, so not committed.
+go.work
+go.work.sum

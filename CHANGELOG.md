@@ -1,3 +1,36 @@
+Unreleased
+===
+
+### NEW
+
+* `kcl reassign cancel TOPIC:PARTITIONS...` -- cancel in-progress
+  partition reassignments (reverts each partition to its prior replica
+  set).
+* `kcl registry` subtree -- Schema Registry administration over
+  franz-go's `pkg/sr`: `subjects`, `versions`, `schema create|get|list`,
+  `references`, `delete`, `compatibility get|set|test`, `mode get|set`,
+  and `context list|delete`. Operations can be scoped to a context with
+  `--context` / `registry.context`. Configured via `-R/--registry`,
+  `-X registry.urls=...`, or a `schema_registry` config section;
+  defaults to `http://localhost:8081`. Supports basic auth, bearer
+  token, and TLS (`registry.tls.*`).
+* `kcl produce` / `kcl consume` Schema Registry support: encode JSON
+  to the registry binary wire format on produce with `--schema` (value)
+  and `--key-schema` (key), whose value is a small spec --
+  `topic[@ver]`, `subject[@ver]`, `subject:NAME[@ver]`, or `id:N`, with
+  an optional `#message` for protobuf -- resolving an existing schema
+  (producing never registers). Decode back to JSON on consume with
+  `--decode` (both) or `--decode=key` / `--decode=value`. Avro (via
+  `twmb/avro`), JSON Schema, and Protobuf are supported, including
+  schemas that reference other registered schemas.
+* `kcl fake` now also serves an in-memory Schema Registry (srfake) on
+  port 8081 by default (`--registry`, `--registry-port`), and
+  `--seed-demo` seeds `demo-avro`/`demo-proto`/`demo-json` (schema
+  encoded) plus `demo-plain` topics for a zero-setup playground.
+* Config `-X`/env keys now also accept a dot-separated form
+  (`sasl.user`, `registry.tls.server_name`) alongside the legacy
+  pure-underscore form.
+
 v0.18.0
 ===
 

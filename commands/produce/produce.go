@@ -13,6 +13,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/out"
+	"github.com/twmb/kcl/serde"
 )
 
 func Command(cl *client.Client) *cobra.Command {
@@ -29,6 +30,9 @@ func Command(cl *client.Client) *cobra.Command {
 		maxMessageBytes      int32
 		allowAutoTopicCreate bool
 		headers              []string
+
+		valueSchemaSpec string
+		keySchemaSpec   string
 	)
 
 	cmd := &cobra.Command{
@@ -163,6 +167,41 @@ To read JSON-encoded values:
 
 To show partition and offset for each produced record:
   -o 'produced to %t[%p]@%o\n'
+
+
+SCHEMA REGISTRY
+
+The value (--schema) and/or key (--key-schema) can be encoded into the Schema
+Registry wire format: the component is read as JSON (via the normal format
+verbs) and encoded to the schema's binary form with the registry's magic-byte +
+schema-id header. Point kcl at a registry with -R/--registry (see "kcl registry
+--help"). This encodes against an EXISTING schema; it never registers one (use
+"kcl registry schema create" to register).
+
+The flag value is a small spec:
+
+  topic[@VERSION]          schema for <topic>-value / <topic>-key (latest)
+  NAME[@VERSION]           a subject (bare); e.g. orders-value, orders-value@3
+  subject:NAME[@VERSION]   an explicit subject (escape hatch for odd names)
+  id:N                     a registered schema id
+
+VERSION is a number or "latest" (default). Any form may add a trailing
+#MESSAGE to pick the protobuf message in a multi-message schema. The "topic"
+strategy cannot be used when the input format parses a per-record topic (%t);
+use id: or subject: instead.
+
+Examples:
+
+  # Encode values with the latest registered orders-value schema:
+  echo '{"id":"a","age":3}' | kcl produce orders --schema topic
+
+  # By explicit subject/version, or by id:
+  kcl produce orders --schema orders-value@3
+  kcl produce orders --schema id:8
+
+  # Protobuf, selecting the message; and encoding the key too:
+  kcl produce orders --schema topic#com.acme.Order
+  kcl produce orders -f '%k %v\n' --key-schema id:7 --schema topic
 `,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
@@ -242,6 +281,53 @@ To show partition and offset for each produced record:
 				staticHeaders = append(staticHeaders, kgo.RecordHeader{Key: k, Value: []byte(v)})
 			}
 
+			// Build Schema Registry encoders for the value and/or key if a
+			// --schema / --key-schema spec was given. Both resolve against the
+			// same registry; producing never registers schemas.
+			var valueEnc, keyEnc *serde.Encoder
+			if valueSchemaSpec != "" || keySchemaSpec != "" {
+				scl, err := cl.SchemaRegistryClient()
+				if err != nil {
+					return out.Errf(out.ExitUsage, "%v", err)
+				}
+				var topic string
+				if len(args) > 0 {
+					topic = args[0]
+				}
+				hasTopicVerb := strings.Contains(informat, "%t")
+
+				build := func(flag, raw string, isKey bool) (*serde.Encoder, error) {
+					spec, err := parseSchemaSpec(raw)
+					if err != nil {
+						return nil, out.Errf(out.ExitUsage, "invalid %s: %v", flag, err)
+					}
+					// A single encoder is resolved up front for the whole run.
+					// If the subject is derived from the topic but the input
+					// format parses a per-record topic (%t), records for other
+					// topics would be silently encoded against the wrong schema.
+					// Reject that rather than corrupt the stream.
+					if spec.DerivesSubject() && hasTopicVerb {
+						return nil, out.Errf(out.ExitUsage, "%s derives the subject from the topic, but -f/--format parses a per-record topic (%%t); use %s id:N or %s subject:NAME", flag, flag, flag)
+					}
+					enc, err := serde.NewEncoder(scl, topic, isKey, spec)
+					if err != nil {
+						return nil, out.Errf(out.ExitError, "%s: %v", flag, err)
+					}
+					return enc, nil
+				}
+
+				if valueSchemaSpec != "" {
+					if valueEnc, err = build("--schema", valueSchemaSpec, false); err != nil {
+						return err
+					}
+				}
+				if keySchemaSpec != "" {
+					if keyEnc, err = build("--key-schema", keySchemaSpec, true); err != nil {
+						return err
+					}
+				}
+			}
+
 			for {
 				r, err := reader.ReadRecord()
 				if err != nil {
@@ -262,6 +348,22 @@ To show partition and offset for each produced record:
 
 				// Override the partition in the case when the manual partitioner is used.
 				r.Partition = partition
+
+				// Schema Registry encode: JSON in -> schema binary (with the
+				// registry wire header) out. Tombstones (nil value) are left
+				// untouched.
+				if keyEnc != nil && r.Key != nil {
+					r.Key, err = keyEnc.Encode(nil, r.Key)
+					if err != nil {
+						return fmt.Errorf("unable to schema-encode key: %v", err)
+					}
+				}
+				if valueEnc != nil && r.Value != nil {
+					r.Value, err = valueEnc.Encode(nil, r.Value)
+					if err != nil {
+						return fmt.Errorf("unable to schema-encode value: %v", err)
+					}
+				}
 
 				if len(staticHeaders) > 0 {
 					r.Headers = append(r.Headers, staticHeaders...)
@@ -293,6 +395,9 @@ To show partition and offset for each produced record:
 	cmd.Flags().Int32Var(&maxMessageBytes, "max-message-bytes", 0, "max record batch size in bytes (0 uses broker default)")
 	cmd.Flags().BoolVar(&allowAutoTopicCreate, "allow-auto-topic-creation", false, "allow auto-creation of topics that don't exist")
 	cmd.Flags().StringArrayVarP(&headers, "header", "H", nil, "header in key=value format to attach to each record (repeatable)")
+
+	cmd.Flags().StringVar(&valueSchemaSpec, "schema", "", "Schema Registry encode the value; spec is topic[@ver] | subject[@ver] | subject:NAME[@ver] | id:N, with optional #message (see help)")
+	cmd.Flags().StringVar(&keySchemaSpec, "key-schema", "", "Schema Registry encode the key; same spec form as --schema")
 
 	return cmd
 }

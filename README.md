@@ -10,6 +10,7 @@ kcl
 - [Autocompletion](#autocompletion)
 - [Group Consuming](#group-consuming)
 - [Share Groups](#share-groups)
+- [Schema Registry](#schema-registry)
 - [Local Fake Cluster](#local-fake-cluster)
 - [API at a Glance](#api-at-a-glance)
 - [Examples](#examples)
@@ -153,6 +154,95 @@ acknowledged:
 `kcl share-group` has its own `list`, `describe`, `seek`, `delete`, and
 `offset-delete` subcommands.
 
+## Schema Registry
+
+The Schema Registry is a separate HTTP service from the Kafka brokers. Point
+kcl at it with `-R/--registry` (comma-separated URLs), `-X registry.urls=...`,
+or a `schema_registry` config section; it defaults to `http://localhost:8081`
+(mirroring the `localhost:9092` broker default). Auth is optional: basic auth
+(`registry.user` / `registry.pass`), a bearer token (`registry.bearer_token`),
+and TLS for `https` URLs (`registry.tls.*`, mirroring the Kafka `tls.*` keys).
+
+`kcl registry` administers the registry as a thin layer over franz-go's typed
+`pkg/sr` API:
+
+```
+kcl registry subjects                          # list subjects
+kcl registry versions mytopic-value            # list a subject's versions
+kcl registry schema list                       # all schemas across all subjects
+kcl registry schema create mytopic-value -s schema.avsc   # register (avro by default)
+kcl registry schema get -S mytopic-value       # latest schema for a subject
+kcl registry schema get --id 5                 # schema by global id
+kcl registry references mytopic-value          # schemas that reference this one
+kcl registry delete mytopic-value -v 3         # soft-delete a version (--permanent to hard)
+kcl registry compat set BACKWARD mytopic-value # set per-subject compatibility
+kcl registry compat get                        # global compatibility
+kcl registry compat test mytopic-value -s new.avsc --verbose   # check a candidate schema
+kcl registry mode get                          # global mode
+kcl registry context list                      # list contexts (namespaces)
+kcl --context myctx registry subjects          # scope to a context
+```
+
+(`schema create` is also available as `schema register`.)
+
+`kcl produce` and `kcl consume` can transcode between JSON and the Schema
+Registry binary wire format (the magic byte + 4-byte schema id, plus the
+Protobuf message-index). **Avro**, **JSON Schema**, and **Protobuf** are
+supported. Encoding is the inverse of decoding: produce reads JSON and writes
+schema-encoded bytes; consume reads schema-encoded bytes and writes JSON, which
+then flows through the normal `%v`/`%k` format verbs.
+
+On produce, `--schema` (value) and `--key-schema` (key) take a small spec that
+resolves an *existing* schema (producing never registers — use `kcl registry
+schema create` for that):
+
+```
+topic[@VERSION]          schema for <topic>-value / <topic>-key (latest)
+NAME[@VERSION]           a subject (bare), e.g. orders-value, orders-value@3
+subject:NAME[@VERSION]   an explicit subject (escape hatch for odd names)
+id:N                     a registered schema id
+```
+
+`VERSION` is a number or `latest` (default); any form may add a trailing
+`#MESSAGE` to pick the protobuf message in a multi-message schema.
+
+```
+# Encode values with the latest registered <topic>-value schema:
+echo '{"id":"a","n":1}' | kcl produce orders --schema topic
+
+# By explicit subject/version, or by id; encode the key too:
+kcl produce orders --schema orders-value@3
+kcl produce orders -f '%k %v\n' --key-schema id:7 --schema id:8
+
+# Protobuf, selecting the message:
+kcl produce orders --schema topic#com.acme.Order
+```
+
+On consume, opt in with `--decode` (both key and value), or `--decode=value` /
+`--decode=key` for one. The schema id is read from each record and the schema is
+fetched and cached automatically; records not in the wire format are printed
+unchanged:
+
+```
+kcl consume orders --decode
+kcl consume orders --decode=value -f '%k -> %v\n'
+```
+
+The subject defaults to the TopicNameStrategy (`<topic>-value` / `<topic>-key`)
+when not given explicitly. For an end-to-end playground with no external
+dependencies, `kcl fake --seed-demo` stands up a registry and seeds
+schema-encoded topics (see below).
+
+To test against a real registry instead of the fake, run one in Docker, e.g.
+Redpanda (registry on 8081):
+
+```
+docker run -d --name redpanda -p 9092:9092 -p 8081:8081 \
+  redpandadata/redpanda redpanda start --schema-registry-addr 0.0.0.0:8081 \
+  --kafka-addr 0.0.0.0:9092 --advertise-kafka-addr localhost:9092
+kcl -R http://localhost:8081 registry subjects
+```
+
 ## Local Fake Cluster
 
 `kcl fake` runs a [kfake][4] cluster in-process and prints the listen
@@ -179,7 +269,28 @@ kcl fake --as-version 3.9                # cap advertised API versions
 kcl fake --acls --sasl 'plain:$USER:$PW' # SASL superuser from env vars
 kcl fake -c group.consumer.heartbeat.interval.ms=500  # broker config
 kcl fake -l debug                        # verbose kfake logs
+kcl fake --registry=false                # disable the bundled schema registry
+kcl fake --seed-demo                     # seed schema-encoded + plain demo topics
 ```
+
+`kcl fake` also serves an in-memory Schema Registry ([srfake][5]) on port 8081
+by default, so the same process backs schema-aware produce/consume; disable it
+with `--registry=false` or move it with `--registry-port`. If the port is busy
+(e.g. a real registry is already running) kcl warns and continues without it,
+unless `--registry`/`--registry-port` was passed explicitly.
+
+`--seed-demo` creates `demo-avro`, `demo-proto`, and `demo-json` (each with a
+registered schema of that type) plus `demo-plain` (no schema), all sharing the
+same `{id, count}` shape, and produces a few records to each -- a one-command,
+Docker-free playground for the whole schema-registry flow:
+
+```
+kcl fake --seed-demo
+kcl consume demo-avro -o start --decode    # decodes back to JSON
+kcl consume demo-plain -o start                  # plain JSON, no schema
+```
+
+[5]: https://github.com/twmb/franz-go/tree/master/pkg/sr/srfake
 
 The `--sasl` flag accepts `MECHANISM:USER:PASS` (repeatable). Supported
 mechanisms: `plain`, `scram-sha-256`, `scram-sha-512`. User and password
@@ -207,6 +318,7 @@ kcl
  profile        -- manage connection profiles / config
  quota          -- alter/describe/resolve client quotas
  reassign       -- alter/list partition reassignments
+ registry       -- schema registry: schemas, subjects, compatibility, mode
  share-group    -- share group operations (KIP-932)
  topic          -- list/create/describe/delete/add-partitions/trim-prefix
  txn            -- describe active transactions / producers
@@ -310,6 +422,24 @@ kcl group list                                    # classic + KIP-848 + share gr
 kcl group describe mygroup
 kcl group seek mygroup --to end --yes
 kcl acl list
+```
+
+### Schema Registry
+
+```
+# One-command playground (brokers + registry + seeded schema topics):
+kcl fake --seed-demo
+kcl consume demo-avro -o start --decode
+
+# Register a schema and round-trip JSON <-> Avro binary:
+kcl registry schema register foo-value -s user.avsc
+echo '{"id":"a","n":1}' | kcl produce foo --schema topic
+kcl consume foo -o start --decode
+
+# Inspect the registry:
+kcl registry subjects
+kcl registry schema get -S foo-value
+kcl registry compat get foo-value
 ```
 
 ### Probing against a local fake cluster

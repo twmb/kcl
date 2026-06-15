@@ -55,6 +55,30 @@ type CfgSASL struct {
 	IsToken bool   `toml:"is_token,omitempty"`
 }
 
+// CfgSR configures the Schema Registry client used by "kcl registry" and by
+// schema-aware produce/consume. The registry is a separate HTTP service from
+// the Kafka brokers, so it has its own URLs and auth.
+type CfgSR struct {
+	// URLs are the Schema Registry base URLs (e.g. http://localhost:8081).
+	URLs []string `toml:"urls,omitempty"`
+
+	// User and Pass, if set, enable HTTP basic auth.
+	User string `toml:"user,omitempty"`
+	Pass string `toml:"pass,omitempty"`
+
+	// BearerToken, if set, is sent as an Authorization: Bearer header. It is
+	// mutually exclusive with basic auth.
+	BearerToken string `toml:"bearer_token,omitempty"`
+
+	// Context, if set, is the schema registry context (namespace) that all
+	// requests are scoped to by default.
+	Context string `toml:"context,omitempty"`
+
+	// TLS configures TLS for https registry URLs. It reuses the same shape
+	// as the Kafka TLS config.
+	TLS *CfgTLS `toml:"tls,omitzero"`
+}
+
 // duration wraps time.Duration with TOML + -X parsing that accepts Go
 // duration strings ("5s", "500ms", "1m").
 type Duration time.Duration
@@ -96,6 +120,9 @@ type Cfg struct {
 
 	TLS  *CfgTLS  `toml:"tls,omitzero"`
 	SASL *CfgSASL `toml:"sasl,omitempty"`
+
+	// SR configures the Schema Registry client.
+	SR *CfgSR `toml:"schema_registry,omitzero"`
 }
 
 // CfgFile represents the full config file, which may contain named profiles.
@@ -112,6 +139,7 @@ type CfgFile struct {
 type Client struct {
 	opts    []kgo.Opt
 	once    sync.Once
+	cfgOnce sync.Once
 	client  *kgo.Client
 	txnSess *kgo.GroupTransactSession
 
@@ -123,16 +151,18 @@ type Client struct {
 	format    string
 
 	// config options parsed and filled on load
-	defaultCfgPath    string
-	cfgPath           string
-	noCfgFile         bool
-	envNoCfgFile      bool
-	envPfx            string
-	flagOverrides     []string
-	bootstrapServers  []string // --bootstrap-servers/-B override
-	profileName       string   // --context/-C override
-	cfgFile           CfgFile
-	cfg            Cfg
+	defaultCfgPath   string
+	cfgPath          string
+	noCfgFile        bool
+	envNoCfgFile     bool
+	envPfx           string
+	flagOverrides    []string
+	bootstrapServers []string // --bootstrap-servers/-B override
+	registryURLs     []string // --registry/-R override
+	registryContext  string   // registry --context override
+	profileName      string   // --context/-C override
+	cfgFile          CfgFile
+	cfg              Cfg
 }
 
 // Format returns the output format: "text", "json", or "awk".
@@ -216,6 +246,7 @@ func New(root *cobra.Command) *Client {
 	root.PersistentFlags().StringVar(&c.envPfx, "config-env-prefix", "KCL_", "environment variable prefix for config overrides (middle priority)")
 	root.PersistentFlags().StringArrayVarP(&c.flagOverrides, "config-opt", "X", nil, "flag provided config option (highest priority)")
 	root.PersistentFlags().StringSliceVarP(&c.bootstrapServers, "bootstrap-servers", "B", nil, "comma-separated list of seed brokers (overrides profile/config); shorthand for -X seed_brokers=...")
+	root.PersistentFlags().StringSliceVarP(&c.registryURLs, "registry", "R", nil, "comma-separated list of schema registry URLs (overrides profile/config); shorthand for -X registry.urls=...")
 	root.PersistentFlags().StringVar(&c.asVersion, "as-version", "", "if nonempty, which version of Kafka versions to use (e.g. '0.8.0', '2.3.0')")
 	root.PersistentFlags().StringVar(&c.format, "format", "text", "output format (text, json, awk)")
 	root.PersistentFlags().StringVarP(&c.profileName, "profile", "C", "", "use a specific config profile")
@@ -287,9 +318,19 @@ func (c *Client) loadTxnSessOnce() {
 	})
 }
 
+// loadCfg parses the config file and applies overrides exactly once. It is
+// safe to call from both the Kafka client path (fillOpts) and the Schema
+// Registry client path, which lets "kcl registry" commands run without ever
+// constructing a kgo.Client.
+func (c *Client) loadCfg() {
+	c.cfgOnce.Do(func() {
+		c.parseCfgFile()     // loads config file if needed
+		c.processOverrides() // overrides config values just loaded
+	})
+}
+
 func (c *Client) fillOpts() {
-	c.parseCfgFile()        // loads config file if needed
-	c.processOverrides()    // overrides config values just loaded
+	c.loadCfg()             // loads config file + overrides (once)
 	c.maybeAddMaxVersions() // fills MaxVersions if necessary
 	c.parseLogLevel()       // adds basic logger if necessary
 
@@ -403,6 +444,19 @@ func (c *Client) processOverrides() {
 		}
 	}
 
+	mksr := func(c *Cfg) {
+		if c.SR == nil {
+			c.SR = new(CfgSR)
+		}
+	}
+
+	mksrtls := func(c *Cfg) {
+		mksr(c)
+		if c.SR.TLS == nil {
+			c.SR.TLS = new(CfgTLS)
+		}
+	}
+
 	intoDuration := func(v string, dst *Duration) error {
 		d, err := time.ParseDuration(v)
 		if err != nil {
@@ -413,28 +467,49 @@ func (c *Client) processOverrides() {
 	}
 
 	fns := map[string]func(*Cfg, string) error{
-		"seed_brokers":          func(c *Cfg, v string) error { return intoStrSlice(v, &c.SeedBrokers) },
-		"broker_timeout":        func(c *Cfg, v string) error { return intoDuration(v, &c.BrokerTimeout) },
-		"dial_timeout":          func(c *Cfg, v string) error { return intoDuration(v, &c.DialTimeout) },
-		"retry_timeout":         func(c *Cfg, v string) error { return intoDuration(v, &c.RetryTimeout) },
+		"seed_brokers":   func(c *Cfg, v string) error { return intoStrSlice(v, &c.SeedBrokers) },
+		"broker_timeout": func(c *Cfg, v string) error { return intoDuration(v, &c.BrokerTimeout) },
+		"dial_timeout":   func(c *Cfg, v string) error { return intoDuration(v, &c.DialTimeout) },
+		"retry_timeout":  func(c *Cfg, v string) error { return intoDuration(v, &c.RetryTimeout) },
 		// Removed in favor of duration-based names above.
 		"timeout_ms": func(c *Cfg, v string) error {
 			return fmt.Errorf("timeout_ms was renamed to broker_timeout and now takes a Go duration (e.g. -X broker_timeout=5s); please update your config or -X flags")
 		},
 		"use_tls":               func(c *Cfg, _ string) error { mktls(c); return nil },
-		"tls_ca_cert_path":      func(c *Cfg, v string) error { mktls(c); c.TLS.CACert = v; return nil },
-		"tls_client_cert_path":  func(c *Cfg, v string) error { mktls(c); c.TLS.ClientCertPath = v; return nil },
-		"tls_client_key_path":   func(c *Cfg, v string) error { mktls(c); c.TLS.ClientKeyPath = v; return nil },
-		"tls_insecure":          func(c *Cfg, _ string) error { mktls(c); c.TLS.InsecureSkipVerify = true; return nil },
-		"tls_server_name":       func(c *Cfg, v string) error { mktls(c); c.TLS.ServerName = v; return nil },
-		"tls_min_version":       func(c *Cfg, v string) error { mktls(c); c.TLS.MinVersion = v; return nil },
-		"tls_cipher_suites":     func(c *Cfg, v string) error { mktls(c); return intoStrSlice(v, &c.TLS.CipherSuites) },
-		"tls_curve_preferences": func(c *Cfg, v string) error { mktls(c); return intoStrSlice(v, &c.TLS.CurvePreferences) },
-		"sasl_method":           func(c *Cfg, v string) error { mksasl(c); c.SASL.Method = v; return nil },
-		"sasl_zid":              func(c *Cfg, v string) error { mksasl(c); c.SASL.Zid = v; return nil },
-		"sasl_user":             func(c *Cfg, v string) error { mksasl(c); c.SASL.User = v; return nil },
-		"sasl_pass":             func(c *Cfg, v string) error { mksasl(c); c.SASL.Pass = v; return nil },
-		"sasl_is_token":         func(c *Cfg, _ string) error { mksasl(c); c.SASL.IsToken = true; return nil }, // accepts any val
+		"tls.ca_cert_path":      func(c *Cfg, v string) error { mktls(c); c.TLS.CACert = v; return nil },
+		"tls.client_cert_path":  func(c *Cfg, v string) error { mktls(c); c.TLS.ClientCertPath = v; return nil },
+		"tls.client_key_path":   func(c *Cfg, v string) error { mktls(c); c.TLS.ClientKeyPath = v; return nil },
+		"tls.insecure":          func(c *Cfg, _ string) error { mktls(c); c.TLS.InsecureSkipVerify = true; return nil },
+		"tls.server_name":       func(c *Cfg, v string) error { mktls(c); c.TLS.ServerName = v; return nil },
+		"tls.min_version":       func(c *Cfg, v string) error { mktls(c); c.TLS.MinVersion = v; return nil },
+		"tls.cipher_suites":     func(c *Cfg, v string) error { mktls(c); return intoStrSlice(v, &c.TLS.CipherSuites) },
+		"tls.curve_preferences": func(c *Cfg, v string) error { mktls(c); return intoStrSlice(v, &c.TLS.CurvePreferences) },
+		"sasl.method":           func(c *Cfg, v string) error { mksasl(c); c.SASL.Method = v; return nil },
+		"sasl.zid":              func(c *Cfg, v string) error { mksasl(c); c.SASL.Zid = v; return nil },
+		"sasl.user":             func(c *Cfg, v string) error { mksasl(c); c.SASL.User = v; return nil },
+		"sasl.pass":             func(c *Cfg, v string) error { mksasl(c); c.SASL.Pass = v; return nil },
+		"sasl.is_token":         func(c *Cfg, _ string) error { mksasl(c); c.SASL.IsToken = true; return nil }, // accepts any val
+
+		"registry.urls":                 func(c *Cfg, v string) error { mksr(c); return intoStrSlice(v, &c.SR.URLs) },
+		"registry.user":                 func(c *Cfg, v string) error { mksr(c); c.SR.User = v; return nil },
+		"registry.pass":                 func(c *Cfg, v string) error { mksr(c); c.SR.Pass = v; return nil },
+		"registry.bearer_token":         func(c *Cfg, v string) error { mksr(c); c.SR.BearerToken = v; return nil },
+		"registry.context":              func(c *Cfg, v string) error { mksr(c); c.SR.Context = v; return nil },
+		"registry.tls.ca_cert_path":     func(c *Cfg, v string) error { mksrtls(c); c.SR.TLS.CACert = v; return nil },
+		"registry.tls.client_cert_path": func(c *Cfg, v string) error { mksrtls(c); c.SR.TLS.ClientCertPath = v; return nil },
+		"registry.tls.client_key_path":  func(c *Cfg, v string) error { mksrtls(c); c.SR.TLS.ClientKeyPath = v; return nil },
+		"registry.tls.insecure":         func(c *Cfg, _ string) error { mksrtls(c); c.SR.TLS.InsecureSkipVerify = true; return nil },
+		"registry.tls.server_name":      func(c *Cfg, v string) error { mksrtls(c); c.SR.TLS.ServerName = v; return nil },
+		"registry.tls.min_version":      func(c *Cfg, v string) error { mksrtls(c); c.SR.TLS.MinVersion = v; return nil },
+	}
+
+	// The canonical keys above are dot-separated by field. We match against a
+	// flattened (dot->underscore) index so that both the dotted form and the
+	// legacy pure-underscore form (e.g. "sasl_user") resolve to the same
+	// handler. See normCfgKey.
+	flat := make(map[string]func(*Cfg, string) error, len(fns))
+	for k, fn := range fns {
+		flat[normCfgKey(k)] = fn
 	}
 
 	parse := func(kvs []string) {
@@ -445,7 +520,7 @@ func (c *Client) processOverrides() {
 			}
 			k, v := kv[0], kv[1]
 
-			fn, exists := fns[strings.ToLower(k)]
+			fn, exists := flat[normCfgKey(k)]
 			if !exists {
 				out.Die("unknown opt key %q", k)
 			}
@@ -455,9 +530,11 @@ func (c *Client) processOverrides() {
 		}
 	}
 
+	// Environment variables use the flattened (underscore) form, uppercased,
+	// since env var names cannot contain dots: KCL_REGISTRY_TLS_SERVER_NAME.
 	var envOverrides []string
 	for k := range fns {
-		if v, exists := os.LookupEnv(c.envPfx + strings.ToUpper(k)); exists {
+		if v, exists := os.LookupEnv(c.envPfx + strings.ToUpper(normCfgKey(k))); exists {
 			envOverrides = append(envOverrides, k+"="+v)
 		}
 	}
@@ -468,6 +545,14 @@ func (c *Client) processOverrides() {
 	// profile/config/-X setting of seed_brokers.
 	if len(c.bootstrapServers) > 0 {
 		c.cfg.SeedBrokers = c.bootstrapServers
+	}
+	// -R/--registry is applied last so it wins over any profile/config/-X
+	// setting of registry.urls.
+	if len(c.registryURLs) > 0 {
+		if c.cfg.SR == nil {
+			c.cfg.SR = new(CfgSR)
+		}
+		c.cfg.SR.URLs = c.registryURLs
 	}
 }
 
@@ -535,14 +620,21 @@ func (c *Client) maybeAddSASL() error {
 }
 
 func (c *Client) loadTLS() (*tls.Config, error) {
-	if c.cfg.TLS == nil {
+	return buildTLS(c.cfg.TLS)
+}
+
+// buildTLS builds a *tls.Config from a CfgTLS. It returns (nil, nil) if the
+// config is nil, meaning TLS is not requested. This is shared by the Kafka
+// client and the Schema Registry client.
+func buildTLS(cfg *CfgTLS) (*tls.Config, error) {
+	if cfg == nil {
 		return nil, nil
 	}
 
 	tc := new(tls.Config)
 
-	tc.InsecureSkipVerify = c.cfg.TLS.InsecureSkipVerify
-	switch strings.ToLower(c.cfg.TLS.MinVersion) {
+	tc.InsecureSkipVerify = cfg.InsecureSkipVerify
+	switch strings.ToLower(cfg.MinVersion) {
 	case "", "v1.2", "1.2":
 		tc.MinVersion = tls.VersionTLS12 // the default
 	case "v1.3", "1.3":
@@ -552,17 +644,17 @@ func (c *Client) loadTLS() (*tls.Config, error) {
 	case "v1.0", "1.0":
 		tc.MinVersion = tls.VersionTLS10
 	default:
-		return nil, fmt.Errorf("unrecognized tls min version %s", c.cfg.TLS.MinVersion)
+		return nil, fmt.Errorf("unrecognized tls min version %s", cfg.MinVersion)
 	}
 
-	if suites := c.cfg.TLS.CipherSuites; len(suites) > 0 {
+	if suites := cfg.CipherSuites; len(suites) > 0 {
 		potentials := make(map[string]uint16)
 		for _, suite := range append(tls.CipherSuites(), tls.InsecureCipherSuites()...) {
 			potentials[Strnorm(suite.Name)] = suite.ID
 			potentials[Strnorm(strings.TrimPrefix("TLS_", suite.Name))] = suite.ID
 		}
 
-		for _, suite := range c.cfg.TLS.CipherSuites {
+		for _, suite := range cfg.CipherSuites {
 			id, exists := potentials[Strnorm(suite)]
 			if !exists {
 				return nil, fmt.Errorf("unknown cipher suite %s", suite)
@@ -571,14 +663,14 @@ func (c *Client) loadTLS() (*tls.Config, error) {
 		}
 	}
 
-	if curves := c.cfg.TLS.CurvePreferences; len(curves) > 0 {
+	if curves := cfg.CurvePreferences; len(curves) > 0 {
 		potentials := map[string]tls.CurveID{
 			"curvep256": tls.CurveP256,
 			"curvep384": tls.CurveP384,
 			"curvep521": tls.CurveP521,
 			"x25519":    tls.X25519,
 		}
-		for _, curve := range c.cfg.TLS.CurvePreferences {
+		for _, curve := range cfg.CurvePreferences {
 			id, exists := potentials[Strnorm(curve)]
 			if !exists {
 				return nil, fmt.Errorf("unknown curve preference %s", curve)
@@ -587,34 +679,34 @@ func (c *Client) loadTLS() (*tls.Config, error) {
 		}
 	}
 
-	if c.cfg.TLS.CACert != "" {
-		ca, err := os.ReadFile(c.cfg.TLS.CACert)
+	if cfg.CACert != "" {
+		ca, err := os.ReadFile(cfg.CACert)
 		if err != nil {
 			return nil, fmt.Errorf("unable to read CA file %q: %v",
-				c.cfg.TLS.CACert, err)
+				cfg.CACert, err)
 		}
 
 		tc.RootCAs = x509.NewCertPool()
 		tc.RootCAs.AppendCertsFromPEM(ca)
 	}
 
-	if c.cfg.TLS.ClientCertPath != "" ||
-		c.cfg.TLS.ClientKeyPath != "" {
+	if cfg.ClientCertPath != "" ||
+		cfg.ClientKeyPath != "" {
 
-		if c.cfg.TLS.ClientCertPath == "" ||
-			c.cfg.TLS.ClientKeyPath == "" {
+		if cfg.ClientCertPath == "" ||
+			cfg.ClientKeyPath == "" {
 			return nil, errors.New("both client and key cert paths must be specified, but saw only one")
 		}
 
-		cert, err := os.ReadFile(c.cfg.TLS.ClientCertPath)
+		cert, err := os.ReadFile(cfg.ClientCertPath)
 		if err != nil {
 			return nil, fmt.Errorf("unable to read client cert file %q: %v",
-				c.cfg.TLS.ClientCertPath, err)
+				cfg.ClientCertPath, err)
 		}
-		key, err := os.ReadFile(c.cfg.TLS.ClientKeyPath)
+		key, err := os.ReadFile(cfg.ClientKeyPath)
 		if err != nil {
 			return nil, fmt.Errorf("unable to read client key file %q: %v",
-				c.cfg.TLS.ClientKeyPath, err)
+				cfg.ClientKeyPath, err)
 		}
 
 		pair, err := tls.X509KeyPair(cert, key)
@@ -657,6 +749,17 @@ func (c *Client) parseLogLevel() {
 		of = f
 	}
 	c.opts = append(c.opts, kgo.WithLogger(kgo.BasicLogger(of, level, nil)))
+}
+
+// normCfgKey flattens a -X / env config key to a canonical match form. The
+// documented, canonical key form is dot-separated by struct field (e.g.
+// "sasl.user", "registry.tls.server_name"), which keeps any underscores
+// unambiguously within a single field name. Matching is done on the flattened
+// (dot->underscore, lowercased) form so that the legacy pure-underscore form
+// ("sasl_user", "registry_tls_server_name") from older configs and scripts
+// still resolves to the same handler.
+func normCfgKey(k string) string {
+	return strings.ReplaceAll(strings.ToLower(k), ".", "_")
 }
 
 func Strnorm(s string) string {

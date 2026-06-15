@@ -30,6 +30,7 @@ import (
 	"github.com/twmb/kcl/commands/misc"
 	"github.com/twmb/kcl/commands/myconfig"
 	"github.com/twmb/kcl/commands/produce"
+	"github.com/twmb/kcl/commands/registry"
 	"github.com/twmb/kcl/out"
 )
 
@@ -156,6 +157,7 @@ Command completion is available at:
 	root.AddCommand(
 		consume.Command(cl),
 		produce.Command(cl),
+		registry.Command(cl),
 		metadataCmd,
 		misc.Command(cl),
 		admin.Command(cl),

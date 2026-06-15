@@ -3,6 +3,7 @@ package consume
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -15,10 +16,12 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/sr"
 
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/offsetparse"
 	"github.com/twmb/kcl/out"
+	"github.com/twmb/kcl/serde"
 )
 
 type consumption struct {
@@ -58,6 +61,8 @@ type consumption struct {
 
 	protoFile    string
 	protoMessage string
+
+	decode []string // schema-registry decode: "key" and/or "value"
 }
 
 // Command returns a consume command.
@@ -229,6 +234,27 @@ func (c *consumption) run(topics []string) error {
 		if err != nil {
 			return fmt.Errorf("unable to unmarshal pb: %v", err)
 		}
+	}
+
+	var decodeValue, decodeKey bool
+	for _, d := range c.decode {
+		switch strings.ToLower(d) {
+		case "value":
+			decodeValue = true
+		case "key":
+			decodeKey = true
+		default:
+			return out.Errf(out.ExitUsage, "invalid --decode %q: want key or value", d)
+		}
+	}
+	if decodeValue || decodeKey {
+		scl, err := c.cl.SchemaRegistryClient()
+		if err != nil {
+			return out.Errf(out.ExitUsage, "%v", err)
+		}
+		co.dec = serde.NewDecoder(scl)
+		co.decodeValue = decodeValue
+		co.decodeKey = decodeKey
 	}
 
 	// Resolve timestamp-based end offsets.
@@ -485,12 +511,40 @@ type consumeOutput struct {
 
 	pbd *pbDecoder
 
+	dec           *serde.Decoder
+	decodeValue   bool
+	decodeKey     bool
+	decodeErrSeen map[string]struct{} // dedupes per-record decode error messages
+
 	ctx    context.Context
 	cancel func()
 	quit   uint32
 	done   chan struct{}
 
 	format func(*kgo.Record, *kgo.FetchPartition)
+}
+
+// srDecode decodes b from the Schema Registry wire format to JSON. If b is not
+// SR-framed it is returned unchanged; on any other error the original bytes are
+// returned so output is never silently dropped. Each distinct error message is
+// printed to stderr only once, so a systemic failure (e.g. the registry being
+// unreachable) does not emit one line per record.
+func (co *consumeOutput) srDecode(b []byte, what string) []byte {
+	json, err := co.dec.Decode(b)
+	if err != nil {
+		if !errors.Is(err, sr.ErrBadHeader) {
+			msg := fmt.Sprintf("unable to schema-decode %s: %v", what, err)
+			if co.decodeErrSeen == nil {
+				co.decodeErrSeen = make(map[string]struct{})
+			}
+			if _, seen := co.decodeErrSeen[msg]; !seen {
+				co.decodeErrSeen[msg] = struct{}{}
+				fmt.Fprintln(os.Stderr, msg)
+			}
+		}
+		return b
+	}
+	return json
 }
 
 func (co *consumeOutput) consume() {
@@ -613,6 +667,17 @@ func (co *consumeOutput) consume() {
 					co.num++
 					if co.pbd != nil {
 						r.Value, _ = co.pbd.jsonString(r.Value)
+					}
+					// Schema Registry decode: schema binary -> JSON. Records
+					// that are not SR-framed are left as-is; other errors are
+					// reported but the raw bytes are still printed.
+					if co.dec != nil {
+						if co.decodeKey && r.Key != nil {
+							r.Key = co.srDecode(r.Key, "key")
+						}
+						if co.decodeValue && r.Value != nil {
+							r.Value = co.srDecode(r.Value, "value")
+						}
 					}
 					co.format(r, &p.FetchPartition)
 
