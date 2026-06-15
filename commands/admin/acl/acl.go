@@ -231,7 +231,7 @@ SEE ALSO:
 		},
 	}
 
-	cmd.Flags().StringVar(&resourceType, "type", "", "resource type filter; any matches all")
+	cmd.Flags().StringVar(&resourceType, "type", "any", "resource type filter; default 'any' matches all resource types")
 	cmd.Flags().StringVar(&resourceName, "name", "", "resource name filter; empty matches all")
 	cmd.Flags().StringVar(&resourcePattern, "pattern", "match", "resource name pattern filter; match means all (Kafka 2.0.0+)")
 	cmd.Flags().StringVar(&principal, "principal", "", "principal filter; empty matches all")

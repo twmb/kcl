@@ -31,6 +31,13 @@ Unreleased
   (`sasl.user`, `registry.tls.server_name`) alongside the legacy
   pure-underscore form.
 
+### FIXES
+
+* `kcl acl list` now defaults the resource-type filter to `any` rather
+  than sending an invalid `UNKNOWN` resource type. A bare `kcl acl list`
+  previously produced a malformed DescribeACLs filter that brokers can
+  reject by closing the connection (#56).
+
 v0.18.0
 ===
 
