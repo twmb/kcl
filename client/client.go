@@ -490,17 +490,19 @@ func (c *Client) processOverrides() {
 		"sasl.pass":             func(c *Cfg, v string) error { mksasl(c); c.SASL.Pass = v; return nil },
 		"sasl.is_token":         func(c *Cfg, _ string) error { mksasl(c); c.SASL.IsToken = true; return nil }, // accepts any val
 
-		"registry.urls":                 func(c *Cfg, v string) error { mksr(c); return intoStrSlice(v, &c.SR.URLs) },
-		"registry.user":                 func(c *Cfg, v string) error { mksr(c); c.SR.User = v; return nil },
-		"registry.pass":                 func(c *Cfg, v string) error { mksr(c); c.SR.Pass = v; return nil },
-		"registry.bearer_token":         func(c *Cfg, v string) error { mksr(c); c.SR.BearerToken = v; return nil },
-		"registry.context":              func(c *Cfg, v string) error { mksr(c); c.SR.Context = v; return nil },
-		"registry.tls.ca_cert_path":     func(c *Cfg, v string) error { mksrtls(c); c.SR.TLS.CACert = v; return nil },
-		"registry.tls.client_cert_path": func(c *Cfg, v string) error { mksrtls(c); c.SR.TLS.ClientCertPath = v; return nil },
-		"registry.tls.client_key_path":  func(c *Cfg, v string) error { mksrtls(c); c.SR.TLS.ClientKeyPath = v; return nil },
-		"registry.tls.insecure":         func(c *Cfg, _ string) error { mksrtls(c); c.SR.TLS.InsecureSkipVerify = true; return nil },
-		"registry.tls.server_name":      func(c *Cfg, v string) error { mksrtls(c); c.SR.TLS.ServerName = v; return nil },
-		"registry.tls.min_version":      func(c *Cfg, v string) error { mksrtls(c); c.SR.TLS.MinVersion = v; return nil },
+		"registry.urls":                  func(c *Cfg, v string) error { mksr(c); return intoStrSlice(v, &c.SR.URLs) },
+		"registry.user":                  func(c *Cfg, v string) error { mksr(c); c.SR.User = v; return nil },
+		"registry.pass":                  func(c *Cfg, v string) error { mksr(c); c.SR.Pass = v; return nil },
+		"registry.bearer_token":          func(c *Cfg, v string) error { mksr(c); c.SR.BearerToken = v; return nil },
+		"registry.context":               func(c *Cfg, v string) error { mksr(c); c.SR.Context = v; return nil },
+		"registry.tls.ca_cert_path":      func(c *Cfg, v string) error { mksrtls(c); c.SR.TLS.CACert = v; return nil },
+		"registry.tls.client_cert_path":  func(c *Cfg, v string) error { mksrtls(c); c.SR.TLS.ClientCertPath = v; return nil },
+		"registry.tls.client_key_path":   func(c *Cfg, v string) error { mksrtls(c); c.SR.TLS.ClientKeyPath = v; return nil },
+		"registry.tls.insecure":          func(c *Cfg, _ string) error { mksrtls(c); c.SR.TLS.InsecureSkipVerify = true; return nil },
+		"registry.tls.server_name":       func(c *Cfg, v string) error { mksrtls(c); c.SR.TLS.ServerName = v; return nil },
+		"registry.tls.min_version":       func(c *Cfg, v string) error { mksrtls(c); c.SR.TLS.MinVersion = v; return nil },
+		"registry.tls.cipher_suites":     func(c *Cfg, v string) error { mksrtls(c); return intoStrSlice(v, &c.SR.TLS.CipherSuites) },
+		"registry.tls.curve_preferences": func(c *Cfg, v string) error { mksrtls(c); return intoStrSlice(v, &c.SR.TLS.CurvePreferences) },
 	}
 
 	// The canonical keys above are dot-separated by field. We match against a

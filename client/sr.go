@@ -46,10 +46,11 @@ func (c *Client) SchemaRegistryClient(opts ...sr.ClientOpt) (*sr.Client, error) 
 	}
 
 	// A --context flag wins over a configured registry.context.
-	if ctxName := cfg.Context; ctxName != "" || c.registryContext != "" {
-		if c.registryContext != "" {
-			ctxName = c.registryContext
-		}
+	ctxName := cfg.Context
+	if c.registryContext != "" {
+		ctxName = c.registryContext
+	}
+	if ctxName != "" {
 		srOpts = append(srOpts, sr.DefaultSchemaContext(ctxName))
 	}
 
