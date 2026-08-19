@@ -25,7 +25,7 @@ Without --version, the whole subject (all versions) is deleted. With
 --version, only that version is deleted; pass "latest" for the latest.
 
 Deletes are "soft" by default: the schema is hidden but retained, and can be
-listed again with --show-deleted. A soft-deleted subject/version must be
+listed again with --show-deleted. A subject/version must already be
 soft-deleted before it can be permanently removed with --permanent, which
 irreversibly deletes the data.
 

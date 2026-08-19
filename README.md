@@ -180,7 +180,7 @@ kcl registry compat get                        # global compatibility
 kcl registry compat test mytopic-value -s new.avsc --verbose   # check a candidate schema
 kcl registry mode get                          # global mode
 kcl registry context list                      # list contexts (namespaces)
-kcl --context myctx registry subjects          # scope to a context
+kcl registry --context myctx subjects          # scope to a context
 ```
 
 (`schema create` is also available as `schema register`.)
@@ -286,8 +286,8 @@ Docker-free playground for the whole schema-registry flow:
 
 ```
 kcl fake --seed-demo
-kcl consume demo-avro -o start --decode    # decodes back to JSON
-kcl consume demo-plain -o start                  # plain JSON, no schema
+kcl consume demo-avro -o start --decode   # decodes back to JSON
+kcl consume demo-plain -o start           # plain JSON, no schema
 ```
 
 [5]: https://github.com/twmb/franz-go/tree/master/pkg/sr/srfake

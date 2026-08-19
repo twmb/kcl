@@ -17,9 +17,10 @@ func contextCommand(cl *client.Client) *cobra.Command {
 		Long: `List or delete schema registry contexts.
 
 A context is an independent namespace within a registry: subjects and schema
-ids are unique per context. Scope any registry command (or schema-aware
-produce/consume) to a context with the --context flag or registry.context
-config key.`,
+ids are unique per context. Scope any registry command to a context with the
+--context flag, or anything that talks to the registry -- including
+schema-aware produce/consume -- with the registry.context config key
+(-X registry.context=myctx).`,
 	}
 	cmd.AddCommand(contextListCommand(cl), contextDeleteCommand(cl))
 	return cmd

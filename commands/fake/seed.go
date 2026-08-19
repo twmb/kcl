@@ -98,7 +98,7 @@ func seedDemo(brokerAddrs []string, registryURL string) error {
 
 		if d.schema != "" {
 			fmt.Fprintf(os.Stderr, "  %-10s %d records, %s schema id %d (subject %s-value)\n", d.topic, seedRecordCount, d.typ, id, d.topic)
-			fmt.Fprintf(os.Stderr, "             kcl consume %s -o start --value-decode\n", d.topic)
+			fmt.Fprintf(os.Stderr, "             kcl consume %s -o start --decode=value\n", d.topic)
 		} else {
 			fmt.Fprintf(os.Stderr, "  %-10s %d records, plain JSON (no schema)\n", d.topic, seedRecordCount)
 			fmt.Fprintf(os.Stderr, "             kcl consume %s -o start\n", d.topic)

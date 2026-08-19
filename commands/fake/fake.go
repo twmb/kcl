@@ -109,7 +109,7 @@ with a registered schema of that type) and demo-plain (no schema), all with the
 same {id, count} shape and a few records each:
 
   kcl fake --seed-demo
-  kcl consume demo-avro -o start --value-decode
+  kcl consume demo-avro -o start --decode=value
   kcl consume demo-plain -o start
 
 Tune log verbosity for debugging:
