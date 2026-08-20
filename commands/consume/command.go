@@ -240,7 +240,7 @@ Note that this command allows you to consume the Kafka special internal topics
 __consumer_offsets and __transaction_state. To do so, either of these topics
 must be the only topic specified.
 
-For __consumer_offsets, to dump information about a specific group, use the -G
+For __consumer_offsets, to dump information about a specific group, use the -g
 flag. Doing so will also hide transaction markers. For __transaction_state, you
-can use -G to dump information about a specific transactional ID.
+can use -g to dump information about a specific transactional ID.
 `
