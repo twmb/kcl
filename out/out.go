@@ -93,7 +93,6 @@ func Die(msg string, args ...any) {
 	os.Exit(1)
 }
 
-
 func args2strings(args []any) []string {
 	sargs := make([]string, len(args))
 	for i, arg := range args {

@@ -71,8 +71,8 @@ version ranges and finalized feature version ranges.
 
 func updateCommand(cl *client.Client) *cobra.Command {
 	var (
-		dryRun       bool
-		upgradeType  string
+		dryRun      bool
+		upgradeType string
 	)
 
 	cmd := &cobra.Command{

@@ -143,7 +143,7 @@ Command completion is available at:
 
 	// Keep metadata as hidden deprecated alias for cluster info.
 	metadataCmd := metadata.Command(cl)
-	metadataCmd.Deprecated = "use 'kcl cluster info' instead"
+	metadataCmd.Deprecated = "use 'kcl cluster metadata' instead"
 	metadataCmd.Hidden = true
 
 	// Add hidden consume/produce aliases under topic.

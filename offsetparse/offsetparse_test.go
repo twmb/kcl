@@ -268,10 +268,10 @@ func TestParseTimestampRanges(t *testing.T) {
 	jan15 := dateMillis(2024, 1, 15, 0, 0, 0)
 
 	tests := []struct {
-		name     string
-		input    string
-		wantS    Position
-		wantE    *Position
+		name  string
+		input string
+		wantS Position
+		wantE *Position
 	}{
 		{
 			"date:duration (T2 relative to T1)",
