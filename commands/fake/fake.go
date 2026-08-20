@@ -4,6 +4,7 @@ package fake
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -16,24 +17,31 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kversion"
+	"github.com/twmb/franz-go/pkg/sr/srfake"
 
 	"github.com/twmb/kcl/out"
 )
 
+// defaultRegistryPort is the conventional Confluent Schema Registry port.
+const defaultRegistryPort = 8081
+
 // Command returns the `kcl fake` cobra command.
 func Command() *cobra.Command {
 	var (
-		ports      []int
-		logLevel   string
-		dataDir    string
-		syncWrites bool
-		asVersion  string
-		brokerCfgs []string
-		seedTopics []string
-		allowAuto  bool
-		acls       bool
-		saslUsers  []string
-		pprofAddr  string
+		ports        []int
+		logLevel     string
+		dataDir      string
+		syncWrites   bool
+		asVersion    string
+		brokerCfgs   []string
+		seedTopics   []string
+		allowAuto    bool
+		acls         bool
+		saslUsers    []string
+		pprofAddr    string
+		registry     bool
+		registryPort int
+		seedDemoFlag bool
 	)
 
 	cmd := &cobra.Command{
@@ -42,9 +50,9 @@ func Command() *cobra.Command {
 		Long: `Start an in-process kfake cluster for testing.
 
 kcl fake runs a kfake cluster in-process and prints the listen addresses
-to stdout. By default it starts three brokers on kfake-chosen ports on
-127.0.0.1. Point any Kafka client at the printed addresses; SIGINT or
-SIGTERM exits cleanly.
+to stdout. By default it starts three brokers on 127.0.0.1 ports
+9092,9093,9094. Point any Kafka client at the printed addresses; SIGINT
+or SIGTERM exits cleanly.
 
 This is NOT a production broker. kfake implements the user-facing Kafka
 protocol surface (produce, fetch, groups, transactions, ACLs, share
@@ -64,7 +72,7 @@ Default three-broker cluster:
 
 Pick specific ports (the number of ports determines broker count):
 
-  kcl fake --ports 9092,9093,9094
+  kcl fake --ports 19092,19093,19094
   kcl fake --ports 9092                # single broker
 
 Persistent cluster:
@@ -88,12 +96,28 @@ Test SASL + ACLs:
 
   kcl fake --acls --sasl plain:admin:pw --sasl scram-sha-256:alice:pw2
 
+An in-memory Schema Registry (srfake) is served on port 8081 by default for
+schema-aware produce/consume; disable it with --registry=false. If the port is
+already in use (e.g. a real registry is running), kcl prints a warning and
+continues without it unless --registry/--registry-port was given explicitly.
+
+  kcl registry subjects                 # talks to the fake on localhost:8081
+  kcl fake --registry-port 18081        # use a different port
+
+Seed a ready-to-explore demo: topics demo-avro, demo-proto, demo-json (each
+with a registered schema of that type) and demo-plain (no schema), all with the
+same {id, count} shape and a few records each:
+
+  kcl fake --seed-demo
+  kcl consume demo-avro -o start --decode=value
+  kcl consume demo-plain -o start
+
 Tune log verbosity for debugging:
 
   kcl fake -l debug
 `,
 		Args: cobra.ExactArgs(0),
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			level, err := parseLogLevel(logLevel)
 			if err != nil {
 				return out.Errf(out.ExitUsage, "%v", err)
@@ -111,10 +135,7 @@ Tune log verbosity for debugging:
 				return out.Errf(out.ExitUsage, "%v", err)
 			}
 
-			numBrokers := 3
-			if len(ports) > 0 {
-				numBrokers = len(ports)
-			}
+			numBrokers := len(ports)
 
 			// Default auto-created / seeded partition count scales with
 			// broker count so the cluster distributes work meaningfully:
@@ -130,9 +151,7 @@ Tune log verbosity for debugging:
 				kfake.NumBrokers(numBrokers),
 				kfake.DefaultNumPartitions(defaultParts),
 				kfake.WithLogger(kfake.BasicLogger(os.Stderr, level)),
-			}
-			if len(ports) > 0 {
-				opts = append(opts, kfake.Ports(ports...))
+				kfake.Ports(ports...),
 			}
 			if dataDir != "" {
 				opts = append(opts, kfake.DataDir(dataDir))
@@ -189,6 +208,53 @@ Tune log verbosity for debugging:
 				fmt.Println(addr)
 			}
 
+			// Serve an in-memory Schema Registry (srfake) so the same
+			// `kcl fake` process backs schema-aware produce and consume.
+			// It binds its own HTTP port, independent of the Kafka brokers.
+			// --seed-demo implies the registry.
+			if seedDemoFlag {
+				registry = true
+			}
+			var registryURL string
+			if registry {
+				reg := srfake.NewRegistry()
+				defer reg.Close()
+				addr := fmt.Sprintf("127.0.0.1:%d", registryPort)
+				ln, err := net.Listen("tcp", addr)
+				if err != nil {
+					// The registry is on by default, so a busy port (e.g. a
+					// real registry already running, or --seed-demo needing
+					// it) should only be fatal when the user explicitly asked
+					// for the registry; otherwise warn and carry on.
+					explicit := cmd.Flags().Changed("registry") || cmd.Flags().Changed("registry-port") || seedDemoFlag
+					if explicit {
+						return fmt.Errorf("unable to listen for fake schema registry on %s: %v", addr, err)
+					}
+					fmt.Fprintf(os.Stderr, "not starting fake schema registry: %v (disable with --registry=false or pick another --registry-port)\n", err)
+				} else {
+					srv := &http.Server{Handler: reg.Handler()}
+					defer srv.Close()
+					go func() {
+						if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+							fmt.Fprintf(os.Stderr, "fake schema registry failed: %v\n", err)
+						}
+					}()
+					registryURL = "http://" + ln.Addr().String()
+					// Printed to stderr so stdout stays a clean list of
+					// broker addresses for tools that parse it.
+					fmt.Fprintf(os.Stderr, "schema registry listening on %s\n", registryURL)
+				}
+			}
+
+			if seedDemoFlag {
+				if registryURL == "" {
+					return fmt.Errorf("cannot seed demo data: schema registry did not start")
+				}
+				if err := seedDemo(c.ListenAddrs(), registryURL); err != nil {
+					return fmt.Errorf("unable to seed demo data: %v", err)
+				}
+			}
+
 			sigs := make(chan os.Signal, 2)
 			signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
 			<-sigs
@@ -214,7 +280,7 @@ Tune log verbosity for debugging:
 		},
 	}
 
-	cmd.Flags().IntSliceVar(&ports, "ports", nil, "ports for brokers (comma-separated; broker count = number of ports; default: 3 brokers on kfake-chosen ports)")
+	cmd.Flags().IntSliceVar(&ports, "ports", []int{9092, 9093, 9094}, "ports for brokers (comma-separated; broker count = number of ports)")
 	cmd.Flags().StringVarP(&logLevel, "log-level", "l", "none", "kfake log level: none, error, warn, info, debug")
 	cmd.Flags().StringVarP(&dataDir, "data-dir", "d", "", "persist state under this directory across restarts (default: in-memory only)")
 	cmd.Flags().BoolVar(&syncWrites, "sync", false, "fsync every write for immediate durability (slower)")
@@ -225,6 +291,9 @@ Tune log verbosity for debugging:
 	cmd.Flags().BoolVar(&acls, "acls", false, "enable ACL enforcement (requires --sasl superusers to get through the deny-by-default)")
 	cmd.Flags().StringArrayVar(&saslUsers, "sasl", nil, "add a SASL superuser as MECHANISM:USER:PASS (repeatable; enables SASL). Mechanisms: plain, scram-sha-256, scram-sha-512")
 	cmd.Flags().StringVar(&pprofAddr, "pprof", "", "if set, serve pprof on this addr (e.g. :6060 or 127.0.0.1:6060)")
+	cmd.Flags().BoolVar(&registry, "registry", true, "serve an in-memory Schema Registry (srfake) for schema-aware produce/consume (disable with --registry=false)")
+	cmd.Flags().IntVar(&registryPort, "registry-port", defaultRegistryPort, "port for the fake schema registry")
+	cmd.Flags().BoolVar(&seedDemoFlag, "seed-demo", false, "seed demo-avro/demo-proto/demo-json (schema-encoded) and demo-plain topics with sample records (implies --registry)")
 
 	return cmd
 }
@@ -295,7 +364,9 @@ type saslUser struct {
 // parseSASLUsers parses "MECHANISM:USER:PASS" entries. USER and PASS
 // are passed through os.ExpandEnv so callers can reference environment
 // variables without exposing secrets on the command line, e.g.
-//   --sasl "plain:$KAFKA_USER:$KAFKA_PASS"
+//
+//	--sasl "plain:$KAFKA_USER:$KAFKA_PASS"
+//
 // Quote the argument in the shell so the shell doesn't expand first.
 func parseSASLUsers(list []string) ([]saslUser, error) {
 	var out []saslUser

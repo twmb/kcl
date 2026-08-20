@@ -250,6 +250,93 @@ seed_brokers = ["profile:9092"]
 	}
 }
 
+func TestNormCfgKey(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{"sasl.user", "sasl_user"},
+		{"sasl_user", "sasl_user"}, // legacy underscore form
+		{"registry.tls.server_name", "registry_tls_server_name"},
+		{"registry_tls_server_name", "registry_tls_server_name"},
+		{"SASL.User", "sasl_user"}, // case-insensitive
+		{"seed_brokers", "seed_brokers"},
+	}
+	for _, tt := range tests {
+		if got := normCfgKey(tt.in); got != tt.want {
+			t.Errorf("normCfgKey(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+// TestCfgOverridesDotAndUnderscore verifies that both the dotted (canonical)
+// and legacy underscore -X key forms resolve to the same config fields,
+// including the schema registry keys.
+func TestCfgOverridesDotAndUnderscore(t *testing.T) {
+	c := &Client{
+		format: "text",
+		flagOverrides: []string{
+			"sasl.user=alice",  // dotted
+			"sasl_pass=secret", // legacy underscore
+			"registry.urls=http://a:8081,http://b:8081",
+			"registry.tls.server_name=sr.example.com",
+			"registry_user=bob", // legacy underscore for SR
+		},
+	}
+	c.processOverrides()
+
+	if c.cfg.SASL == nil || c.cfg.SASL.User != "alice" || c.cfg.SASL.Pass != "secret" {
+		t.Errorf("sasl mismatch: %+v", c.cfg.SASL)
+	}
+	if c.cfg.SR == nil {
+		t.Fatal("expected SR config to be set")
+	}
+	if want := []string{"http://a:8081", "http://b:8081"}; len(c.cfg.SR.URLs) != 2 || c.cfg.SR.URLs[0] != want[0] || c.cfg.SR.URLs[1] != want[1] {
+		t.Errorf("registry urls = %v, want %v", c.cfg.SR.URLs, want)
+	}
+	if c.cfg.SR.User != "bob" {
+		t.Errorf("registry user = %q, want bob", c.cfg.SR.User)
+	}
+	if c.cfg.SR.TLS == nil || c.cfg.SR.TLS.ServerName != "sr.example.com" {
+		t.Errorf("registry tls server_name mismatch: %+v", c.cfg.SR.TLS)
+	}
+}
+
+// TestRegistryFlagOverridesURLs verifies -R/--registry wins over -X.
+func TestRegistryFlagOverridesURLs(t *testing.T) {
+	c := &Client{
+		format:        "text",
+		registryURLs:  []string{"http://flag:8081"},
+		flagOverrides: []string{"registry.urls=http://x:8081"},
+	}
+	c.processOverrides()
+	if c.cfg.SR == nil || len(c.cfg.SR.URLs) != 1 || c.cfg.SR.URLs[0] != "http://flag:8081" {
+		t.Errorf("expected -R to win, got %+v", c.cfg.SR)
+	}
+}
+
+func TestSchemaRegistryClientAuthConflict(t *testing.T) {
+	c := &Client{
+		format:    "text",
+		noCfgFile: true,
+		cfg: Cfg{SR: &CfgSR{
+			URLs:        []string{"http://x:8081"},
+			User:        "u",
+			BearerToken: "t",
+		}},
+	}
+	if _, err := c.SchemaRegistryClient(); err == nil {
+		t.Fatal("expected error: bearer token and basic auth are mutually exclusive")
+	}
+}
+
+func TestSchemaRegistryClientDefaultURL(t *testing.T) {
+	// No SR config -> should still build a client (defaults to localhost:8081).
+	c := &Client{format: "text", noCfgFile: true}
+	if _, err := c.SchemaRegistryClient(); err != nil {
+		t.Fatalf("expected default-localhost client, got error: %v", err)
+	}
+}
+
 func TestStrnorm(t *testing.T) {
 	tests := []struct {
 		in, want string

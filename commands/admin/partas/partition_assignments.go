@@ -21,6 +21,7 @@ func Command(cl *client.Client) *cobra.Command {
 	}
 	cmd.AddCommand(listPartitionReassignments(cl))
 	cmd.AddCommand(alterPartitionAssignments(cl))
+	cmd.AddCommand(cancelPartitionReassignments(cl))
 	return cmd
 }
 
@@ -52,8 +53,6 @@ reassignment for that partition.
 				TimeoutMillis: cl.TimeoutMillis(),
 			}
 			for topic, partitions := range tprs {
-				if len(partitions) == 0 {
-				}
 				t := kmsg.AlterPartitionAssignmentsRequestTopic{
 					Topic: topic,
 				}
@@ -81,6 +80,85 @@ reassignment for that partition.
 			}
 
 			table := out.NewFormattedTable(cl.Format(), "reassign.alter", 1, "results",
+				"TOPIC", "PARTITION", "STATUS", "DETAIL")
+			for _, topic := range resp.Topics {
+				for _, partition := range topic.Partitions {
+					msg := "OK"
+					if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
+						msg = err.Error()
+					}
+					detail := ""
+					if partition.ErrorMessage != nil {
+						detail = *partition.ErrorMessage
+					}
+					table.Row(topic.Topic, partition.Partition, msg, detail)
+				}
+			}
+			table.Flush()
+			return nil
+		},
+	}
+}
+
+func cancelPartitionReassignments(cl *client.Client) *cobra.Command {
+	return &cobra.Command{
+		Use:   "cancel",
+		Short: "Cancel in-progress partition reassignments.",
+		Long: `Cancel active partition reassignments (Kafka 2.4.0+).
+
+The syntax for each topic is
+
+  topic:1,2,3
+
+where the numbers correspond to partitions for a topic. Cancelling reverts each
+partition to its pre-reassignment replica set. Use "kcl reassign list" to see
+which partitions are currently being reassigned.
+
+At least one topic:partitions must be given; this does not cancel everything at
+once by default.
+`,
+		Example: "cancel 'foo:1,2,3' 'bar:0'",
+		Args:    cobra.MinimumNArgs(1),
+		RunE: func(_ *cobra.Command, topicParts []string) error {
+			tps, err := flagutil.ParseTopicPartitions(topicParts)
+			if err != nil {
+				return fmt.Errorf("unable to parse topic partitions: %v", err)
+			}
+
+			req := &kmsg.AlterPartitionAssignmentsRequest{
+				TimeoutMillis: cl.TimeoutMillis(),
+			}
+			for topic, partitions := range tps {
+				if len(partitions) == 0 {
+					return fmt.Errorf("topic %s has no partitions specified to cancel", topic)
+				}
+				t := kmsg.AlterPartitionAssignmentsRequestTopic{Topic: topic}
+				for _, partition := range partitions {
+					// A nil replica list cancels the active reassignment for the
+					// partition, reverting it to its prior replica set.
+					t.Partitions = append(t.Partitions, kmsg.AlterPartitionAssignmentsRequestTopicPartition{
+						Partition: partition,
+						Replicas:  nil,
+					})
+				}
+				req.Topics = append(req.Topics, t)
+			}
+
+			kresp, err := cl.Client().Request(context.Background(), req)
+			if err != nil {
+				return fmt.Errorf("unable to cancel partition reassignments: %v", err)
+			}
+			resp := kresp.(*kmsg.AlterPartitionAssignmentsResponse)
+
+			if resp.ErrorCode != 0 {
+				additional := ""
+				if resp.ErrorMessage != nil {
+					additional = ": " + *resp.ErrorMessage
+				}
+				return fmt.Errorf("%s%s", kerr.ErrorForCode(resp.ErrorCode), additional)
+			}
+
+			table := out.NewFormattedTable(cl.Format(), "reassign.cancel", 1, "results",
 				"TOPIC", "PARTITION", "STATUS", "DETAIL")
 			for _, topic := range resp.Topics {
 				for _, partition := range topic.Partitions {

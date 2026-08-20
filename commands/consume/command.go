@@ -42,8 +42,10 @@ func (c *consumption) command() *cobra.Command {
 	cmd.Flags().Int32Var(&c.fetchMaxPartitionBytes, "fetch-max-partition-bytes", 0, "per-partition byte limit for fetch requests (0 uses broker default)")
 	cmd.Flags().DurationVar(&c.timeout, "timeout", 0, "exit if no message received for this duration (0 is no timeout)")
 	cmd.Flags().StringArrayVarP(&c.grepPatterns, "grep", "G", nil, "filter records (k:, v:, hk:, hv:, h:NAME=, t: with optional ! negation; repeatable, AND'd)")
-	cmd.Flags().StringVar(&c.protoFile, "proto-file", "", "an optional proto source file or protoset file to decode protobuf messages, requires --proto-message")
+	cmd.Flags().StringVar(&c.protoFile, "proto-file", "", "decode raw (non-registry) protobuf with this proto source/protoset file, requires --proto-message; for Schema Registry-framed protobuf use --decode instead")
 	cmd.Flags().StringVar(&c.protoMessage, "proto-message", "", "the proto.message structure in --proto-file to use for decoding, requires --proto-file")
+	cmd.Flags().StringSliceVar(&c.decode, "decode", nil, "decode key and/or value from the Schema Registry wire format to JSON; bare --decode does both, or --decode=key / --decode=value (uses -R/--registry)")
+	cmd.Flags().Lookup("decode").NoOptDefVal = "key,value"
 	cmd.MarkFlagsRequiredTogether("proto-file", "proto-message")
 	return cmd
 }
@@ -214,6 +216,22 @@ Inspect headers:
 
 Show share-group delivery count (with --share-group):
   -f '%v delivery=%D\n'
+
+
+SCHEMA REGISTRY
+
+Use --decode to decode both the key and value, or --decode=value / --decode=key
+to decode just one (note the '=' form is required for a single component).
+Decoding is opt-in (raw bytes are the default), but within what you opt into it
+is automatic: each record is checked for the Schema Registry wire header, and
+only records that carry it are decoded -- the schema id is read from the record,
+the schema is fetched from the registry (-R/--registry; see "kcl registry
+--help") and cached, and the payload is decoded to JSON. Records not in the wire
+format are printed unchanged. The decoded JSON flows through the normal %v / %k
+verbs, so all the usual formatting still applies:
+
+  kcl consume mytopic --decode                       # key + value
+  kcl consume mytopic --decode=value -f '%k -> %v\n'
 
 
 REMARKS
