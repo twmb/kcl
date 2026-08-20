@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -543,17 +544,27 @@ For more detailed information about ACLs, read kcl acl --help.
   kcl acl delete --cluster --principal User:old --op any --perm any    # delete all cluster ACLs for a user`,
 		Args: cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
+			// Every filter must be given explicitly. Unlike list,
+			// delete cannot default an unset filter: defaulting it to
+			// "any" would widen what is deleted rather than narrow it.
+			// Report all of them at once -- reporting only the first
+			// found made discovering the required shape a sequence of
+			// four separate rejections.
+			var missing []string
 			if resourceType == "" {
-				return out.Errf(out.ExitUsage, "missing resource type filter")
+				missing = append(missing, "--type")
 			}
 			if resourcePattern == "" {
-				return out.Errf(out.ExitUsage, "missing resource pattern filter")
+				missing = append(missing, "--pattern")
 			}
 			if operation == "" {
-				return out.Errf(out.ExitUsage, "missing operation filter")
+				missing = append(missing, "--op")
 			}
 			if permission == "" {
-				return out.Errf(out.ExitUsage, "missing permission filter")
+				missing = append(missing, "--perm")
+			}
+			if len(missing) > 0 {
+				return out.Errf(out.ExitUsage, "delete requires an explicit %s; deleting will not default a filter for you, because a default would widen what is deleted rather than narrow it", strings.Join(missing, " and an explicit "))
 			}
 			var pname, pprincipal, phost *string
 			if resourceName != "" {

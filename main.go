@@ -149,8 +149,10 @@ Command completion is available at:
 	// Add hidden consume/produce aliases under topic.
 	topicCmd := topic.Command(cl)
 	topicConsume := consume.Command(cl)
+	topicConsume.Deprecated = "use 'kcl consume' instead"
 	topicConsume.Hidden = true
 	topicProduce := produce.Command(cl)
+	topicProduce.Deprecated = "use 'kcl produce' instead"
 	topicProduce.Hidden = true
 	topicCmd.AddCommand(topicConsume, topicProduce)
 
@@ -203,7 +205,7 @@ Command completion is available at:
 	// This is needed because cobra processes help before PersistentPreRun.
 	root.ParseFlags(os.Args[1:])
 	if helpJSON {
-		tree := buildCommandJSON(root)
+		tree := buildCommandJSON(root, false)
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		enc.Encode(tree)
@@ -223,14 +225,19 @@ func allCommands(root *cobra.Command, fn func(*cobra.Command)) {
 }
 
 type commandJSON struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Usage       string                 `json:"usage,omitempty"`
-	Aliases     []string               `json:"aliases,omitempty"`
-	Deprecated  string                 `json:"deprecated,omitempty"`
-	Examples    []string               `json:"examples,omitempty"`
-	Flags       map[string]flagJSON    `json:"flags,omitempty"`
-	Commands    map[string]commandJSON `json:"commands,omitempty"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Usage       string   `json:"usage,omitempty"`
+	Aliases     []string `json:"aliases,omitempty"`
+	Deprecated  string   `json:"deprecated,omitempty"`
+	// Hidden is true for a command excluded from --help, and for every
+	// command under one. Cobra hides a parent without marking its
+	// children, so propagating here lets a consumer filter at any depth
+	// rather than having to reason about whole subtrees.
+	Hidden   bool                   `json:"hidden,omitempty"`
+	Examples []string               `json:"examples,omitempty"`
+	Flags    map[string]flagJSON    `json:"flags,omitempty"`
+	Commands map[string]commandJSON `json:"commands,omitempty"`
 }
 
 type flagJSON struct {
@@ -240,11 +247,13 @@ type flagJSON struct {
 	Description string `json:"description"`
 }
 
-func buildCommandJSON(cmd *cobra.Command) commandJSON {
+func buildCommandJSON(cmd *cobra.Command, parentHidden bool) commandJSON {
+	hidden := parentHidden || cmd.Hidden
 	c := commandJSON{
 		Name:        cmd.Name(),
 		Description: cmd.Short,
 		Deprecated:  cmd.Deprecated,
+		Hidden:      hidden,
 	}
 	if cmd.Runnable() {
 		c.Usage = cmd.UseLine()
@@ -288,7 +297,7 @@ func buildCommandJSON(cmd *cobra.Command) commandJSON {
 		if c.Commands == nil {
 			c.Commands = make(map[string]commandJSON)
 		}
-		c.Commands[sub.Name()] = buildCommandJSON(sub)
+		c.Commands[sub.Name()] = buildCommandJSON(sub, hidden)
 	}
 	return c
 }

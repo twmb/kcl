@@ -191,23 +191,47 @@ func TestACLListGroupFilter(t *testing.T) {
 // list defaults its filters to match-all, but delete refuses to build a filter
 // it was not fully told, so a bare "kcl acl delete" can never delete
 // everything -- and can never send the UNKNOWN filter elements of #56 either.
+//
+// It also pins that every missing filter is named in one error rather than only
+// the first found, so discovering the required shape is not four sequential
+// rejections.
 func TestACLDeleteRequiresExplicitFilters(t *testing.T) {
 	addrs := newCluster(t)
 
 	for _, tc := range []struct {
 		args []string
-		want string
+		want []string
 	}{
-		{[]string{"delete", "--dry-run"}, "missing resource type filter"},
-		{[]string{"delete", "--topic", "foo", "--dry-run"}, "missing resource pattern filter"},
-		{[]string{"delete", "--topic", "foo", "--pattern", "literal", "--dry-run"}, "missing operation filter"},
-		{[]string{"delete", "--topic", "foo", "--pattern", "literal", "--op", "read", "--dry-run"}, "missing permission filter"},
+		{[]string{"delete", "--dry-run"},
+			[]string{"--type", "--pattern", "--op", "--perm"}},
+		{[]string{"delete", "--topic", "foo", "--dry-run"},
+			[]string{"--pattern", "--op", "--perm"}},
+		{[]string{"delete", "--topic", "foo", "--pattern", "literal", "--dry-run"},
+			[]string{"--op", "--perm"}},
+		{[]string{"delete", "--topic", "foo", "--pattern", "literal", "--op", "read", "--dry-run"},
+			[]string{"--perm"}},
 	} {
 		_, err := run(t, addrs, tc.args...)
 		if err == nil {
 			t.Errorf("%v: expected an error, got none", tc.args)
-		} else if !strings.Contains(err.Error(), tc.want) {
-			t.Errorf("%v: error %q does not contain %q", tc.args, err, tc.want)
+			continue
+		}
+		for _, want := range tc.want {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%v: error %q does not name %s", tc.args, err, want)
+			}
+		}
+		// Filters already supplied must not be reported as missing.
+		for _, notWant := range []string{"--type", "--pattern", "--op", "--perm"} {
+			var expected bool
+			for _, w := range tc.want {
+				if w == notWant {
+					expected = true
+				}
+			}
+			if !expected && strings.Contains(err.Error(), notWant) {
+				t.Errorf("%v: error %q wrongly names %s", tc.args, err, notWant)
+			}
 		}
 	}
 

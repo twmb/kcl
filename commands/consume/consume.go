@@ -40,7 +40,8 @@ type consumption struct {
 	format          string
 	rack            string
 
-	readUncommitted     bool
+	readCommitted       bool
+	readUncommitted     bool // deprecated no-op: read_uncommitted is now the default
 	printControlRecords bool
 	timeout             time.Duration
 
@@ -156,9 +157,13 @@ func (c *consumption) run(topics []string) error {
 	sigs := make(chan os.Signal, 2)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 
+	// These are two independent choices. They used to be one if/else,
+	// which meant asking to keep control records (or consuming an internal
+	// topic) silently switched the isolation level as a side effect.
 	if isConsumerOffsets || isTransactionState || c.printControlRecords {
 		c.cl.AddOpt(kgo.KeepControlRecords())
-	} else if !c.readUncommitted {
+	}
+	if c.readCommitted {
 		c.cl.AddOpt(kgo.FetchIsolationLevel(kgo.ReadCommitted()))
 	}
 
