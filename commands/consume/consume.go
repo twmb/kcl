@@ -394,6 +394,11 @@ func (c *consumption) run(topics []string) error {
 		co.buildConsumerOffsetsFormatFn()
 	} else if isTransactionState {
 		co.buildTransactionStateFormatFn()
+	} else if c.format == jsonFormatName {
+		// The bare word "json" is reserved: it selects JSON record output
+		// rather than being read as a format string. Matched exactly, so
+		// -f 'json%v' remains an ordinary format.
+		co.buildJSONFormatFn(c.shareGroup != "")
 	} else {
 		f, err := kgo.NewRecordFormatter(c.format)
 		if err != nil {
