@@ -1,6 +1,8 @@
 v0.19.0
 ===
 
+One minor breaking change, caught while auditing the command surface.
+
 ### BREAKING
 
 * `kcl consume` now reads **uncommitted** records by default, matching
@@ -8,11 +10,6 @@ v0.19.0
   the old behavior; `--read-uncommitted` is now a deprecated no-op. The
   old default could not advance past the last stable offset, so one open
   transaction made `kcl consume` print nothing.
-* `kcl acl delete` no longer requires `--type`, `--pattern`,
-  `--operation`, and `--permission`; unspecified filters match
-  everything, as in rpk and `kafka-acls.sh`. The confirmation prompt,
-  which lists every match first, is the guard. A bare `kcl acl delete`
-  now matches all ACLs rather than erroring.
 
 ### NEW
 
@@ -44,6 +41,11 @@ v0.19.0
 * `kcl cluster describe-cluster` is now `kcl cluster describe`, with the
   old name kept as an alias. It and `kcl cluster metadata` now name the
   RPC each issues, since the two overlap.
+* `kcl acl delete` no longer requires `--type`, `--pattern`,
+  `--operation`, and `--permission`; unspecified filters match
+  everything, as in rpk and `kafka-acls.sh`. The confirmation prompt,
+  which lists every match first, is the guard. A bare `kcl acl delete`
+  now matches all ACLs rather than erroring.
 * `kcl acl` spells its filters `--operation` and `--permission`, matching
   `kafka-acls.sh` and rpk. `--op` and `--perm` still work and are named
   in each flag's help.

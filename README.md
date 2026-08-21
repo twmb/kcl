@@ -5,7 +5,6 @@ kcl
 
 - [Introduction](#introduction)
 - [Getting Started / Installation](#getting-started)
-- [Stability Status](#stability-status)
 - [Configuration](#configuration)
 - [Autocompletion](#autocompletion)
 - [Group Consuming](#group-consuming)
@@ -27,20 +26,6 @@ producing formatting options, and a complete Kafka administration
 interface that tracks the upstream protocol closely.
 
 [1]: https://github.com/confluentinc/kcat
-
-## Stability Status
-
-Treat the current command surface as a beta. The v0.17.0 release made a
-large, deliberate set of breaking changes across flags, config, and
-command layout (see the CHANGELOG for the full list). Further breaks
-are possible as users exercise the new surface and surface issues;
-that feedback is explicitly welcome.
-
-I've spent significant time integration testing my [franz-go][2] client that
-this program uses. It is worth reading the stability status in the franz-go
-repo as well if using this client.
-
-[2]: https://github.com/twmb/franz-go/
 
 ## Getting Started
 
