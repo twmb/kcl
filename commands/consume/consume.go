@@ -352,15 +352,20 @@ func (c *consumption) run(topics []string) error {
 			}
 		}
 
-		// An exact end applies to every partition, so it replaces the
-		// per-partition high watermark. It is not clamped to the
-		// watermark: -o 0:100 on a topic holding 5 records is a request
-		// to keep consuming until offset 100 exists.
+		// An exact end bounds every partition, but never beyond what the
+		// partition actually holds -- the minimum of the requested end
+		// and the high watermark. Setting it unconditionally left any
+		// partition short of the requested offset unfinished, so the
+		// consume printed everything it had and then waited forever. An
+		// empty partition on a multi-partition topic is the common way
+		// to hit that.
 		if c.end >= 0 {
 			for t, ps := range offsets {
 				for p, o := range ps {
-					o.Offset = c.end
-					offsets[t][p] = o
+					if o.Offset > c.end {
+						o.Offset = c.end
+						offsets[t][p] = o
+					}
 				}
 			}
 		}
