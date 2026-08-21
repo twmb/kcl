@@ -653,6 +653,15 @@ For more detailed information about ACLs, read kcl acl --help.
 					return fmt.Errorf("%s%s", err, additional)
 				}
 
+				var matched int
+				for _, resource := range resp.Resources {
+					matched += len(resource.ACLs)
+				}
+				if matched == 0 {
+					fmt.Fprintln(os.Stderr, "No ACLs match the filter; nothing to delete.")
+					return nil
+				}
+
 				fmt.Fprintln(os.Stderr, "The following ACLs will be deleted:")
 				tw := out.BeginTabWrite()
 				fmt.Fprintf(tw, "TYPE\tNAME\tPATTERN\tPRINCIPAL\tHOST\tOPERATION\tPERMISSION\n")
@@ -671,11 +680,7 @@ For more detailed information about ACLs, read kcl acl --help.
 				}
 				tw.Flush()
 
-				fmt.Fprint(os.Stderr, "\nProceed with deletion? [y/N] ")
-				var answer string
-				fmt.Scanln(&answer)
-				if answer != "y" && answer != "Y" {
-					fmt.Fprintln(os.Stderr, "Aborting.")
+				if !confirm(fmt.Sprintf("\nProceed with deletion of %s? [y/N] ", plural(matched, "ACL"))) {
 					return nil
 				}
 			}

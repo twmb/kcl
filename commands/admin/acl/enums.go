@@ -1,6 +1,8 @@
 package acl
 
 import (
+	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -90,4 +92,26 @@ func registerCompletions(cmd *cobra.Command, flags map[string][]string) {
 			return vals, cobra.ShellCompDirectiveNoFileComp
 		})
 	}
+}
+
+// confirm prints prompt and reports whether the answer was yes. Anything else,
+// including a bare enter or EOF, declines.
+func confirm(prompt string) bool {
+	fmt.Fprint(os.Stderr, prompt)
+	var answer string
+	fmt.Scanln(&answer)
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "y", "yes":
+		return true
+	}
+	fmt.Fprintln(os.Stderr, "Aborting.")
+	return false
+}
+
+// plural renders "1 ACL" / "3 ACLs".
+func plural(n int, noun string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, noun)
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }

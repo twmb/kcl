@@ -375,3 +375,29 @@ func TestEnumValuesAreAccepted(t *testing.T) {
 		}
 	}
 }
+
+// A filter that matches nothing says so and does not prompt at all.
+func TestACLDeleteNoMatches(t *testing.T) {
+	addrs := newCluster(t)
+	seedACLs(t, addrs)
+
+	out, err := run(t, addrs, "delete", "--topic", "nosuchtopic", "-y")
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if strings.Contains(out, "will be deleted") {
+		t.Errorf("printed a deletion header with no matches: %s", out)
+	}
+	if got := len(aclRows(t, mustJSON(t, addrs, "list"))); got != 2 {
+		t.Errorf("deleted something: %d ACLs remain of 2", got)
+	}
+}
+
+func mustJSON(t *testing.T, addrs []string, args ...string) map[string]any {
+	t.Helper()
+	m, err := runJSON(t, addrs, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
