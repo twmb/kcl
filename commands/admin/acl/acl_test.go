@@ -291,3 +291,44 @@ func TestACLFilterValidation(t *testing.T) {
 		}
 	}
 }
+
+// TestEnumValuesAreAccepted guards the three-way split in enums.go: the value
+// lists drive the error message and shell completion, while validation goes
+// through the atoi* conversions. If a list advertised a value the conversion
+// does not accept, kcl would suggest something it then rejects.
+func TestEnumValuesAreAccepted(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		values []string
+		conv   func(string) int
+	}{
+		{"type", resourceTypeValues, func(s string) int { return int(atoiResourceType(s)) }},
+		{"pattern", patternValues, func(s string) int { return int(atoiResourcePattern(s)) }},
+		{"operation", operationValues, func(s string) int { return int(atoiOperation(s)) }},
+		{"permission", permissionValues, func(s string) int { return int(atoiPermission(s)) }},
+		{"create pattern", createPatternValues, func(s string) int { return int(atoiResourcePattern(s)) }},
+		{"create operation", createOperationValues, func(s string) int { return int(atoiOperation(s)) }},
+	} {
+		if len(tc.values) == 0 {
+			t.Errorf("%s: no values advertised", tc.name)
+		}
+		for _, v := range tc.values {
+			if got := tc.conv(v); got == 0 {
+				t.Errorf("%s advertises %q, but it converts to UNKNOWN", tc.name, v)
+			}
+		}
+	}
+
+	// The create sets must exclude the filter-only match-anything values,
+	// which are what validateCreate rejects.
+	for _, v := range createOperationValues {
+		if v == "any" {
+			t.Error("createOperationValues must not offer 'any'")
+		}
+	}
+	for _, v := range createPatternValues {
+		if v == "any" || v == "match" {
+			t.Errorf("createPatternValues must not offer %q", v)
+		}
+	}
+}
