@@ -187,60 +187,103 @@ func TestACLListGroupFilter(t *testing.T) {
 	}
 }
 
-// TestACLDeleteRequiresExplicitFilters pins the deliberate asymmetry with list:
-// list defaults its filters to match-all, but delete refuses to build a filter
-// it was not fully told, so a bare "kcl acl delete" can never delete
-// everything -- and can never send the UNKNOWN filter elements of #56 either.
-//
-// It also pins that every missing filter is named in one error rather than only
-// the first found, so discovering the required shape is not four sequential
-// rejections.
-func TestACLDeleteRequiresExplicitFilters(t *testing.T) {
+// TestACLDeleteDefaultsToMatchAll pins the model kcl now shares with rpk and
+// kafka-acls.sh: every unspecified filter matches everything, and the guard is
+// the confirmation rather than a required-flag error. A bare delete used to be
+// rejected outright.
+func TestACLDeleteDefaultsToMatchAll(t *testing.T) {
 	addrs := newCluster(t)
+	seedACLs(t, addrs)
 
+	// --dry-run with no filters at all matches both ACLs and deletes nothing.
+	out, err := run(t, addrs, "delete", "--dry-run")
+	if err != nil {
+		t.Fatalf("bare delete --dry-run: %v", err)
+	}
+	for _, want := range []string{"User:alice", "User:eve"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("dry run output missing %s: %s", want, out)
+		}
+	}
+	if m, _ := runJSON(t, addrs, "list"); len(aclRows(t, m)) != 2 {
+		t.Error("dry run deleted something")
+	}
+
+	// A resource filter still narrows.
+	out, err = run(t, addrs, "delete", "--topic", "foo", "--dry-run")
+	if err != nil {
+		t.Fatalf("delete --topic foo --dry-run: %v", err)
+	}
+	if !strings.Contains(out, "User:alice") || strings.Contains(out, "User:eve") {
+		t.Errorf("--topic foo should match only alice's ACL: %s", out)
+	}
+}
+
+// TestACLDeleteConfirmation covers what now protects a broad delete. Answering
+// anything but yes must leave every ACL in place.
+func TestACLDeleteConfirmation(t *testing.T) {
 	for _, tc := range []struct {
-		args []string
-		want []string
+		answer    string
+		wantAfter int
 	}{
-		{[]string{"delete", "--dry-run"},
-			[]string{"--type", "--pattern", "--operation", "--permission"}},
-		{[]string{"delete", "--topic", "foo", "--dry-run"},
-			[]string{"--pattern", "--operation", "--permission"}},
-		{[]string{"delete", "--topic", "foo", "--pattern", "literal", "--dry-run"},
-			[]string{"--operation", "--permission"}},
-		{[]string{"delete", "--topic", "foo", "--pattern", "literal", "--op", "read", "--dry-run"},
-			[]string{"--permission"}},
+		{"n\n", 2},
+		{"\n", 2}, // bare enter declines
+		{"y\n", 0},
 	} {
-		_, err := run(t, addrs, tc.args...)
-		if err == nil {
-			t.Errorf("%v: expected an error, got none", tc.args)
-			continue
-		}
-		for _, want := range tc.want {
-			if !strings.Contains(err.Error(), want) {
-				t.Errorf("%v: error %q does not name %s", tc.args, err, want)
-			}
-		}
-		// Filters already supplied must not be reported as missing.
-		for _, notWant := range []string{"--type", "--pattern", "--operation", "--permission"} {
-			var expected bool
-			for _, w := range tc.want {
-				if w == notWant {
-					expected = true
-				}
-			}
-			if !expected && strings.Contains(err.Error(), notWant) {
-				t.Errorf("%v: error %q wrongly names %s", tc.args, err, notWant)
-			}
-		}
-	}
+		addrs := newCluster(t)
+		seedACLs(t, addrs)
 
-	// Fully specified, it goes through.
-	if _, err := run(t, addrs, "delete",
-		"--topic", "foo", "--pattern", "literal", "--op", "read", "--perm", "allow", "--dry-run",
-	); err != nil {
-		t.Errorf("fully specified delete --dry-run: %v", err)
+		withStdin(t, tc.answer, func() {
+			if _, err := run(t, addrs, "delete"); err != nil {
+				t.Fatalf("delete with answer %q: %v", tc.answer, err)
+			}
+		})
+
+		m, _ := runJSON(t, addrs, "list")
+		if got := len(aclRows(t, m)); got != tc.wantAfter {
+			t.Errorf("answer %q left %d ACLs, want %d", tc.answer, got, tc.wantAfter)
+		}
 	}
+}
+
+// And -y skips the prompt entirely -- the user's own shotgun.
+func TestACLDeleteYesSkipsPrompt(t *testing.T) {
+	addrs := newCluster(t)
+	seedACLs(t, addrs)
+
+	if _, err := run(t, addrs, "delete", "-y"); err != nil {
+		t.Fatalf("delete -y: %v", err)
+	}
+	if m, _ := runJSON(t, addrs, "list"); len(aclRows(t, m)) != 0 {
+		t.Error("delete -y did not delete everything")
+	}
+}
+
+// seedACLs creates two ACLs on different resources.
+func seedACLs(t *testing.T, addrs []string) {
+	t.Helper()
+	if _, err := run(t, addrs, "create", "--topic", "foo",
+		"--allow-principal", "User:alice", "--operation", "read"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run(t, addrs, "create", "--group", "g1",
+		"--deny-principal", "User:eve", "--operation", "read"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// withStdin runs fn with os.Stdin replaced by the given input.
+func withStdin(t *testing.T, in string, fn func()) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdin
+	os.Stdin = r
+	go func() { w.WriteString(in); w.Close() }()
+	defer func() { os.Stdin = old; r.Close() }()
+	fn()
 }
 
 // TestACLFilterValidation pins that an unrecognized enum value is caught

@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -553,42 +552,21 @@ The delete request actually allows many filters to be passed at once, but it is
 a bit difficult to express that from a CLI. So, kcl only allows one filter at a
 time.
 
-Use --dry-run to see which ACLs would be deleted without actually deleting
-them. By default, the command prompts for confirmation before deleting; use
---yes/-y to skip the confirmation prompt.
+Every unspecified filter matches everything, so a bare "kcl acl delete" matches
+every ACL in the cluster. What protects you is the confirmation: the command
+first prints every ACL the filter matched and asks before issuing the delete,
+the same as rpk and kafka-acls.sh. Use --dry-run to see the matches and stop
+there, or --yes/-y to skip the prompt entirely.
 
 For more detailed information about ACLs, read kcl acl --help.
 `,
 
-		Example: `kcl acl delete --type any --pattern match --op any --perm any  # removes all
-  kcl acl delete --topic foo --perm any --op any                       # delete all ACLs for topic foo
-  kcl acl delete --cluster --principal User:old --op any --perm any    # delete all cluster ACLs for a user`,
+		Example: `kcl acl delete                                # every ACL, after confirming
+  kcl acl delete --topic foo                     # all ACLs for topic foo
+  kcl acl delete --cluster --principal User:old  # all cluster ACLs for a principal
+  kcl acl delete --topic foo --dry-run           # show the matches, delete nothing`,
 		Args: cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
-			// Every filter must be given explicitly. Unlike list,
-			// delete cannot default an unset filter: defaulting it to
-			// "any" would widen what is deleted rather than narrow it.
-			// Report all of them at once -- reporting only the first
-			// found made discovering the required shape a sequence of
-			// four separate rejections.
-			var missing []string
-			if resourceType == "" {
-				missing = append(missing, "--type")
-			}
-			if resourcePattern == "" {
-				missing = append(missing, "--pattern")
-			}
-			if operation == "" {
-				missing = append(missing, "--operation")
-			}
-			if permission == "" {
-				missing = append(missing, "--permission")
-			}
-			if len(missing) > 0 {
-				return out.Errf(out.ExitUsage, "delete requires an explicit filter for %s; it will not default them, because a default would widen what is deleted rather than narrow it (pass 'any' to match everything, deliberately)", strings.Join(missing, ", "))
-			}
-			// After the missing check, so an unset filter reports as
-			// unset rather than as unrecognized.
 			if err := validateFilters(resourceType, resourcePattern, operation, permission); err != nil {
 				return err
 			}
@@ -760,15 +738,15 @@ For more detailed information about ACLs, read kcl acl --help.
 		},
 	}
 
-	cmd.Flags().StringVar(&resourceType, "type", "", "REQUIRED resource type filter; pass 'any' to match all types")
+	cmd.Flags().StringVar(&resourceType, "type", "any", "resource type filter; any matches all resource types")
 	cmd.Flags().StringVar(&resourceName, "name", "", "resource name filter; empty matches all")
-	cmd.Flags().StringVar(&resourcePattern, "pattern", "", "REQUIRED resource name pattern filter; pass 'match' to match all patterns (Kafka 2.0.0+)")
+	cmd.Flags().StringVar(&resourcePattern, "pattern", "match", "resource name pattern filter; match means all (Kafka 2.0.0+)")
 	cmd.Flags().StringVar(&principal, "principal", "", "principal filter; empty matches all")
 	cmd.Flags().StringVar(&host, "host", "", "host filter; empty matches all")
-	cmd.Flags().StringVar(&operation, "operation", "", "REQUIRED operation filter; pass 'any' to match all operations (alias: --op)")
-	cmd.Flags().StringVar(&operation, "op", "", "")
-	cmd.Flags().StringVar(&permission, "permission", "", "REQUIRED permission filter; pass 'any' to match all permissions (alias: --perm)")
-	cmd.Flags().StringVar(&permission, "perm", "", "")
+	cmd.Flags().StringVar(&operation, "operation", "any", "operation filter; any matches all (alias: --op)")
+	cmd.Flags().StringVar(&operation, "op", "any", "")
+	cmd.Flags().StringVar(&permission, "permission", "any", "permission filter; any matches all (alias: --perm)")
+	cmd.Flags().StringVar(&permission, "perm", "any", "")
 	cmd.Flags().MarkHidden("op")
 	cmd.Flags().MarkHidden("perm")
 	registerCompletions(cmd, map[string][]string{
