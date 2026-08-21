@@ -1,6 +1,24 @@
 v0.19.0 (unreleased)
 ===
 
+### BREAKING
+
+* `kcl consume` now reads **uncommitted** records by default, matching
+  the Java client, librdkafka, rpk, and kcat. Pass `--read-committed` to
+  read only committed records; the old `--read-uncommitted` remains as a
+  deprecated no-op. kcl previously defaulted to read_committed, which
+  cannot advance past the last stable offset -- a single long-running
+  open transaction made `kcl consume` print nothing while every other
+  client showed records.
+* `kcl acl delete` no longer requires `--type`, `--pattern`,
+  `--operation`, and `--permission`. Every unspecified filter now
+  matches everything, as in `rpk security acl delete` and
+  `kafka-acls.sh --remove`. The confirmation prompt -- which prints
+  every matching ACL first -- is the guard, and `--dry-run` and
+  `-y/--yes` are unchanged. Nothing that previously worked behaves
+  differently, but a bare `kcl acl delete` now matches every ACL in the
+  cluster rather than erroring.
+
 ### NEW
 
 * `kcl reassign cancel TOPIC:PARTITIONS...` -- cancel in-progress
@@ -23,35 +41,86 @@ v0.19.0 (unreleased)
   `--decode` (both) or `--decode=key` / `--decode=value`. Avro (via
   `twmb/avro`), JSON Schema, and Protobuf are supported, including
   schemas that reference other registered schemas.
+* `kcl consume -f json` -- the bare word `json` is reserved as a record
+  output format, printing one JSON object per record rather than being
+  read as a format string (`-f 'json%v'` is still an ordinary format).
+  Nil keys and values print as JSON null, distinct from empty;
+  non-UTF-8 bytes print as base64 under `key_base64` / `value_base64`
+  rather than being corrupted by string escaping; and with `--decode`, a
+  component that decoded to JSON is embedded as a JSON value, so
+  `jq .value.count` works without `fromjson`.
 * `kcl fake` now also serves an in-memory Schema Registry (srfake) on
   port 8081 by default (`--registry`, `--registry-port`), and
   `--seed-demo` seeds `demo-avro`/`demo-proto`/`demo-json` (schema
   encoded) plus `demo-plain` topics for a zero-setup playground.
-* Config `-X`/env keys now also accept a dot-separated form
-  (`sasl.user`, `registry.tls.server_name`) alongside the legacy
-  pure-underscore form.
-
-* `kcl consume -f json` -- the bare word `json` is now reserved as a
-  record output format, printing one JSON object per record rather than
-  being read as a format string (`-f 'json%v'` is still an ordinary
-  format). Nil keys/values print as JSON null, distinct from empty;
-  non-UTF-8 bytes print as base64 under `key_base64`/`value_base64`
-  rather than being corrupted by string escaping; and with `--decode`, a
-  component that decoded to JSON is embedded as a JSON value so
-  `jq .value.count` works without `fromjson`.
+* Shell completion now completes the values of `kcl acl`'s enum flags
+  (`--type`, `--pattern`, `--operation`, `--permission`), with `create`
+  offering only the values an ACL can be created with. Regenerate with
+  `kcl misc gen-autocomplete`.
 * `kcl cluster describe-cluster` is now `kcl cluster describe`, with the
   old name kept as an alias. Both it and `kcl cluster metadata` now say
   which RPC they issue (DescribeCluster vs Metadata), since the two
   overlap and nothing indicated which to reach for.
+* `kcl acl list` and `kcl acl delete` now spell their operation and
+  permission filters `--operation` and `--permission`, matching
+  `kafka-acls.sh` and rpk. The shorter `--op` and `--perm` still work
+  and are named in each flag's help, so there is one help entry per
+  concept rather than two near-identical ones.
+* Config `-X`/env keys now also accept a dot-separated form
+  (`sasl.user`, `registry.tls.server_name`) alongside the legacy
+  pure-underscore form.
+* `kcl --help-json` now reports `hidden` for commands excluded from
+  `--help`, propagated to everything beneath them, so tooling can filter
+  the deprecated aliases without having to know which subtrees to drop.
 
 ### FIXES
 
-* `kcl acl list` now defaults the resource-type filter to `any` rather
-  than sending an invalid `UNKNOWN` resource type. A bare `kcl acl list`
-  previously produced a malformed DescribeACLs filter that brokers can
-  reject by closing the connection (#56).
+* `kcl consume -o N:M` never finished. An exact end offset only filtered
+  records; nothing ended the poll loop, so the form printed its range
+  and then waited forever. It now resolves through the same termination
+  path as `-o :end`.
+* `kcl consume -o :end` never finished either, for a different reason: a
+  partition was considered done only once a record **at** its end offset
+  was seen, and when the end is the high watermark no such record
+  exists.
+* `kcl consume --timeout` could not fire at all. Its check ran at the
+  top of the poll loop, but polling blocks until records arrive, so with
+  no traffic the loop never reached it -- the documented "exit if no
+  message received for this duration" did nothing. The poll is now
+  bounded by whatever is left of the timeout.
+* `kcl acl` now rejects an unrecognized `--type`, `--pattern`,
+  `--operation`, or `--permission` by name, instead of sending it as an
+  `UNKNOWN` filter element that brokers reject while parsing the request
+  -- in the reported case by closing the connection (#56). A bare
+  `kcl acl list` was one instance of this; every typo produced the same
+  failure. `kcl acl create` likewise no longer sends `--operation any`
+  or `--pattern match`, which cannot be created.
+* `kcl consume --print-control-records` no longer changes the isolation
+  level as a side effect; the two were one if/else.
+* `kcl consume -G` is now described as a client-side filter. It never
+  filtered broker-side, and reading it that way overstates what it
+  saves.
+* `kcl acl delete` names how many ACLs matched in its confirmation
+  prompt, and a filter matching nothing now says so instead of printing
+  a header above an empty table.
 * The `kcl metadata` deprecation notice pointed at `kcl cluster info`,
   which does not exist; it now names `kcl cluster metadata`.
+* `kcl topic consume` and `kcl topic produce`, the deprecated aliases of
+  `kcl consume` and `kcl produce`, were hidden but reported no
+  deprecation and named no replacement.
+* `kcl consume` no longer calls `os.Exit` when it finishes; it unwinds
+  the same way it already did on an interrupt. Visible only in that
+  `--num` can no longer over-deliver the remainder of a fetched batch.
+
+### UPSTREAM
+
+* `github.com/twmb/avro` v1.7.2 -> v1.8.0
+* `github.com/twmb/franz-go/pkg/kfake` bumped to master
+* `github.com/santhosh-tekuri/jsonschema/v6` v6.0.2 -> v6.0.3
+* `github.com/aws/aws-sdk-go-v2/config` v1.32.16 -> v1.32.38
+* `golang.org/x/crypto` v0.51.0 -> v0.55.0
+* `google.golang.org/protobuf` v1.36.11 -> v1.36.12
+* Indirect dependencies bumped alongside these.
 
 v0.18.0
 ===
