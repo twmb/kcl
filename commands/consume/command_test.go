@@ -29,6 +29,14 @@ import (
 // seedCluster returns a cluster with topic "t" holding n records, and the
 // broker addresses.
 func seedCluster(t *testing.T, n int) (*kfake.Cluster, []string) {
+	return seedClusterParts(t, n, 1)
+}
+
+// seedClusterParts returns a cluster with topic "t" of parts partitions,
+// holding n records. With more than one partition the records are produced
+// without a key, so they land wherever the partitioner puts them; the tests
+// that use it care about the partitions that stay empty.
+func seedClusterParts(t *testing.T, n, parts int) (*kfake.Cluster, []string) {
 	t.Helper()
 	c, err := kfake.NewCluster(kfake.NumBrokers(1))
 	if err != nil {
@@ -41,7 +49,7 @@ func seedCluster(t *testing.T, n int) (*kfake.Cluster, []string) {
 		t.Fatal(err)
 	}
 	defer cl.Close()
-	if _, err := kadm.NewClient(cl).CreateTopic(t.Context(), 1, 1, nil, "t"); err != nil {
+	if _, err := kadm.NewClient(cl).CreateTopic(t.Context(), int32(parts), 1, nil, "t"); err != nil {
 		t.Fatal(err)
 	}
 	for i := range n {
@@ -227,5 +235,115 @@ func TestConsumeTimeoutFires(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 10*time.Second {
 		t.Errorf("--timeout took %s; it did not fire", elapsed)
+	}
+}
+
+// TestConsumeEndOffsetMultiPartition is the multi-partition half of the
+// end-offset fix. An exact end used to be applied to every partition
+// regardless of what it held, so a partition short of that offset -- an empty
+// one, most commonly -- was never finished and the consume hung after printing
+// everything it had. The end is now the minimum of the request and each
+// partition's high watermark.
+func TestConsumeEndOffsetMultiPartition(t *testing.T) {
+	// Three partitions, two records. They are unkeyed, so at least one
+	// partition is guaranteed empty.
+	_, addrs := seedClusterParts(t, 2, 3)
+
+	got := runConsume(t, addrs, "-o", "0:2")
+	if len(got) != 2 {
+		t.Errorf("-o 0:2 got %d records, want 2", len(got))
+	}
+
+	// An end past everything is bounded by what exists, rather than
+	// waiting for records that may never arrive.
+	got = runConsume(t, addrs, "-o", "0:100")
+	if len(got) != 2 {
+		t.Errorf("-o 0:100 got %d records, want 2", len(got))
+	}
+}
+
+// TestConsumeEndOffsetPastTransactionMarker is the control-record half of the
+// end-offset story. A transaction marker occupies an offset, so a partition's
+// high watermark can sit one past a marker rather than one past a record. With
+// markers dropped -- the default -- the last visible record is two below the
+// end, the partition never reaches it, and the consume hangs after printing
+// everything it had.
+func TestConsumeEndOffsetPastTransactionMarker(t *testing.T) {
+	c, err := kfake.NewCluster(kfake.NumBrokers(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Close)
+
+	adm, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := kadm.NewClient(adm).CreateTopic(t.Context(), 1, 1, nil, "t"); err != nil {
+		t.Fatal(err)
+	}
+	adm.Close()
+
+	// Produce transactionally and commit, so the partition ends with a
+	// commit marker rather than a record.
+	txn, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.TransactionalID("end-marker-test"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := txn.BeginTransaction(); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []string{"a", "b"} {
+		if res := txn.ProduceSync(t.Context(), &kgo.Record{Topic: "t", Value: []byte(v)}); res.FirstErr() != nil {
+			t.Fatal(res.FirstErr())
+		}
+	}
+	if err := txn.EndTransaction(t.Context(), kgo.TryCommit); err != nil {
+		t.Fatal(err)
+	}
+	txn.Close()
+
+	// The end offset is now past the marker, not past record "b".
+	got := runConsume(t, c.ListenAddrs(), "-o", ":end")
+	if len(got) != 2 {
+		t.Fatalf("-o :end got %d records, want 2 (the marker must not be printed)", len(got))
+	}
+	for i, want := range []string{"a", "b"} {
+		if got[i]["value"] != want {
+			t.Errorf("record %d value = %v, want %s", i, got[i]["value"], want)
+		}
+	}
+}
+
+// TestConsumeGroupWithEndOffsetRejected pins that the two cannot be combined:
+// an end offset finishes when every assigned partition is done, but a group's
+// assignment is decided by the group and can change while consuming.
+func TestConsumeGroupWithEndOffsetRejected(t *testing.T) {
+	_, addrs := seedCluster(t, 2)
+
+	for _, args := range [][]string{
+		{"-g", "g", "-o", "0:2"},
+		{"-g", "g", "-o", ":end"},
+		{"--share-group", "s", "-o", "0:2"},
+	} {
+		root := &cobra.Command{Use: "kcl", SilenceUsage: true, SilenceErrors: true}
+		kcl := client.New(root)
+		root.AddCommand(Command(kcl))
+		root.SetArgs(append(append([]string{"consume", "t"}, args...),
+			"--no-config-file", "-B", strings.Join(addrs, ",")))
+		err := root.Execute()
+		if err == nil {
+			t.Errorf("%v: expected a usage error, got none", args)
+		} else if !strings.Contains(err.Error(), "cannot be combined with an end offset") {
+			t.Errorf("%v: unexpected error %q", args, err)
+		}
+	}
+
+	// Without an end offset, group consuming still works.
+	if got := runConsume(t, addrs, "-g", "gok", "-o", "start", "-n", "2"); len(got) != 2 {
+		t.Errorf("group consume without an end got %d records, want 2", len(got))
 	}
 }

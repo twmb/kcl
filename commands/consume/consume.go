@@ -114,6 +114,22 @@ func (c *consumption) run(topics []string) error {
 	if err != nil {
 		return err
 	}
+
+	// parseOffset is what sets these, so this cannot be checked any earlier:
+	// their zero values are indistinguishable from a requested offset of 0.
+	hasEnd := c.end >= 0 || c.untilOffset > -1 || c.endTimestampMillis >= 0
+
+	// Consuming to an end tracks a per-partition end and finishes when every
+	// one is reached. A group's assignment is decided by the group and can
+	// change while consuming, so there is no fixed set of partitions to
+	// finish; the two cannot be combined meaningfully.
+	if hasEnd && (c.group != "" || c.shareGroup != "") {
+		which := "--group"
+		if c.shareGroup != "" {
+			which = "--share-group"
+		}
+		return out.Errf(out.ExitUsage, "%s cannot be combined with an end offset: the group decides which partitions are assigned, and that can change while consuming, so there is no fixed set of partitions to consume to an end", which)
+	}
 	c.cl.AddOpt(kgo.ConsumeResetOffset(offset))
 	if len(c.partitions) == 0 {
 		c.cl.AddOpt(kgo.ConsumeTopics(topics...))
@@ -160,7 +176,13 @@ func (c *consumption) run(topics []string) error {
 	// These are two independent choices. They used to be one if/else,
 	// which meant asking to keep control records (or consuming an internal
 	// topic) silently switched the isolation level as a side effect.
-	if isConsumerOffsets || isTransactionState || c.printControlRecords {
+	// An end offset needs control records kept. A transaction marker
+	// occupies an offset, so the last entry before a partition's end can be
+	// a marker rather than a record; with markers dropped, the partition
+	// never reaches its end and the consume hangs after printing everything
+	// it had. They are still not printed or counted -- that is a separate
+	// check in the record loop.
+	if isConsumerOffsets || isTransactionState || c.printControlRecords || hasEnd {
 		c.cl.AddOpt(kgo.KeepControlRecords())
 	}
 	if c.readCommitted {
@@ -352,15 +374,20 @@ func (c *consumption) run(topics []string) error {
 			}
 		}
 
-		// An exact end applies to every partition, so it replaces the
-		// per-partition high watermark. It is not clamped to the
-		// watermark: -o 0:100 on a topic holding 5 records is a request
-		// to keep consuming until offset 100 exists.
+		// An exact end bounds every partition, but never beyond what the
+		// partition actually holds -- the minimum of the requested end
+		// and the high watermark. Setting it unconditionally left any
+		// partition short of the requested offset unfinished, so the
+		// consume printed everything it had and then waited forever. An
+		// empty partition on a multi-partition topic is the common way
+		// to hit that.
 		if c.end >= 0 {
 			for t, ps := range offsets {
 				for p, o := range ps {
-					o.Offset = c.end
-					offsets[t][p] = o
+					if o.Offset > c.end {
+						o.Offset = c.end
+						offsets[t][p] = o
+					}
 				}
 			}
 		}
@@ -708,6 +735,16 @@ func (co *consumeOutput) consume() {
 					return
 				}
 
+				// Control records are kept only so that a partition can
+				// reach its end offset; they are not data. Drop them
+				// here, before any per-record accounting: --num,
+				// --num-per-partition, and -G all ran after the old
+				// check, so a kept marker consumed a per-partition slot
+				// and was matched against grep filters.
+				if r.Attrs.IsControl() && !co.printControlRecords {
+					return
+				}
+
 				// This record offset could be before the requested start
 				// following an out of range reset.
 				if co.start > 0 && r.Offset < co.start ||
@@ -730,29 +767,25 @@ func (co *consumeOutput) consume() {
 					return
 				}
 
-				// Only increment the count and write if it is not a control message
-				// (unless --print-control-records is set).
-				if co.printControlRecords || !r.Attrs.IsControl() {
-					co.num++
-					if co.pbd != nil {
-						r.Value, _ = co.pbd.jsonString(r.Value)
+				co.num++
+				if co.pbd != nil {
+					r.Value, _ = co.pbd.jsonString(r.Value)
+				}
+				// Schema Registry decode: schema binary -> JSON. Records
+				// that are not SR-framed are left as-is; other errors are
+				// reported but the raw bytes are still printed.
+				if co.dec != nil {
+					if co.decodeKey && r.Key != nil {
+						r.Key = co.srDecode(r.Key, "key")
 					}
-					// Schema Registry decode: schema binary -> JSON. Records
-					// that are not SR-framed are left as-is; other errors are
-					// reported but the raw bytes are still printed.
-					if co.dec != nil {
-						if co.decodeKey && r.Key != nil {
-							r.Key = co.srDecode(r.Key, "key")
-						}
-						if co.decodeValue && r.Value != nil {
-							r.Value = co.srDecode(r.Value, "value")
-						}
+					if co.decodeValue && r.Value != nil {
+						r.Value = co.srDecode(r.Value, "value")
 					}
-					co.format(r, &p.FetchPartition)
+				}
+				co.format(r, &p.FetchPartition)
 
-					if co.num == co.max {
-						co.stop()
-					}
+				if co.num == co.max {
+					co.stop()
 				}
 			})
 

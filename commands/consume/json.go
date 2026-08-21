@@ -25,9 +25,6 @@ type jsonHeader struct {
 
 // jsonRecord is the wire shape of one record in JSON output mode.
 //
-// Field names match rpk's envelope where the two overlap, so jq expressions
-// written against rpk keep working.
-//
 // Key/Value are pre-encoded json.RawMessage rather than string so that three
 // states are representable in one field: JSON null for a nil (tombstone or
 // absent) component, a JSON string for text, and a bare JSON value for a
