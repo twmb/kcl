@@ -323,7 +323,10 @@ func (c *consumption) run(topics []string) error {
 		co.untilOffsets = endTsOffsets
 	}
 
-	if c.untilOffset > -1 {
+	// An exact end (-o N:M) is resolved the same way as :end, so both share
+	// one termination path. Previously an exact end only filtered records and
+	// had no way to finish, so the command consumed its range and then hung.
+	if c.untilOffset > -1 || c.end >= 0 {
 		adm := kadm.NewClient(cl)
 		offsets, err := adm.ListEndOffsets(ctx, topics...)
 		if err != nil {
@@ -345,6 +348,19 @@ func (c *consumption) run(topics []string) error {
 					if !found {
 						delete(offsets[t], p)
 					}
+				}
+			}
+		}
+
+		// An exact end applies to every partition, so it replaces the
+		// per-partition high watermark. It is not clamped to the
+		// watermark: -o 0:100 on a topic holding 5 records is a request
+		// to keep consuming until offset 100 exists.
+		if c.end >= 0 {
+			for t, ps := range offsets {
+				for p, o := range ps {
+					o.Offset = c.end
+					offsets[t][p] = o
 				}
 			}
 		}
@@ -381,15 +397,17 @@ func (c *consumption) run(topics []string) error {
 		}
 
 		co.untilOffset = true
-		for t, ps := range offsets {
-			for p, o := range ps {
-				// Either increment or decrement the offset depending on what was provided (+/-).
-				if c.addUntilOffset {
-					o.Offset += int64(c.untilOffset)
-				} else {
-					o.Offset -= int64(c.untilOffset)
+		if c.untilOffset > -1 {
+			for t, ps := range offsets {
+				for p, o := range ps {
+					// Either increment or decrement the offset depending on what was provided (+/-).
+					if c.addUntilOffset {
+						o.Offset += int64(c.untilOffset)
+					} else {
+						o.Offset -= int64(c.untilOffset)
+					}
+					offsets[t][p] = o
 				}
-				offsets[t][p] = o
 			}
 		}
 		co.untilOffsets = offsets
@@ -621,7 +639,23 @@ func (co *consumeOutput) consume() {
 			})
 		}
 
-		fetches := co.cl.PollFetches(co.ctx)
+		// Bound the poll by whatever is left of --timeout. PollFetches
+		// blocks until records arrive, so without a deadline the loop
+		// never returns to the timeout check above and the flag never
+		// fired at all.
+		pollCtx := co.ctx
+		var (
+			pollDeadline bool
+			cancelPoll   func()
+		)
+		if co.timeout > 0 {
+			pollCtx, cancelPoll = context.WithTimeout(co.ctx, co.timeout-time.Since(lastRecordTime))
+			pollDeadline = true
+		}
+		fetches := co.cl.PollFetches(pollCtx)
+		if cancelPoll != nil {
+			cancelPoll() // released per iteration, not deferred to function exit
+		}
 
 		if idleTimer != nil {
 			idleTimer.Stop()
@@ -637,6 +671,10 @@ func (co *consumeOutput) consume() {
 			co.cl.MarkAcks(co.shareAck)
 		}
 		fetches.EachError(func(t string, p int32, err error) {
+			// Our own poll deadline is not a fetch failure.
+			if pollDeadline && errors.Is(err, context.DeadlineExceeded) {
+				return
+			}
 			fmt.Fprintf(os.Stderr, "fetch error %s[%d]: %v\n", t, p, err)
 		})
 		fetches.EachPartition(func(p kgo.FetchTopicPartition) {
@@ -665,15 +703,9 @@ func (co *consumeOutput) consume() {
 					return
 				}
 
+				// The end offset is exclusive.
 				if partEndOffset != -1 && r.Offset >= partEndOffset {
-					delete(offsetsRemaining[r.Topic], r.Partition)
-					if len(offsetsRemaining[r.Topic]) == 0 {
-						delete(offsetsRemaining, r.Topic)
-					}
-					co.cl.PauseFetchPartitions(map[string][]int32{r.Topic: []int32{r.Partition}})
-					if r.Offset > partEndOffset {
-						return
-					}
+					return
 				}
 
 				// This record offset could be before the requested start
@@ -723,6 +755,31 @@ func (co *consumeOutput) consume() {
 					}
 				}
 			})
+
+			// Mark the partition finished once we have consumed
+			// through partEndOffset-1. The previous condition waited
+			// to see a record AT partEndOffset, which never arrives
+			// when the end is the high watermark -- no record exists
+			// there yet -- so the command hung after printing its
+			// range.
+			if partEndOffset != -1 {
+				if n := len(p.Records); n > 0 && p.Records[n-1].Offset+1 >= partEndOffset {
+					delete(offsetsRemaining[p.Topic], p.Partition)
+					if len(offsetsRemaining[p.Topic]) == 0 {
+						delete(offsetsRemaining, p.Topic)
+					}
+					co.cl.PauseFetchPartitions(map[string][]int32{p.Topic: {p.Partition}})
+				}
+			}
 		})
+
+		// Fix C: re-check here, not only at the top of the loop. Once the
+		// last requested offset is consumed every partition is paused, so
+		// the next poll blocks forever and the top-of-loop check is never
+		// reached again.
+		if len(co.untilOffsets) != 0 && len(offsetsRemaining) == 0 {
+			co.stop()
+			return
+		}
 	}
 }

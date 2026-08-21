@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -181,5 +182,50 @@ func TestConsumeReadUncommittedIsANoop(t *testing.T) {
 func TestConsumeControlRecordsDoesNotChangeIsolation(t *testing.T) {
 	if got := isolationOf(t, "--print-control-records", "--read-committed"); got != 1 {
 		t.Errorf("isolation = %d, want 1 alongside --print-control-records", got)
+	}
+}
+
+// TestConsumeEndOffsetTerminates covers two former hangs. An exact end
+// (-o N:M) had no termination path at all, and :end only finished if it saw a
+// record AT the end offset -- which never exists when the end is the high
+// watermark. Both printed their range and then waited forever.
+func TestConsumeEndOffsetTerminates(t *testing.T) {
+	_, addrs := seedCluster(t, 5)
+
+	if got := runConsume(t, addrs, "-o", "0:3"); len(got) != 3 {
+		t.Errorf("-o 0:3 got %d records, want 3 (end is exclusive)", len(got))
+	}
+	if got := runConsume(t, addrs, "-o", ":end"); len(got) != 5 {
+		t.Errorf("-o :end got %d records, want 5", len(got))
+	}
+	if got := runConsume(t, addrs, "-o", "1:4"); len(got) != 3 {
+		t.Errorf("-o 1:4 got %d records, want 3", len(got))
+	}
+}
+
+// TestConsumeTimeoutFires pins that --timeout can fire at all. The check sat at
+// the top of the poll loop while PollFetches blocks until records arrive, so
+// with no traffic the loop never returned to it and the flag did nothing.
+func TestConsumeTimeoutFires(t *testing.T) {
+	c, err := kfake.NewCluster(kfake.NumBrokers(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Close)
+	cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := kadm.NewClient(cl).CreateTopic(t.Context(), 1, 1, nil, "t"); err != nil {
+		t.Fatal(err)
+	}
+	cl.Close()
+
+	start := time.Now()
+	if got := runConsume(t, c.ListenAddrs(), "--timeout", "400ms"); len(got) != 0 {
+		t.Errorf("got %d records from an empty topic", len(got))
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Errorf("--timeout took %s; it did not fire", elapsed)
 	}
 }
