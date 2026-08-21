@@ -178,6 +178,10 @@ SEE ALSO:
 `,
 		Args: cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
+			if err := validateFilters(resourceType, resourcePattern, operation, permission); err != nil {
+				return err
+			}
+
 			var pname, pprincipal, phost *string
 			if resourceName != "" {
 				pname = &resourceName
@@ -237,9 +241,18 @@ SEE ALSO:
 	cmd.Flags().StringVar(&resourcePattern, "pattern", "match", "resource name pattern filter; match means all (Kafka 2.0.0+)")
 	cmd.Flags().StringVar(&principal, "principal", "", "principal filter; empty matches all")
 	cmd.Flags().StringVar(&host, "host", "", "host filter; empty matches all")
-	cmd.Flags().StringVar(&operation, "op", "any", "operation filter; any matches all")
-	cmd.Flags().StringVar(&operation, "operation", "any", "operation filter; any matches all (alias for --op)")
-	cmd.Flags().StringVar(&permission, "perm", "any", "permission filter; any matches all")
+	cmd.Flags().StringVar(&operation, "operation", "any", "operation filter; any matches all (alias: --op)")
+	cmd.Flags().StringVar(&operation, "op", "any", "")
+	cmd.Flags().StringVar(&permission, "permission", "any", "permission filter; any matches all (alias: --perm)")
+	cmd.Flags().StringVar(&permission, "perm", "any", "")
+	cmd.Flags().MarkHidden("op")
+	cmd.Flags().MarkHidden("perm")
+	registerCompletions(cmd, map[string][]string{
+		"type":       resourceTypeValues,
+		"pattern":    patternValues,
+		"operation":  operationValues,
+		"permission": permissionValues,
+	})
 
 	// Ergonomic resource-specific flags (shortcuts for --type + --name).
 	var topicFlag, groupFlag, txnIDFlag, dtokenFlag string
@@ -374,6 +387,9 @@ SEE ALSO:
 			if len(operations) == 0 {
 				return out.Errf(out.ExitUsage, "at least one --operation is required")
 			}
+			if err := validateCreate(pattern, operations); err != nil {
+				return err
+			}
 
 			// Build principal/permission pairs.
 			type principalPerm struct {
@@ -502,6 +518,11 @@ SEE ALSO:
 	cmd.Flags().MarkDeprecated("perm", "use --allow-principal or --deny-principal")
 	cmd.Flags().MarkDeprecated("op", "use --operation")
 
+	registerCompletions(cmd, map[string][]string{
+		"pattern":   createPatternValues,
+		"operation": createOperationValues,
+	})
+
 	return cmd
 }
 
@@ -565,6 +586,11 @@ For more detailed information about ACLs, read kcl acl --help.
 			}
 			if len(missing) > 0 {
 				return out.Errf(out.ExitUsage, "delete requires an explicit %s; deleting will not default a filter for you, because a default would widen what is deleted rather than narrow it", strings.Join(missing, " and an explicit "))
+			}
+			// After the missing check, so an unset filter reports as
+			// unset rather than as unrecognized.
+			if err := validateFilters(resourceType, resourcePattern, operation, permission); err != nil {
+				return err
 			}
 			var pname, pprincipal, phost *string
 			if resourceName != "" {
@@ -739,9 +765,18 @@ For more detailed information about ACLs, read kcl acl --help.
 	cmd.Flags().StringVar(&resourcePattern, "pattern", "", "resource name pattern filter; match means all (Kafka 2.0.0+)")
 	cmd.Flags().StringVar(&principal, "principal", "", "principal filter; empty matches all")
 	cmd.Flags().StringVar(&host, "host", "", "host filter; empty matches all")
-	cmd.Flags().StringVar(&operation, "op", "", "operation filter; any matches all")
-	cmd.Flags().StringVar(&operation, "operation", "", "operation filter; any matches all (alias for --op)")
-	cmd.Flags().StringVar(&permission, "perm", "", "permission filter; any matches all")
+	cmd.Flags().StringVar(&operation, "operation", "", "operation filter; any matches all (alias: --op)")
+	cmd.Flags().StringVar(&operation, "op", "", "")
+	cmd.Flags().StringVar(&permission, "permission", "", "permission filter; any matches all (alias: --perm)")
+	cmd.Flags().StringVar(&permission, "perm", "", "")
+	cmd.Flags().MarkHidden("op")
+	cmd.Flags().MarkHidden("perm")
+	registerCompletions(cmd, map[string][]string{
+		"type":       resourceTypeValues,
+		"pattern":    patternValues,
+		"operation":  operationValues,
+		"permission": permissionValues,
+	})
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print ACLs that would be deleted without actually deleting them")
 	cmd.Flags().BoolVarP(&noConfirm, "yes", "y", false, "skip confirmation prompt before deleting")
 

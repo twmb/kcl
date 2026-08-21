@@ -242,3 +242,52 @@ func TestACLDeleteRequiresExplicitFilters(t *testing.T) {
 		t.Errorf("fully specified delete --dry-run: %v", err)
 	}
 }
+
+// TestACLFilterValidation pins that an unrecognized enum value is caught
+// locally, by name, rather than becoming an UNKNOWN element in the request.
+// #56 was one instance of this class -- a bare list defaulting --type to
+// UNKNOWN -- but any typo produced the same malformed filter, which brokers
+// reject while parsing, in the reported case by closing the connection.
+func TestACLFilterValidation(t *testing.T) {
+	addrs := newCluster(t)
+
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"list", "--type", "bogus"}, `invalid --type "bogus"`},
+		{[]string{"list", "--pattern", "bogus"}, `invalid --pattern "bogus"`},
+		{[]string{"list", "--op", "bogus"}, `invalid --operation "bogus"`},
+		{[]string{"list", "--perm", "bogus"}, `invalid --permission "bogus"`},
+		{[]string{"list", "--operation", "bogus"}, `invalid --operation "bogus"`},
+		{[]string{"list", "--permission", "bogus"}, `invalid --permission "bogus"`},
+		// delete reports unset before unrecognized.
+		{[]string{"delete", "--topic", "f", "--pattern", "bogus", "--op", "read", "--perm", "allow"},
+			`invalid --pattern "bogus"`},
+		// create takes a narrower set: no filter-only match-anything values.
+		{[]string{"create", "--topic", "f", "--allow-principal", "User:a", "--operation", "any"},
+			`invalid --operation "any"`},
+		{[]string{"create", "--topic", "f", "--allow-principal", "User:a", "--operation", "read", "--pattern", "match"},
+			`invalid --pattern "match"`},
+	} {
+		_, err := run(t, addrs, tc.args...)
+		if err == nil {
+			t.Errorf("%v: expected an error, got none", tc.args)
+		} else if !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%v: error %q does not contain %q", tc.args, err, tc.want)
+		}
+	}
+
+	// The aliases still work, and valid values still reach the broker.
+	for _, args := range [][]string{
+		{"list", "--op", "read"},
+		{"list", "--operation", "read"},
+		{"list", "--perm", "allow"},
+		{"list", "--permission", "allow"},
+		{"list", "--type", "TRANSACTIONAL-ID"}, // casing and dashes normalize
+	} {
+		if _, err := run(t, addrs, args...); err != nil {
+			t.Errorf("%v: %v", args, err)
+		}
+	}
+}
