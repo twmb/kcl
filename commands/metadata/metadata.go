@@ -38,6 +38,10 @@ shown. Use -d for detailed topic partitions. It is optional to specify which
 topics to list metadata for; by default, all topics are listed.
 
 If the brokers section is printed, the controller broker is marked with *.
+
+This issues Metadata, which is the command for topics and partitions. For
+cluster-level questions -- cluster ID, controller, authorized operations --
+use "kcl cluster describe", which issues DescribeCluster instead.
 `,
 
 		RunE: func(_ *cobra.Command, topics []string) error {

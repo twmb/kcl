@@ -155,12 +155,18 @@ func DescribeClusterCommand(cl *client.Client) *cobra.Command {
 	var section string
 
 	cmd := &cobra.Command{
-		Use:   "describe-cluster",
-		Short: "Describe the Kafka cluster (Kafka 3.0+).",
+		Use:     "describe",
+		Aliases: []string{"describe-cluster"},
+		Short:   "Describe the Kafka cluster (Kafka 3.0+).",
 		Long: `Describe the Kafka cluster (Kafka 3.0+).
 
 This command prints the cluster ID, controller ID, and a table of all brokers
 in the cluster.
+
+This issues DescribeCluster, which answers cluster-level questions: the cluster
+ID, which broker is controller, the broker list, and (with
+--include-authorized-ops) what the current principal may do. For topics and
+partitions, use "kcl cluster metadata", which issues Metadata instead.
 `,
 		Args: cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {

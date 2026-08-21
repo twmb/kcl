@@ -31,12 +31,27 @@ v0.19.0 (unreleased)
   (`sasl.user`, `registry.tls.server_name`) alongside the legacy
   pure-underscore form.
 
+* `kcl consume -f json` -- the bare word `json` is now reserved as a
+  record output format, printing one JSON object per record rather than
+  being read as a format string (`-f 'json%v'` is still an ordinary
+  format). Nil keys/values print as JSON null, distinct from empty;
+  non-UTF-8 bytes print as base64 under `key_base64`/`value_base64`
+  rather than being corrupted by string escaping; and with `--decode`, a
+  component that decoded to JSON is embedded as a JSON value so
+  `jq .value.count` works without `fromjson`.
+* `kcl cluster describe-cluster` is now `kcl cluster describe`, with the
+  old name kept as an alias. Both it and `kcl cluster metadata` now say
+  which RPC they issue (DescribeCluster vs Metadata), since the two
+  overlap and nothing indicated which to reach for.
+
 ### FIXES
 
 * `kcl acl list` now defaults the resource-type filter to `any` rather
   than sending an invalid `UNKNOWN` resource type. A bare `kcl acl list`
   previously produced a malformed DescribeACLs filter that brokers can
   reject by closing the connection (#56).
+* The `kcl metadata` deprecation notice pointed at `kcl cluster info`,
+  which does not exist; it now names `kcl cluster metadata`.
 
 v0.18.0
 ===

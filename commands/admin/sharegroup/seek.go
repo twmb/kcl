@@ -24,11 +24,11 @@ import (
 
 func seekCommand(cl *client.Client) *cobra.Command {
 	var (
-		to      string
-		toFile  string
-		topics  []string
-		dryRun  bool
-		yes     bool
+		to     string
+		toFile string
+		topics []string
+		dryRun bool
+		yes    bool
 	)
 
 	cmd := &cobra.Command{
@@ -309,4 +309,3 @@ EXAMPLES:
 
 	return cmd
 }
-

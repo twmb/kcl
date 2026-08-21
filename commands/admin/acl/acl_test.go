@@ -187,21 +187,131 @@ func TestACLListGroupFilter(t *testing.T) {
 	}
 }
 
-// TestACLDeleteRequiresExplicitFilters pins the deliberate asymmetry with list:
-// list defaults its filters to match-all, but delete refuses to build a filter
-// it was not fully told, so a bare "kcl acl delete" can never delete
-// everything -- and can never send the UNKNOWN filter elements of #56 either.
-func TestACLDeleteRequiresExplicitFilters(t *testing.T) {
+// TestACLDeleteDefaultsToMatchAll pins the model kcl now shares with rpk and
+// kafka-acls.sh: every unspecified filter matches everything, and the guard is
+// the confirmation rather than a required-flag error. A bare delete used to be
+// rejected outright.
+func TestACLDeleteDefaultsToMatchAll(t *testing.T) {
+	addrs := newCluster(t)
+	seedACLs(t, addrs)
+
+	// --dry-run with no filters at all matches both ACLs and deletes nothing.
+	out, err := run(t, addrs, "delete", "--dry-run")
+	if err != nil {
+		t.Fatalf("bare delete --dry-run: %v", err)
+	}
+	for _, want := range []string{"User:alice", "User:eve"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("dry run output missing %s: %s", want, out)
+		}
+	}
+	if m, _ := runJSON(t, addrs, "list"); len(aclRows(t, m)) != 2 {
+		t.Error("dry run deleted something")
+	}
+
+	// A resource filter still narrows.
+	out, err = run(t, addrs, "delete", "--topic", "foo", "--dry-run")
+	if err != nil {
+		t.Fatalf("delete --topic foo --dry-run: %v", err)
+	}
+	if !strings.Contains(out, "User:alice") || strings.Contains(out, "User:eve") {
+		t.Errorf("--topic foo should match only alice's ACL: %s", out)
+	}
+}
+
+// TestACLDeleteConfirmation covers what now protects a broad delete. Answering
+// anything but yes must leave every ACL in place.
+func TestACLDeleteConfirmation(t *testing.T) {
+	for _, tc := range []struct {
+		answer    string
+		wantAfter int
+	}{
+		{"n\n", 2},
+		{"\n", 2}, // bare enter declines
+		{"y\n", 0},
+	} {
+		addrs := newCluster(t)
+		seedACLs(t, addrs)
+
+		withStdin(t, tc.answer, func() {
+			if _, err := run(t, addrs, "delete"); err != nil {
+				t.Fatalf("delete with answer %q: %v", tc.answer, err)
+			}
+		})
+
+		m, _ := runJSON(t, addrs, "list")
+		if got := len(aclRows(t, m)); got != tc.wantAfter {
+			t.Errorf("answer %q left %d ACLs, want %d", tc.answer, got, tc.wantAfter)
+		}
+	}
+}
+
+// And -y skips the prompt entirely -- the user's own shotgun.
+func TestACLDeleteYesSkipsPrompt(t *testing.T) {
+	addrs := newCluster(t)
+	seedACLs(t, addrs)
+
+	if _, err := run(t, addrs, "delete", "-y"); err != nil {
+		t.Fatalf("delete -y: %v", err)
+	}
+	if m, _ := runJSON(t, addrs, "list"); len(aclRows(t, m)) != 0 {
+		t.Error("delete -y did not delete everything")
+	}
+}
+
+// seedACLs creates two ACLs on different resources.
+func seedACLs(t *testing.T, addrs []string) {
+	t.Helper()
+	if _, err := run(t, addrs, "create", "--topic", "foo",
+		"--allow-principal", "User:alice", "--operation", "read"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run(t, addrs, "create", "--group", "g1",
+		"--deny-principal", "User:eve", "--operation", "read"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// withStdin runs fn with os.Stdin replaced by the given input.
+func withStdin(t *testing.T, in string, fn func()) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdin
+	os.Stdin = r
+	go func() { w.WriteString(in); w.Close() }()
+	defer func() { os.Stdin = old; r.Close() }()
+	fn()
+}
+
+// TestACLFilterValidation pins that an unrecognized enum value is caught
+// locally, by name, rather than becoming an UNKNOWN element in the request.
+// #56 was one instance of this class -- a bare list defaulting --type to
+// UNKNOWN -- but any typo produced the same malformed filter, which brokers
+// reject while parsing, in the reported case by closing the connection.
+func TestACLFilterValidation(t *testing.T) {
 	addrs := newCluster(t)
 
 	for _, tc := range []struct {
 		args []string
 		want string
 	}{
-		{[]string{"delete", "--dry-run"}, "missing resource type filter"},
-		{[]string{"delete", "--topic", "foo", "--dry-run"}, "missing resource pattern filter"},
-		{[]string{"delete", "--topic", "foo", "--pattern", "literal", "--dry-run"}, "missing operation filter"},
-		{[]string{"delete", "--topic", "foo", "--pattern", "literal", "--op", "read", "--dry-run"}, "missing permission filter"},
+		{[]string{"list", "--type", "bogus"}, `invalid --type "bogus"`},
+		{[]string{"list", "--pattern", "bogus"}, `invalid --pattern "bogus"`},
+		{[]string{"list", "--op", "bogus"}, `invalid --operation "bogus"`},
+		{[]string{"list", "--perm", "bogus"}, `invalid --permission "bogus"`},
+		{[]string{"list", "--operation", "bogus"}, `invalid --operation "bogus"`},
+		{[]string{"list", "--permission", "bogus"}, `invalid --permission "bogus"`},
+		// delete reports unset before unrecognized.
+		{[]string{"delete", "--topic", "f", "--pattern", "bogus", "--op", "read", "--perm", "allow"},
+			`invalid --pattern "bogus"`},
+		// create takes a narrower set: no filter-only match-anything values.
+		{[]string{"create", "--topic", "f", "--allow-principal", "User:a", "--operation", "any"},
+			`invalid --operation "any"`},
+		{[]string{"create", "--topic", "f", "--allow-principal", "User:a", "--operation", "read", "--pattern", "match"},
+			`invalid --pattern "match"`},
 	} {
 		_, err := run(t, addrs, tc.args...)
 		if err == nil {
@@ -211,10 +321,83 @@ func TestACLDeleteRequiresExplicitFilters(t *testing.T) {
 		}
 	}
 
-	// Fully specified, it goes through.
-	if _, err := run(t, addrs, "delete",
-		"--topic", "foo", "--pattern", "literal", "--op", "read", "--perm", "allow", "--dry-run",
-	); err != nil {
-		t.Errorf("fully specified delete --dry-run: %v", err)
+	// The aliases still work, and valid values still reach the broker.
+	for _, args := range [][]string{
+		{"list", "--op", "read"},
+		{"list", "--operation", "read"},
+		{"list", "--perm", "allow"},
+		{"list", "--permission", "allow"},
+		{"list", "--type", "TRANSACTIONAL-ID"}, // casing and dashes normalize
+	} {
+		if _, err := run(t, addrs, args...); err != nil {
+			t.Errorf("%v: %v", args, err)
+		}
 	}
+}
+
+// TestEnumValuesAreAccepted guards the three-way split in enums.go: the value
+// lists drive the error message and shell completion, while validation goes
+// through the atoi* conversions. If a list advertised a value the conversion
+// does not accept, kcl would suggest something it then rejects.
+func TestEnumValuesAreAccepted(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		values []string
+		conv   func(string) int
+	}{
+		{"type", resourceTypeValues, func(s string) int { return int(atoiResourceType(s)) }},
+		{"pattern", patternValues, func(s string) int { return int(atoiResourcePattern(s)) }},
+		{"operation", operationValues, func(s string) int { return int(atoiOperation(s)) }},
+		{"permission", permissionValues, func(s string) int { return int(atoiPermission(s)) }},
+		{"create pattern", createPatternValues, func(s string) int { return int(atoiResourcePattern(s)) }},
+		{"create operation", createOperationValues, func(s string) int { return int(atoiOperation(s)) }},
+	} {
+		if len(tc.values) == 0 {
+			t.Errorf("%s: no values advertised", tc.name)
+		}
+		for _, v := range tc.values {
+			if got := tc.conv(v); got == 0 {
+				t.Errorf("%s advertises %q, but it converts to UNKNOWN", tc.name, v)
+			}
+		}
+	}
+
+	// The create sets must exclude the filter-only match-anything values,
+	// which are what validateCreate rejects.
+	for _, v := range createOperationValues {
+		if v == "any" {
+			t.Error("createOperationValues must not offer 'any'")
+		}
+	}
+	for _, v := range createPatternValues {
+		if v == "any" || v == "match" {
+			t.Errorf("createPatternValues must not offer %q", v)
+		}
+	}
+}
+
+// A filter that matches nothing says so and does not prompt at all.
+func TestACLDeleteNoMatches(t *testing.T) {
+	addrs := newCluster(t)
+	seedACLs(t, addrs)
+
+	out, err := run(t, addrs, "delete", "--topic", "nosuchtopic", "-y")
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if strings.Contains(out, "will be deleted") {
+		t.Errorf("printed a deletion header with no matches: %s", out)
+	}
+	if got := len(aclRows(t, mustJSON(t, addrs, "list"))); got != 2 {
+		t.Errorf("deleted something: %d ACLs remain of 2", got)
+	}
+}
+
+func mustJSON(t *testing.T, addrs []string, args ...string) map[string]any {
+	t.Helper()
+	m, err := runJSON(t, addrs, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
 }

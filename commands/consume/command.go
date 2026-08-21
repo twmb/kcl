@@ -32,16 +32,18 @@ func (c *consumption) command() *cobra.Command {
 	cmd.Flags().StringVarP(&c.offset, "offset", "o", "start", "offset to consume from (start, end, +N, -N, N, N:M, :end, @timestamp, @T1:T2)")
 	cmd.Flags().IntVarP(&c.num, "num", "n", 0, "quit after consuming this number of records; 0 is unbounded")
 	cmd.Flags().IntVar(&c.numPerPartition, "num-per-partition", 0, "stop printing individual partitions after this many records; 0 is unbounded")
-	cmd.Flags().StringVarP(&c.format, "format", "f", `%v\n`, "record output format")
+	cmd.Flags().StringVarP(&c.format, "format", "f", `%v\n`, "record output format; the bare word 'json' prints each record as a JSON object")
 	cmd.Flags().BoolVarP(&c.regex, "regex", "r", false, "parse topics as regex; consume any topic that matches any expression")
 	cmd.Flags().Int32Var(&c.fetchMaxBytes, "fetch-max-bytes", 1<<20, "maximum amount of bytes per fetch request per broker")
 	cmd.Flags().DurationVar(&c.fetchMaxWait, "fetch-max-wait", 5*time.Second, "maximum amount of time to wait when fetching from a broker before the broker replies")
 	cmd.Flags().StringVar(&c.rack, "rack", "", "the rack to use for fetch requests; setting this opts in to nearest replica fetching (Kafka 2.2.0+)")
-	cmd.Flags().BoolVar(&c.readUncommitted, "read-uncommitted", false, "opt in to reading uncommitted offsets")
+	cmd.Flags().BoolVar(&c.readCommitted, "read-committed", false, "opt in to reading only committed records; the default reads uncommitted, matching the Java client, librdkafka, rpk, and kcat")
+	cmd.Flags().BoolVar(&c.readUncommitted, "read-uncommitted", false, "deprecated no-op: reading uncommitted is now the default")
+	cmd.Flags().MarkDeprecated("read-uncommitted", "reading uncommitted records is now the default; the flag has no effect")
 	cmd.Flags().BoolVar(&c.printControlRecords, "print-control-records", false, "include control records (transaction markers) in output")
 	cmd.Flags().Int32Var(&c.fetchMaxPartitionBytes, "fetch-max-partition-bytes", 0, "per-partition byte limit for fetch requests (0 uses broker default)")
 	cmd.Flags().DurationVar(&c.timeout, "timeout", 0, "exit if no message received for this duration (0 is no timeout)")
-	cmd.Flags().StringArrayVarP(&c.grepPatterns, "grep", "G", nil, "filter records (k:, v:, hk:, hv:, h:NAME=, t: with optional ! negation; repeatable, AND'd)")
+	cmd.Flags().StringArrayVarP(&c.grepPatterns, "grep", "G", nil, "client-side record filter (k:, v:, hk:, hv:, h:NAME=, t:; ! negates; repeatable)")
 	cmd.Flags().StringVar(&c.protoFile, "proto-file", "", "decode raw (non-registry) protobuf with this proto source/protoset file, requires --proto-message; for Schema Registry-framed protobuf use --decode instead")
 	cmd.Flags().StringVar(&c.protoMessage, "proto-message", "", "the proto.message structure in --proto-file to use for decoding, requires --proto-file")
 	cmd.Flags().StringSliceVar(&c.decode, "decode", nil, "decode key and/or value from the Schema Registry wire format to JSON; bare --decode does both, or --decode=key / --decode=value (uses -R/--registry)")
@@ -216,6 +218,27 @@ Inspect headers:
 
 Show share-group delivery count (with --share-group):
   -f '%v delivery=%D\n'
+
+
+JSON OUTPUT
+
+As a special case, -f/--format set to exactly "json" prints one JSON object per
+record instead of being read as a format string:
+
+  {"topic":"orders","partition":3,"offset":1482,"timestamp":1755645291123,
+   "leader_epoch":7,"key":"user-1","value":"...","headers":[...]}
+
+Only the exact word is reserved; -f 'json%v' is still an ordinary format.
+
+A nil key or value prints as JSON null, distinct from an empty one (""). Bytes
+that are not valid UTF-8 would be corrupted by JSON string escaping, so they
+are printed as base64 under "key_base64" / "value_base64" instead, and the
+plain field is omitted -- check which field is present rather than assuming.
+Header values follow the same rule. "delivery_count" is included only when
+--share-group is used.
+
+With --decode, a component that decoded to JSON is embedded as a JSON value
+rather than a string, so "jq .value.count" works without fromjson.
 
 
 SCHEMA REGISTRY

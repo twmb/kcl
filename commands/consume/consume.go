@@ -40,7 +40,8 @@ type consumption struct {
 	format          string
 	rack            string
 
-	readUncommitted     bool
+	readCommitted       bool
+	readUncommitted     bool // deprecated no-op: read_uncommitted is now the default
 	printControlRecords bool
 	timeout             time.Duration
 
@@ -156,9 +157,13 @@ func (c *consumption) run(topics []string) error {
 	sigs := make(chan os.Signal, 2)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 
+	// These are two independent choices. They used to be one if/else,
+	// which meant asking to keep control records (or consuming an internal
+	// topic) silently switched the isolation level as a side effect.
 	if isConsumerOffsets || isTransactionState || c.printControlRecords {
 		c.cl.AddOpt(kgo.KeepControlRecords())
-	} else if !c.readUncommitted {
+	}
+	if c.readCommitted {
 		c.cl.AddOpt(kgo.FetchIsolationLevel(kgo.ReadCommitted()))
 	}
 
@@ -311,14 +316,17 @@ func (c *consumption) run(topics []string) error {
 			}
 		}
 		if empty {
-			os.Exit(0)
+			return nil
 		}
 
 		co.untilOffset = true
 		co.untilOffsets = endTsOffsets
 	}
 
-	if c.untilOffset > -1 {
+	// An exact end (-o N:M) is resolved the same way as :end, so both share
+	// one termination path. Previously an exact end only filtered records and
+	// had no way to finish, so the command consumed its range and then hung.
+	if c.untilOffset > -1 || c.end >= 0 {
 		adm := kadm.NewClient(cl)
 		offsets, err := adm.ListEndOffsets(ctx, topics...)
 		if err != nil {
@@ -340,6 +348,19 @@ func (c *consumption) run(topics []string) error {
 					if !found {
 						delete(offsets[t], p)
 					}
+				}
+			}
+		}
+
+		// An exact end applies to every partition, so it replaces the
+		// per-partition high watermark. It is not clamped to the
+		// watermark: -o 0:100 on a topic holding 5 records is a request
+		// to keep consuming until offset 100 exists.
+		if c.end >= 0 {
+			for t, ps := range offsets {
+				for p, o := range ps {
+					o.Offset = c.end
+					offsets[t][p] = o
 				}
 			}
 		}
@@ -372,19 +393,21 @@ func (c *consumption) run(topics []string) error {
 		}
 
 		if empty {
-			os.Exit(0)
+			return nil
 		}
 
 		co.untilOffset = true
-		for t, ps := range offsets {
-			for p, o := range ps {
-				// Either increment or decrement the offset depending on what was provided (+/-).
-				if c.addUntilOffset {
-					o.Offset += int64(c.untilOffset)
-				} else {
-					o.Offset -= int64(c.untilOffset)
+		if c.untilOffset > -1 {
+			for t, ps := range offsets {
+				for p, o := range ps {
+					// Either increment or decrement the offset depending on what was provided (+/-).
+					if c.addUntilOffset {
+						o.Offset += int64(c.untilOffset)
+					} else {
+						o.Offset -= int64(c.untilOffset)
+					}
+					offsets[t][p] = o
 				}
-				offsets[t][p] = o
 			}
 		}
 		co.untilOffsets = offsets
@@ -394,6 +417,11 @@ func (c *consumption) run(topics []string) error {
 		co.buildConsumerOffsetsFormatFn()
 	} else if isTransactionState {
 		co.buildTransactionStateFormatFn()
+	} else if c.format == jsonFormatName {
+		// The bare word "json" is reserved: it selects JSON record output
+		// rather than being read as a format string. Matched exactly, so
+		// -f 'json%v' remains an ordinary format.
+		co.buildJSONFormatFn(c.shareGroup != "")
 	} else {
 		f, err := kgo.NewRecordFormatter(c.format)
 		if err != nil {
@@ -409,7 +437,14 @@ func (c *consumption) run(topics []string) error {
 	keepCancel = true // ownership transferred to co / signal handler
 	go co.consume()
 
-	<-sigs
+	select {
+	case <-sigs:
+	case <-co.done:
+		// Finished on its own; nothing left to wait for.
+		cl.Close()
+		return nil
+	}
+
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -547,6 +582,17 @@ func (co *consumeOutput) srDecode(b []byte, what string) []byte {
 	return json
 }
 
+// stop signals the consume loop to finish and unblocks run. It mirrors what
+// the signal handler does, and exists so that finishing normally -- reaching
+// --num, hitting --timeout, or consuming every requested offset -- unwinds
+// through the same path as an interrupt rather than calling os.Exit from
+// inside a fetch callback. os.Exit also made the command impossible to test in
+// process, since it took the test binary with it.
+func (co *consumeOutput) stop() {
+	atomic.StoreUint32(&co.quit, 1)
+	co.cancel()
+}
+
 func (co *consumeOutput) consume() {
 	defer close(co.done)
 
@@ -573,12 +619,14 @@ func (co *consumeOutput) consume() {
 
 	for atomic.LoadUint32(&co.quit) == 0 {
 		if len(co.untilOffsets) != 0 && len(offsetsRemaining) == 0 {
-			os.Exit(0)
+			co.stop()
+			return
 		}
 
 		// Check timeout: exit if no records received within the duration.
 		if co.timeout > 0 && time.Since(lastRecordTime) > co.timeout {
-			os.Exit(0)
+			co.stop()
+			return
 		}
 
 		// If polling takes more than 1s with no records, print a
@@ -591,7 +639,23 @@ func (co *consumeOutput) consume() {
 			})
 		}
 
-		fetches := co.cl.PollFetches(co.ctx)
+		// Bound the poll by whatever is left of --timeout. PollFetches
+		// blocks until records arrive, so without a deadline the loop
+		// never returns to the timeout check above and the flag never
+		// fired at all.
+		pollCtx := co.ctx
+		var (
+			pollDeadline bool
+			cancelPoll   func()
+		)
+		if co.timeout > 0 {
+			pollCtx, cancelPoll = context.WithTimeout(co.ctx, co.timeout-time.Since(lastRecordTime))
+			pollDeadline = true
+		}
+		fetches := co.cl.PollFetches(pollCtx)
+		if cancelPoll != nil {
+			cancelPoll() // released per iteration, not deferred to function exit
+		}
 
 		if idleTimer != nil {
 			idleTimer.Stop()
@@ -607,6 +671,10 @@ func (co *consumeOutput) consume() {
 			co.cl.MarkAcks(co.shareAck)
 		}
 		fetches.EachError(func(t string, p int32, err error) {
+			// Our own poll deadline is not a fetch failure.
+			if pollDeadline && errors.Is(err, context.DeadlineExceeded) {
+				return
+			}
 			fmt.Fprintf(os.Stderr, "fetch error %s[%d]: %v\n", t, p, err)
 		})
 		fetches.EachPartition(func(p kgo.FetchTopicPartition) {
@@ -628,15 +696,16 @@ func (co *consumeOutput) consume() {
 			}
 
 			p.EachRecord(func(r *kgo.Record) {
+				// Already finished: the fetch callbacks cannot be
+				// broken out of, so drop the rest of the batch
+				// rather than printing past --num.
+				if atomic.LoadUint32(&co.quit) != 0 {
+					return
+				}
+
+				// The end offset is exclusive.
 				if partEndOffset != -1 && r.Offset >= partEndOffset {
-					delete(offsetsRemaining[r.Topic], r.Partition)
-					if len(offsetsRemaining[r.Topic]) == 0 {
-						delete(offsetsRemaining, r.Topic)
-					}
-					co.cl.PauseFetchPartitions(map[string][]int32{r.Topic: []int32{r.Partition}})
-					if r.Offset > partEndOffset {
-						return
-					}
+					return
 				}
 
 				// This record offset could be before the requested start
@@ -682,10 +751,35 @@ func (co *consumeOutput) consume() {
 					co.format(r, &p.FetchPartition)
 
 					if co.num == co.max {
-						os.Exit(0)
+						co.stop()
 					}
 				}
 			})
+
+			// Mark the partition finished once we have consumed
+			// through partEndOffset-1. The previous condition waited
+			// to see a record AT partEndOffset, which never arrives
+			// when the end is the high watermark -- no record exists
+			// there yet -- so the command hung after printing its
+			// range.
+			if partEndOffset != -1 {
+				if n := len(p.Records); n > 0 && p.Records[n-1].Offset+1 >= partEndOffset {
+					delete(offsetsRemaining[p.Topic], p.Partition)
+					if len(offsetsRemaining[p.Topic]) == 0 {
+						delete(offsetsRemaining, p.Topic)
+					}
+					co.cl.PauseFetchPartitions(map[string][]int32{p.Topic: {p.Partition}})
+				}
+			}
 		})
+
+		// Fix C: re-check here, not only at the top of the loop. Once the
+		// last requested offset is consumed every partition is paused, so
+		// the next poll blocks forever and the top-of-loop check is never
+		// reached again.
+		if len(co.untilOffsets) != 0 && len(offsetsRemaining) == 0 {
+			co.stop()
+			return
+		}
 	}
 }
