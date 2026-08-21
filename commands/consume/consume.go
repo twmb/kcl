@@ -316,7 +316,7 @@ func (c *consumption) run(topics []string) error {
 			}
 		}
 		if empty {
-			os.Exit(0)
+			return nil
 		}
 
 		co.untilOffset = true
@@ -377,7 +377,7 @@ func (c *consumption) run(topics []string) error {
 		}
 
 		if empty {
-			os.Exit(0)
+			return nil
 		}
 
 		co.untilOffset = true
@@ -419,7 +419,14 @@ func (c *consumption) run(topics []string) error {
 	keepCancel = true // ownership transferred to co / signal handler
 	go co.consume()
 
-	<-sigs
+	select {
+	case <-sigs:
+	case <-co.done:
+		// Finished on its own; nothing left to wait for.
+		cl.Close()
+		return nil
+	}
+
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -557,6 +564,17 @@ func (co *consumeOutput) srDecode(b []byte, what string) []byte {
 	return json
 }
 
+// stop signals the consume loop to finish and unblocks run. It mirrors what
+// the signal handler does, and exists so that finishing normally -- reaching
+// --num, hitting --timeout, or consuming every requested offset -- unwinds
+// through the same path as an interrupt rather than calling os.Exit from
+// inside a fetch callback. os.Exit also made the command impossible to test in
+// process, since it took the test binary with it.
+func (co *consumeOutput) stop() {
+	atomic.StoreUint32(&co.quit, 1)
+	co.cancel()
+}
+
 func (co *consumeOutput) consume() {
 	defer close(co.done)
 
@@ -583,12 +601,14 @@ func (co *consumeOutput) consume() {
 
 	for atomic.LoadUint32(&co.quit) == 0 {
 		if len(co.untilOffsets) != 0 && len(offsetsRemaining) == 0 {
-			os.Exit(0)
+			co.stop()
+			return
 		}
 
 		// Check timeout: exit if no records received within the duration.
 		if co.timeout > 0 && time.Since(lastRecordTime) > co.timeout {
-			os.Exit(0)
+			co.stop()
+			return
 		}
 
 		// If polling takes more than 1s with no records, print a
@@ -638,6 +658,13 @@ func (co *consumeOutput) consume() {
 			}
 
 			p.EachRecord(func(r *kgo.Record) {
+				// Already finished: the fetch callbacks cannot be
+				// broken out of, so drop the rest of the batch
+				// rather than printing past --num.
+				if atomic.LoadUint32(&co.quit) != 0 {
+					return
+				}
+
 				if partEndOffset != -1 && r.Offset >= partEndOffset {
 					delete(offsetsRemaining[r.Topic], r.Partition)
 					if len(offsetsRemaining[r.Topic]) == 0 {
@@ -692,7 +719,7 @@ func (co *consumeOutput) consume() {
 					co.format(r, &p.FetchPartition)
 
 					if co.num == co.max {
-						os.Exit(0)
+						co.stop()
 					}
 				}
 			})

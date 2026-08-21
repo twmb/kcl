@@ -43,7 +43,7 @@ func (c *consumption) command() *cobra.Command {
 	cmd.Flags().BoolVar(&c.printControlRecords, "print-control-records", false, "include control records (transaction markers) in output")
 	cmd.Flags().Int32Var(&c.fetchMaxPartitionBytes, "fetch-max-partition-bytes", 0, "per-partition byte limit for fetch requests (0 uses broker default)")
 	cmd.Flags().DurationVar(&c.timeout, "timeout", 0, "exit if no message received for this duration (0 is no timeout)")
-	cmd.Flags().StringArrayVarP(&c.grepPatterns, "grep", "G", nil, "filter records (k:, v:, hk:, hv:, h:NAME=, t: with optional ! negation; repeatable, AND'd)")
+	cmd.Flags().StringArrayVarP(&c.grepPatterns, "grep", "G", nil, "client-side record filter (k:, v:, hk:, hv:, h:NAME=, t:; ! negates; repeatable)")
 	cmd.Flags().StringVar(&c.protoFile, "proto-file", "", "decode raw (non-registry) protobuf with this proto source/protoset file, requires --proto-message; for Schema Registry-framed protobuf use --decode instead")
 	cmd.Flags().StringVar(&c.protoMessage, "proto-message", "", "the proto.message structure in --proto-file to use for decoding, requires --proto-file")
 	cmd.Flags().StringSliceVar(&c.decode, "decode", nil, "decode key and/or value from the Schema Registry wire format to JSON; bare --decode does both, or --decode=key / --decode=value (uses -R/--registry)")
