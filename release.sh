@@ -1,11 +1,31 @@
 #!/bin/bash
 
-set -exu
+set -eu
 
-# Build per-platform binaries, tagging each with the current git
-# describe output so `kcl --version` (and the Kafka wire ClientID)
-# report the release tag instead of a dev pseudo-version.
-VERSION="$(git describe --tags --always --dirty)"
+# Build per-platform binaries with the release version baked in, so that
+# `kcl --version` (and the Kafka wire ClientID) report it rather than a dev
+# pseudo-version.
+#
+# The version is an argument rather than `git describe` output: the binaries
+# are built before the tag is created, so describing HEAD produced the
+# previous tag plus a commit distance, e.g. "v0.18.0-30-g66f4393".
+
+if [ $# -ne 1 ]; then
+	echo "usage: $0 VERSION" >&2
+	echo "   eg: $0 v0.19.0" >&2
+	exit 1
+fi
+
+VERSION="$1"
+
+# A dirty tree does not build the release it claims to; say so in the binary
+# rather than shipping something that cannot be reproduced from the tag.
+if [ -n "$(git status --porcelain)" ]; then
+	VERSION="${VERSION}-dirty"
+	echo "warning: working tree is dirty, building ${VERSION}" >&2
+fi
+
+set -x
 LDFLAGS="-X main.version=${VERSION}"
 
 build() {
