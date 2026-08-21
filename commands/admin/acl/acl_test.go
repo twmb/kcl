@@ -203,13 +203,13 @@ func TestACLDeleteRequiresExplicitFilters(t *testing.T) {
 		want []string
 	}{
 		{[]string{"delete", "--dry-run"},
-			[]string{"--type", "--pattern", "--op", "--perm"}},
+			[]string{"--type", "--pattern", "--operation", "--permission"}},
 		{[]string{"delete", "--topic", "foo", "--dry-run"},
-			[]string{"--pattern", "--op", "--perm"}},
+			[]string{"--pattern", "--operation", "--permission"}},
 		{[]string{"delete", "--topic", "foo", "--pattern", "literal", "--dry-run"},
-			[]string{"--op", "--perm"}},
+			[]string{"--operation", "--permission"}},
 		{[]string{"delete", "--topic", "foo", "--pattern", "literal", "--op", "read", "--dry-run"},
-			[]string{"--perm"}},
+			[]string{"--permission"}},
 	} {
 		_, err := run(t, addrs, tc.args...)
 		if err == nil {
@@ -222,7 +222,7 @@ func TestACLDeleteRequiresExplicitFilters(t *testing.T) {
 			}
 		}
 		// Filters already supplied must not be reported as missing.
-		for _, notWant := range []string{"--type", "--pattern", "--op", "--perm"} {
+		for _, notWant := range []string{"--type", "--pattern", "--operation", "--permission"} {
 			var expected bool
 			for _, w := range tc.want {
 				if w == notWant {

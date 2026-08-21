@@ -579,13 +579,13 @@ For more detailed information about ACLs, read kcl acl --help.
 				missing = append(missing, "--pattern")
 			}
 			if operation == "" {
-				missing = append(missing, "--op")
+				missing = append(missing, "--operation")
 			}
 			if permission == "" {
-				missing = append(missing, "--perm")
+				missing = append(missing, "--permission")
 			}
 			if len(missing) > 0 {
-				return out.Errf(out.ExitUsage, "delete requires an explicit %s; deleting will not default a filter for you, because a default would widen what is deleted rather than narrow it", strings.Join(missing, " and an explicit "))
+				return out.Errf(out.ExitUsage, "delete requires an explicit filter for %s; it will not default them, because a default would widen what is deleted rather than narrow it (pass 'any' to match everything, deliberately)", strings.Join(missing, ", "))
 			}
 			// After the missing check, so an unset filter reports as
 			// unset rather than as unrecognized.
@@ -760,14 +760,14 @@ For more detailed information about ACLs, read kcl acl --help.
 		},
 	}
 
-	cmd.Flags().StringVar(&resourceType, "type", "", "resource type filter; any matches all")
+	cmd.Flags().StringVar(&resourceType, "type", "", "REQUIRED resource type filter; pass 'any' to match all types")
 	cmd.Flags().StringVar(&resourceName, "name", "", "resource name filter; empty matches all")
-	cmd.Flags().StringVar(&resourcePattern, "pattern", "", "resource name pattern filter; match means all (Kafka 2.0.0+)")
+	cmd.Flags().StringVar(&resourcePattern, "pattern", "", "REQUIRED resource name pattern filter; pass 'match' to match all patterns (Kafka 2.0.0+)")
 	cmd.Flags().StringVar(&principal, "principal", "", "principal filter; empty matches all")
 	cmd.Flags().StringVar(&host, "host", "", "host filter; empty matches all")
-	cmd.Flags().StringVar(&operation, "operation", "", "operation filter; any matches all (alias: --op)")
+	cmd.Flags().StringVar(&operation, "operation", "", "REQUIRED operation filter; pass 'any' to match all operations (alias: --op)")
 	cmd.Flags().StringVar(&operation, "op", "", "")
-	cmd.Flags().StringVar(&permission, "permission", "", "permission filter; any matches all (alias: --perm)")
+	cmd.Flags().StringVar(&permission, "permission", "", "REQUIRED permission filter; pass 'any' to match all permissions (alias: --perm)")
 	cmd.Flags().StringVar(&permission, "perm", "", "")
 	cmd.Flags().MarkHidden("op")
 	cmd.Flags().MarkHidden("perm")
