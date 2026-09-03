@@ -3,13 +3,13 @@ package topic
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
+	"uuid"
 
 	"github.com/spf13/cobra"
 
@@ -302,14 +302,11 @@ without actually deleting them.
 			for _, topic := range topics {
 				t := kmsg.NewDeleteTopicsRequestTopic()
 				if ids {
-					if len(topic) != 32 {
-						return out.Errf(out.ExitUsage, "topic id %s is not a 32 byte hex string", topic)
-					}
-					raw, err := hex.DecodeString(topic)
+					id, err := uuid.Parse(topic)
 					if err != nil {
-						return out.Errf(out.ExitUsage, "topic id %s is not a hex string", topic)
+						return out.Errf(out.ExitUsage, "topic id %s is not a uuid: %v", topic, err)
 					}
-					copy(t.TopicID[:], raw)
+					t.TopicID = id
 				} else {
 					t.Topic = kmsg.StringPtr(topic)
 				}

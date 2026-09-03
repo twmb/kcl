@@ -4,10 +4,10 @@ package metadata
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"sort"
+	"uuid"
 
 	"github.com/spf13/cobra"
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -75,14 +75,11 @@ use "kcl cluster describe", which issues DescribeCluster instead.
 				for _, topic := range topics {
 					t := kmsg.NewMetadataRequestTopic()
 					if ids {
-						if len(topic) != 32 {
-							return out.Errf(out.ExitUsage, "topic id %s is not a 32 byte hex string", topic)
-						}
-						raw, err := hex.DecodeString(topic)
+						id, err := uuid.Parse(topic)
 						if err != nil {
-							return out.Errf(out.ExitUsage, "topic id %s is not a hex string", topic)
+							return out.Errf(out.ExitUsage, "topic id %s is not a uuid: %v", topic, err)
 						}
-						copy(t.TopicID[:], raw)
+						t.TopicID = id
 					} else {
 						t.Topic = kmsg.StringPtr(topic)
 					}

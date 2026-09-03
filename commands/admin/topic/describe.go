@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"uuid"
 
 	"github.com/spf13/cobra"
 
@@ -42,7 +43,7 @@ AWK mode defaults to partitions. JSON always includes all sections.
 Health filters show only partitions matching the condition.
 
 Topics can be referenced by name (positional args) or UUID (--topic-id,
-repeatable). UUIDs are 32 hex characters with optional dashes.
+repeatable). UUIDs are 32 hex characters or the dashed 8-4-4-4-12 form.
 
 EXAMPLES:
   kcl topic describe foo                         # all sections
@@ -64,7 +65,7 @@ SEE ALSO:
 			// Parse and validate topic IDs up front.
 			parsedIDs := make([][16]byte, 0, len(topicIDs))
 			for _, raw := range topicIDs {
-				id, err := parseTopicID(raw)
+				id, err := uuid.Parse(raw)
 				if err != nil {
 					return out.Errf(out.ExitUsage, "invalid --topic-id %q: %v", raw, err)
 				}
@@ -507,25 +508,9 @@ SEE ALSO:
 	cmd.Flags().BoolVar(&unavailable, "unavailable", false, "only show partitions with no leader")
 	cmd.Flags().BoolVar(&underMinISR, "under-min-isr", false, "only show partitions where ISR < min.insync.replicas")
 	cmd.Flags().BoolVar(&atMinISR, "at-min-isr", false, "only show partitions where ISR = min.insync.replicas")
-	cmd.Flags().StringArrayVar(&topicIDs, "topic-id", nil, "topic UUID to describe (repeatable; 32 hex chars with optional dashes)")
+	cmd.Flags().StringArrayVar(&topicIDs, "topic-id", nil, "topic UUID to describe (repeatable; 32 hex chars, or the dashed 8-4-4-4-12 form)")
 
 	return cmd
-}
-
-// parseTopicID accepts a topic UUID as either 32 hex chars or the
-// dashed 8-4-4-4-12 form and returns the raw 16 bytes.
-func parseTopicID(s string) ([16]byte, error) {
-	var id [16]byte
-	stripped := strings.ReplaceAll(s, "-", "")
-	if len(stripped) != 32 {
-		return id, fmt.Errorf("topic id must be 32 hex chars (with optional dashes), got %d", len(stripped))
-	}
-	raw, err := hex.DecodeString(stripped)
-	if err != nil {
-		return id, fmt.Errorf("not a hex string: %v", err)
-	}
-	copy(id[:], raw)
-	return id, nil
 }
 
 func fetchTopicConfigs(ctx context.Context, cl kmsg.Requestor, topics []string) (map[string][]kmsg.DescribeConfigsResponseResourceConfig, error) {
