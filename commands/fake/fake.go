@@ -9,6 +9,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -39,6 +40,7 @@ func Command() *cobra.Command {
 		acls         bool
 		saslUsers    []string
 		pprofAddr    string
+		controlAddr  string
 		registry     bool
 		registryPort int
 		seedDemoFlag bool
@@ -112,11 +114,28 @@ same {id, count} shape and a few records each:
   kcl consume demo-avro -o start --decode=value
   kcl consume demo-plain -o start
 
+Serve a control endpoint so another process can drive the cluster (move
+leaders, add and remove brokers, shuffle leadership), driven by kcl fake
+control:
+
+  kcl fake --control              # 127.0.0.1:9099
+  kcl fake --control=19099        # a port, or HOST:PORT
+
 Tune log verbosity for debugging:
 
   kcl fake -l debug
 `,
-		Args: cobra.ExactArgs(0),
+		Args: func(_ *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return nil
+			}
+			// --control has an optional value, so pflag only takes it with
+			// an equals sign; "--control ADDR" leaves ADDR sitting here.
+			if _, err := strconv.Atoi(args[0]); err == nil || strings.Contains(args[0], ":") {
+				return out.Errf(out.ExitUsage, "unexpected argument %q: --control takes its address with an equals sign, as --control=%s", args[0], args[0])
+			}
+			return out.Errf(out.ExitUsage, "unexpected argument %q: kcl fake takes no positional arguments", args[0])
+		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			level, err := parseLogLevel(logLevel)
 			if err != nil {
@@ -133,6 +152,26 @@ Tune log verbosity for debugging:
 			supers, err := parseSASLUsers(saslUsers)
 			if err != nil {
 				return out.Errf(out.ExitUsage, "%v", err)
+			}
+
+			// Normalize --control before anything binds, so a port clash
+			// with a broker is a usage error rather than a bind failure
+			// after the cluster is already up.
+			if controlAddr != "" {
+				if !strings.Contains(controlAddr, ":") {
+					controlAddr = "127.0.0.1:" + controlAddr
+				}
+				_, sport, err := net.SplitHostPort(controlAddr)
+				if err != nil {
+					return out.Errf(out.ExitUsage, "invalid --control address %q: %v", controlAddr, err)
+				}
+				port, err := strconv.Atoi(sport)
+				if err != nil {
+					return out.Errf(out.ExitUsage, "invalid --control port %q: %v", sport, err)
+				}
+				if slices.Contains(ports, port) {
+					return out.Errf(out.ExitUsage, "--control port %d is also a broker port", port)
+				}
 			}
 
 			numBrokers := len(ports)
@@ -206,6 +245,21 @@ Tune log verbosity for debugging:
 
 			for _, addr := range c.ListenAddrs() {
 				fmt.Println(addr)
+			}
+
+			if controlAddr != "" {
+				ln, err := net.Listen("tcp", controlAddr)
+				if err != nil {
+					return fmt.Errorf("unable to listen for the control endpoint on %s: %v", controlAddr, err)
+				}
+				srv := &http.Server{Handler: controlHandler(c)}
+				defer srv.Close()
+				go func() {
+					if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+						fmt.Fprintf(os.Stderr, "control endpoint failed: %v\n", err)
+					}
+				}()
+				fmt.Fprintf(os.Stderr, "control endpoint listening on %s\n", ln.Addr())
 			}
 
 			// Serve an in-memory Schema Registry (srfake) so the same
@@ -291,9 +345,13 @@ Tune log verbosity for debugging:
 	cmd.Flags().BoolVar(&acls, "acls", false, "enable ACL enforcement (requires --sasl superusers to get through the deny-by-default)")
 	cmd.Flags().StringArrayVar(&saslUsers, "sasl", nil, "add a SASL superuser as MECHANISM:USER:PASS (repeatable; enables SASL). Mechanisms: plain, scram-sha-256, scram-sha-512")
 	cmd.Flags().StringVar(&pprofAddr, "pprof", "", "if set, serve pprof on this addr (e.g. :6060 or 127.0.0.1:6060)")
+	cmd.Flags().StringVar(&controlAddr, "control", "", "serve a control endpoint for driving the cluster remotely (bare --control uses "+defaultControlAddr+", or --control=ADDR)")
+	cmd.Flags().Lookup("control").NoOptDefVal = defaultControlAddr
 	cmd.Flags().BoolVar(&registry, "registry", true, "serve an in-memory Schema Registry (srfake) for schema-aware produce/consume (disable with --registry=false)")
 	cmd.Flags().IntVar(&registryPort, "registry-port", defaultRegistryPort, "port for the fake schema registry")
 	cmd.Flags().BoolVar(&seedDemoFlag, "seed-demo", false, "seed demo-avro/demo-proto/demo-json (schema-encoded) and demo-plain topics with sample records (implies --registry)")
+
+	cmd.AddCommand(controlCommand())
 
 	return cmd
 }
