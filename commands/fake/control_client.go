@@ -27,10 +27,16 @@ These talk to the endpoint that ` + "`kcl fake --control`" + ` serves. The
 cluster must have been started with --control; without it there is nothing
 listening.
 
-  kcl fake --control &
-  kcl fake control methods
+EXAMPLES:
+  kcl fake --control &                            # start a cluster serving one
+  kcl fake control methods                        # what we can call
   kcl fake control call MoveTopicPartition foo 0 2
   kcl fake control fault add --rule '{"topic":"foo","error":"NOT_LEADER_OR_FOLLOWER"}'
+
+SEE ALSO:
+  kcl fake               start the cluster
+  kcl fake control call  call a cluster method
+  kcl fake control fault install and inspect faults
 `,
 	}
 	cmd.PersistentFlags().StringVar(&addr, "addr", addr, "control endpoint address")
@@ -78,11 +84,18 @@ Arguments are positional and match the method's parameters. A string is
 taken as written, a topic ID is a uuid in any usual form, and anything else
 is JSON.
 
+Results print as one line of JSON, so pipe to jq if you want it wide. This
+is the one control output --format does not touch: what comes back is the
+method's own return value rather than kcl's output.
+
+EXAMPLES:
   kcl fake control call ShufflePartitionLeaders
   kcl fake control call MoveTopicPartition foo 0 2
   kcl fake control call SetFollowers foo 0 [1,2]
-  kcl fake control call TopicInfo foo
   kcl fake control call TopicInfo foo | jq -r .TopicID
+
+SEE ALSO:
+  kcl fake control methods  what this cluster can call
 `,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
