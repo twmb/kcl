@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -17,10 +16,7 @@ import (
 
 // controlCommand returns `kcl fake control`.
 func controlCommand() *cobra.Command {
-	addr := os.Getenv("KCL_FAKE_CONTROL")
-	if addr == "" {
-		addr = defaultControlAddr
-	}
+	addr := defaultControlAddr
 
 	cmd := &cobra.Command{
 		Use:   "control",
@@ -34,12 +30,14 @@ listening.
   kcl fake --control &
   kcl fake control methods
   kcl fake control call MoveTopicPartition foo 0 2
+  kcl fake control fault add --rule '{"topic":"foo","error":"NOT_LEADER_OR_FOLLOWER"}'
 `,
 	}
-	cmd.PersistentFlags().StringVar(&addr, "addr", addr, "control endpoint address (default $KCL_FAKE_CONTROL, else "+defaultControlAddr+")")
+	cmd.PersistentFlags().StringVar(&addr, "addr", addr, "control endpoint address")
 	cmd.AddCommand(
 		controlMethodsCommand(&addr),
 		controlCallCommand(&addr),
+		faultCommand(&addr),
 	)
 	return cmd
 }
