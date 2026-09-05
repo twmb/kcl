@@ -82,11 +82,13 @@ is JSON.
   kcl fake control call MoveTopicPartition foo 0 2
   kcl fake control call SetFollowers foo 0 [1,2]
   kcl fake control call TopicInfo foo
+  kcl fake control call TopicInfo foo | jq -r .TopicID
 `,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			// Keep the result as raw json so we print it in the order the
-			// cluster gave it rather than in map order.
+			// cluster gave it rather than in map order. We print it on one
+			// line: pipe to jq if you want it wide.
 			var resp struct {
 				Result jsontext.Value `json:"result"`
 			}
@@ -97,7 +99,7 @@ is JSON.
 			if len(resp.Result) == 0 || string(resp.Result) == "null" {
 				return nil
 			}
-			if err := resp.Result.Indent(jsontext.WithIndent("  ")); err != nil {
+			if err := resp.Result.Compact(); err != nil {
 				return err
 			}
 			fmt.Println(resp.Result.String())
