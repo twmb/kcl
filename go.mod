@@ -12,7 +12,7 @@ require (
 	github.com/twmb/avro v1.8.0
 	github.com/twmb/franz-go v1.21.6
 	github.com/twmb/franz-go/pkg/kadm v1.18.0
-	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260820024614-9b174ed31afe
+	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260905045312-d70fc1b5b9f8
 	github.com/twmb/franz-go/pkg/kmsg v1.13.1
 	github.com/twmb/franz-go/pkg/sr v1.8.0
 	golang.org/x/crypto v0.55.0

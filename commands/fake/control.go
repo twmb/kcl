@@ -180,6 +180,7 @@ func controlHandler(c *kfake.Cluster) http.Handler {
 		}
 		controlWrite(w, http.StatusOK, map[string]any{"result": res})
 	})
+	faultRoutes(mux, newFaults(c))
 	return mux
 }
 
