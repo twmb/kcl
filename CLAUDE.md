@@ -11,6 +11,7 @@ calling a change done, and say which items do not apply and why.
 - [ ] Does its help follow the `EXAMPLES:` / `SEE ALSO:` shape?
 - [ ] Does it change output? MIGRATION.md gets an entry, with before and
       after and how to get the old shape back.
+- [ ] Does CHANGELOG.md need a bullet under the unreleased heading?
 - [ ] Are there sibling commands that should have gotten the same change?
 - [ ] Do the tests cover the paths you only exercised by hand?
 
@@ -99,7 +100,24 @@ of a silent drop, and v2 matches field names case sensitively.
 map by walking codes, and skip codes that do not answer to themselves,
 since an unknown code answers `UNKNOWN_SERVER_ERROR` rather than nil.
 
-## Never
+## CHANGELOG
 
-Do not refer to Redpanda or rpk in code, comments, commit messages, or
-documentation. See the licensing note at the top of IMPROVEMENTS.md.
+Entries go under a `vX.Y.Z (unreleased)` heading, dropped at release, under
+`CHANGED`, `BREAKING`, `NEW`, `FIXES`, `UPSTREAM`. `BREAKING` is for a change
+that stops a correct script working; output a correct consumer still parses
+is `CHANGED`. Bullets run about 20 words. Say what
+changed, not why: the why lives in the commit message it came from, and a
+past release was rewritten for running 34 words a bullet explaining itself.
+
+## rpk and Redpanda
+
+rpk is BSL licensed, so never copy its code and never present kcl as derived
+from it. That is the whole of the rule.
+
+Naming it is fine, and the tree does in several places. Flag help saying a
+default matches "the Java client, librdkafka, rpk, and kcat", or a CHANGELOG
+bullet saying a filter model is "as in rpk and kafka-acls.sh", cites what
+the ecosystem already does to justify a choice. The README's Redpanda docker
+snippet tells you how to run a broker. None of that is derivation, and none
+of it should be stripped. The blanket wording at the top of IMPROVEMENTS.md
+is about implementation, not about the name.
