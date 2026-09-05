@@ -129,9 +129,11 @@ func DieJSON(command string, errCode string, message string) {
 	os.Exit(1)
 }
 
+// writeJSON writes v as one line. JSON output is for machines: a single line
+// pipes into jq, greps, and captures into a shell variable, none of which a
+// pretty printed value does. Pipe to jq if you want it wide.
 func writeJSON(v any) {
 	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
 	if err := enc.Encode(v); err != nil {
 		Die("unable to marshal JSON: %v", err)
 	}
