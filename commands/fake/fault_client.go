@@ -2,6 +2,7 @@ package fake
 
 import (
 	"bytes"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
 	"io"
@@ -70,7 +71,7 @@ stdin) holding either an object or an array of them.
   kcl fake control fault add --rule @faults.json
 `,
 		Args: cobra.ExactArgs(0),
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			if len(rules) == 0 {
 				return out.Errf(out.ExitUsage, "at least one --rule is required")
 			}
@@ -86,6 +87,10 @@ stdin) holding either an object or an array of them.
 			if err := controlDo(http.MethodPost, *addr, "/faults", map[string]any{"rules": all}, &resp); err != nil {
 				return err
 			}
+			if controlFormat(cmd) == out.FormatJSON {
+				out.MarshalJSON("fake control fault add", 1, map[string]any{"id": resp.ID})
+				return nil
+			}
 			fmt.Println(resp.ID)
 			return nil
 		},
@@ -98,25 +103,32 @@ func faultListCommand(addr *string) *cobra.Command {
 	return &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
-		Short:   "List installed faults and how many requests each has answered.",
-		Args:    cobra.ExactArgs(0),
-		RunE: func(_ *cobra.Command, _ []string) error {
+		Short:   "List installed faults, their hits, and what is left of their budget.",
+		Long: `List installed faults, their hits, and what is left of their budget.
+
+LEFT is the requests the fault can still answer, 0 once it is spent and -1
+when a rule in it is unlimited. That tells a spent count:3 apart from a live
+count:-1 that happens to have fired three times.
+`,
+		Args: cobra.ExactArgs(0),
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			var resp struct {
 				Faults []faultSet `json:"faults"`
 			}
 			if err := controlDo(http.MethodGet, *addr, "/faults", nil, &resp); err != nil {
 				return err
 			}
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
-			fmt.Fprintf(tw, "ID\tHITS\tRULES\n")
+			tw := out.NewFormattedTable(controlFormat(cmd), "fake control fault list", 1, "faults", "ID", "HITS", "LEFT", "RULES")
 			for _, f := range resp.Faults {
 				b, err := json.Marshal(f.Rules)
 				if err != nil {
 					return err
 				}
-				fmt.Fprintf(tw, "%d\t%d\t%s\n", f.ID, f.Hits, b)
+				// As a jsontext.Value the rules print as JSON in text and awk
+				// and nest as JSON rather than as a quoted string in json.
+				tw.Row(f.ID, f.Hits, f.Left, jsontext.Value(b))
 			}
+			tw.Flush()
 			return nil
 		},
 	}
@@ -172,7 +184,7 @@ many requests the fault had answered by then.
   kcl fake control fault wait 1 --hits 3
 `,
 		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			if _, err := strconv.Atoi(args[0]); err != nil {
 				return out.Errf(out.ExitUsage, "fault ID %q is not a number", args[0])
 			}
@@ -182,6 +194,10 @@ many requests the fault had answered by then.
 			body := map[string]any{"hits": hits, "timeout": timeout}
 			if err := controlDo(http.MethodPost, *addr, "/faults/"+args[0]+"/wait", body, &resp); err != nil {
 				return err
+			}
+			if controlFormat(cmd) == out.FormatJSON {
+				out.MarshalJSON("fake control fault wait", 1, map[string]any{"hits": resp.Hits})
+				return nil
 			}
 			fmt.Println(resp.Hits)
 			return nil

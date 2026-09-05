@@ -146,8 +146,28 @@ type faultSet struct {
 	ID    int    `json:"id"`
 	Rules []Rule `json:"rules"`
 	Hits  int    `json:"hits"`
+	Left  int    `json:"left"` // -1 if a rule in the set is unlimited
 
 	h *kfake.FaultHandle
+}
+
+// remaining is the budget left across the set. A hit spends one unit from
+// whichever rule matched, so what the set has left is its total count less
+// its hits. An exhausted set reads 0 and an unlimited one reads -1, which
+// tells apart a spent count:3 from a live count:-1 that has fired 3 times.
+func (s *faultSet) remaining() int {
+	var total int
+	for _, r := range s.Rules {
+		switch {
+		case r.Count < 0:
+			return -1
+		case r.Count == 0:
+			total++ // kfake reads an unset count as one
+		default:
+			total += r.Count
+		}
+	}
+	return max(0, total-s.Hits)
 }
 
 // faults tracks what a control endpoint has installed so that a caller can
@@ -199,6 +219,7 @@ func (fs *faults) list() []*faultSet {
 	for id := 1; id <= fs.next; id++ {
 		if set, ok := fs.sets[id]; ok {
 			set.Hits = set.h.Hits()
+			set.Left = set.remaining()
 			out = append(out, set)
 		}
 	}
