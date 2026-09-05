@@ -314,7 +314,7 @@ retries are useless because a single failed dial already consumed the
 retry budget.
 
 
-EXAMPLES
+EXAMPLES:
 
 Fast-fail for CI:
 

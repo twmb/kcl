@@ -66,7 +66,7 @@ topics, records, consumer group offsets, and transactional producer
 state across restarts. Pass --sync to fsync every write (slower but
 safest).
 
-EXAMPLES
+EXAMPLES:
 
 Default three-broker cluster:
 

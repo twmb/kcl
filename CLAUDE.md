@@ -9,7 +9,8 @@ calling a change done, and say which items do not apply and why.
 - [ ] Does the command honor `--format text|json|awk`?
 - [ ] Do its errors respect the format, and use the right exit code?
 - [ ] Does its help follow the `EXAMPLES:` / `SEE ALSO:` shape?
-- [ ] Does it need a MIGRATION.md entry?
+- [ ] Does it change output? MIGRATION.md gets an entry, with before and
+      after and how to get the old shape back.
 - [ ] Are there sibling commands that should have gotten the same change?
 - [ ] Do the tests cover the paths you only exercised by hand?
 
@@ -26,14 +27,19 @@ the HTTP layer and the bug was in argument handling above it.
 flags.
 
 Tabular output goes through `out.NewFormattedTable`, which renders all
-three formats from one set of rows. 28 of the 42 files defining commands
-use it. The 7 still writing straight to `out.BeginTabWrite` predate it and
-silently ignore `--format`, which parses fine and does nothing. Do not add
-to them, and convert one when you touch it.
+three formats from one set of rows. It models one flat table, so a command
+whose output has sections or nesting (`topic describe`, `cluster metadata`)
+branches on `cl.Format()` by hand and calls `out.MarshalJSON` instead. Both
+are fine; a command with a single table that hand rolls it is not.
+
+Do not confuse the two mechanisms with a coverage gap. Every command emits
+valid JSON under `--format json` today, verified by running the read-only
+commands against `kcl fake` and parsing their stdout. If you change that,
+you have broken something.
 
 `out.MarshalJSON` covers non-tabular JSON, and both it and the table put
-`_command` and `_version` at the top level. `out.writeJSON` indents, so
-every `--format json` in kcl is pretty printed today.
+`_command` and `_version` at the top level. All JSON output is one line;
+see MIGRATION.md. Pipe to jq when you want it wide.
 
 `text` is for people and may change between releases. `awk` is the stable
 scripting contract: TSV, no headers, stable column order.
@@ -57,8 +63,8 @@ SEE ALSO:
   kcl related        one line
 ```
 
-9 files use `EXAMPLES:` and 5 use `SEE ALSO:`; 4 older files use a bare
-`EXAMPLES` with no colon. Follow the colon form.
+15 files use `EXAMPLES:` and 7 use `SEE ALSO:`, and nothing uses a bare
+heading without the colon any more. Keep it that way.
 
 Renames keep the old name working as a `Hidden`/`Deprecated` cobra command
 or flag, so no script breaks. `--help-json` (`main.go:202`) dumps the whole

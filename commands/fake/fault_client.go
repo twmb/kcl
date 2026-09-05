@@ -44,6 +44,11 @@ Rules are JSON, matching kfake's Fault type:
               its entities
   error       error name or code, default UNKNOWN_SERVER_ERROR
   count       requests to fault, default 1, -1 until removed
+
+SEE ALSO:
+  kcl fake control fault add   install a fault
+  kcl fake control fault list  what is installed and what it has hit
+  kcl fake control fault wait  block until a fault fires
 `,
 	}
 	cmd.AddCommand(
@@ -66,9 +71,14 @@ Rules installed together share an ID, and removing that ID removes all of
 them. Each --rule is a JSON object, or @FILE to read one from a file (@- for
 stdin) holding either an object or an array of them.
 
+EXAMPLES:
   kcl fake control fault add --rule '{"topic_id":"4286fc61...","error":"UNKNOWN_TOPIC_ID","count":3}'
   kcl fake control fault add --rule '{"keys":["fetch"],"nodes":[1],"topic":"foo","error":"NOT_LEADER_OR_FOLLOWER","count":-1}'
   kcl fake control fault add --rule @faults.json
+
+SEE ALSO:
+  kcl fake control fault list  what is installed
+  kcl fake control fault rm    remove one or all
 `,
 		Args: cobra.ExactArgs(0),
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -109,6 +119,13 @@ func faultListCommand(addr *string) *cobra.Command {
 LEFT is the requests the fault can still answer, 0 once it is spent and -1
 when a rule in it is unlimited. That tells a spent count:3 apart from a live
 count:-1 that happens to have fired three times.
+
+EXAMPLES:
+  kcl fake control fault list
+  kcl fake control fault list --format json | jq '.faults[] | select(.left == 0)'
+
+SEE ALSO:
+  kcl fake control fault add  install a fault
 `,
 		Args: cobra.ExactArgs(0),
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -181,7 +198,12 @@ This is how a caller out of process paces itself against a fault rather than
 sleeping and hoping. Exits non-zero if the timeout passes first, saying how
 many requests the fault had answered by then.
 
+EXAMPLES:
+  kcl fake control fault wait 1            # until it fires once
   kcl fake control fault wait 1 --hits 3
+
+SEE ALSO:
+  kcl fake control fault list  hits and budget without blocking
 `,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
