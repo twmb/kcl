@@ -214,6 +214,33 @@ func TestParseRules(t *testing.T) {
 	}
 }
 
+func TestFaultSetRemaining(t *testing.T) {
+	tests := []struct {
+		name  string
+		rules []Rule
+		hits  int
+		want  int
+	}{
+		{"unspent", []Rule{{Count: 3}}, 0, 3},
+		{"partly spent", []Rule{{Count: 3}}, 1, 2},
+		{"spent", []Rule{{Count: 3}}, 3, 0},
+		{"never negative", []Rule{{Count: 3}}, 5, 0},
+		{"unset count is one", []Rule{{}}, 0, 1},
+		{"unset count spent", []Rule{{}}, 1, 0},
+		{"unlimited", []Rule{{Count: -1}}, 3, -1},
+		{"summed", []Rule{{Count: 2}, {Count: 3}}, 1, 4},
+		{"one unlimited rule", []Rule{{Count: 2}, {Count: -1}}, 9, -1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &faultSet{Rules: tt.rules, Hits: tt.hits}
+			if got := s.remaining(); got != tt.want {
+				t.Errorf("remaining() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFaults(t *testing.T) {
 	c, err := kfake.NewCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "foo"))
 	if err != nil {

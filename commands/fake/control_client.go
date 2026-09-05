@@ -47,18 +47,18 @@ func controlMethodsCommand(addr *string) *cobra.Command {
 		Use:   "methods",
 		Short: "List the cluster methods that control can call.",
 		Args:  cobra.ExactArgs(0),
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			var resp struct {
 				Methods []controlMethod `json:"methods"`
 			}
 			if err := controlDo(http.MethodGet, *addr, "/methods", nil, &resp); err != nil {
 				return err
 			}
-			tw := out.BeginTabWrite()
-			defer tw.Flush()
+			tw := out.NewFormattedTable(controlFormat(cmd), "fake control methods", 1, "methods", "NAME", "SIGNATURE")
 			for _, m := range resp.Methods {
-				fmt.Fprintf(tw, "%s\t%s\n", m.Name, m.Signature)
+				tw.Row(m.Name, m.Signature)
 			}
+			tw.Flush()
 			return nil
 		},
 	}
@@ -106,6 +106,17 @@ is JSON.
 			return nil
 		},
 	}
+}
+
+// controlFormat is --format, which kcl registers as a persistent flag on the
+// root command. kcl fake holds no *client.Client, so we read the flag off the
+// command rather than through the client.
+func controlFormat(cmd *cobra.Command) string {
+	format, err := cmd.Flags().GetString("format")
+	if err != nil {
+		return out.FormatText
+	}
+	return format
 }
 
 // controlDo sends one request to a control endpoint and decodes the response
