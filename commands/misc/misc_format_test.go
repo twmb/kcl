@@ -49,13 +49,13 @@ func TestErrcodeAndErrtextFormats(t *testing.T) {
 		json bool
 	}{
 		{name: "errcode text", args: []string{"misc", "errcode", "6"}, want: "NOT_LEADER_FOR_PARTITION\nThis server is not the leader"},
-		{name: "errcode json", args: []string{"--format", "json", "misc", "errcode", "6"}, want: `"name": "NOT_LEADER_FOR_PARTITION"`, json: true},
+		{name: "errcode json", args: []string{"--format", "json", "misc", "errcode", "6"}, want: `"name":"NOT_LEADER_FOR_PARTITION"`, json: true},
 		{name: "errcode awk", args: []string{"--format", "awk", "misc", "errcode", "6"}, want: "NOT_LEADER_FOR_PARTITION\t6\tThis server"},
-		{name: "errcode none json", args: []string{"--format", "json", "misc", "errcode", "0"}, want: `"name": "NONE"`, json: true},
+		{name: "errcode none json", args: []string{"--format", "json", "misc", "errcode", "0"}, want: `"name":"NONE"`, json: true},
 		{name: "errtext text", args: []string{"misc", "errtext", "NOT_LEADER_FOR_PARTITION"}, want: "NOT_LEADER_FOR_PARTITION (6)\n"},
-		{name: "errtext json", args: []string{"--format", "json", "misc", "errtext", "NOT_LEADER_FOR_PARTITION"}, want: `"code": 6`, json: true},
+		{name: "errtext json", args: []string{"--format", "json", "misc", "errtext", "NOT_LEADER_FOR_PARTITION"}, want: `"code":6`, json: true},
 		{name: "errtext list awk", args: []string{"--format", "awk", "misc", "errtext", "--list"}, want: "\nNOT_LEADER_FOR_PARTITION\t6\t"},
-		{name: "errtext list json", args: []string{"--format", "json", "misc", "errtext", "--list"}, want: `"_command": "misc.errtext"`, json: true},
+		{name: "errtext list json", args: []string{"--format", "json", "misc", "errtext", "--list"}, want: `"_command":"misc.errtext"`, json: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got, err := runMisc(t, test.args...)

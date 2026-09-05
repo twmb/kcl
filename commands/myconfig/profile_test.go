@@ -733,12 +733,12 @@ func TestProfileFormats(t *testing.T) {
 		want string
 		json bool
 	}{
-		{name: "list json", args: []string{"--format", "json", "profile", "list"}, want: `"name": "prod"`, json: true},
+		{name: "list json", args: []string{"--format", "json", "profile", "list"}, want: `"name":"prod"`, json: true},
 		{name: "list awk", args: []string{"--format", "awk", "profile", "list"}, want: "dev\tfalse\nprod\ttrue\n"},
-		{name: "current json", args: []string{"--format", "json", "profile", "current"}, want: `"profile": "prod"`, json: true},
+		{name: "current json", args: []string{"--format", "json", "profile", "current"}, want: `"profile":"prod"`, json: true},
 		{name: "current awk with -C", args: []string{"--format", "awk", "-C", "dev", "profile", "current"}, want: "dev\n"},
 		{name: "dump text is toml", args: []string{"profile", "dump"}, want: "seed_brokers = [\"p:9092\", \"q:9092\"]"},
-		{name: "dump json", args: []string{"--format", "json", "profile", "dump"}, want: `"method": "plain"`, json: true},
+		{name: "dump json", args: []string{"--format", "json", "profile", "dump"}, want: `"method":"plain"`, json: true},
 		{name: "dump awk", args: []string{"--format", "awk", "profile", "dump"}, want: "sasl.method\tplain\nseed_brokers\tp:9092,q:9092\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
