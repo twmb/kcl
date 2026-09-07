@@ -128,8 +128,8 @@ to provide it.
 For help about configuration, run:
   kcl profile -h
 
-If this is your first time running kcl, you can create a configuration with:
-  kcl profile create
+To create a profile for a cluster:
+  kcl profile create NAME -B host:9092
 
 Command completion is available at:
   kcl misc gen-autocomplete
@@ -206,7 +206,7 @@ Command completion is available at:
 	// We look for the flag in the arguments rather than parsing them: Execute
 	// parses again, and slice flags such as -B append on every parse, so
 	// parsing twice doubled every seed broker.
-	usageErrors(root)
+	usageErrors(root, func() error { _, err := cl.FlagCfg(); return err })
 
 	// -X help and -X list are answered here, after cobra has parsed the flags
 	// so that --format applies. The registry group has a persistent pre-run
@@ -240,13 +240,19 @@ Command completion is available at:
 // flag, exit 2 like every other usage error. A group with no Run of its own
 // gets one that treats a stray argument as an unknown subcommand; cobra
 // itself only reports those at the root, and answered "kcl profile nope"
-// with the help text and exit 0.
-func usageErrors(root *cobra.Command) {
+// with the help text and exit 0. A bare group also runs checkFlags, so that
+// "kcl -X hlep" reports the bad key rather than printing the help.
+func usageErrors(root *cobra.Command, checkFlags func() error) {
 	allCommands(root, func(cmd *cobra.Command) {
 		if cmd.HasSubCommands() && !cmd.Runnable() {
 			cmd.RunE = func(c *cobra.Command, args []string) error {
 				if len(args) > 0 {
 					return out.Errf(out.ExitUsage, "unknown command %q for %q", args[0], c.CommandPath())
+				}
+				if checkFlags != nil {
+					if err := checkFlags(); err != nil {
+						return out.Errf(out.ExitUsage, "%v", err)
+					}
 				}
 				return c.Help()
 			}
@@ -361,7 +367,7 @@ func buildCommandJSON(cmd *cobra.Command, parentHidden bool) commandJSON {
 	return c
 }
 
-const usageTmpl = `USAGE:{{if .Runnable}}
+const usageTmpl = `USAGE:{{if and .Runnable (not .HasAvailableSubCommands)}}
   {{.UseLine}}{{end}}{{if .HasAvailableSubCommands}}
   {{.CommandPath}} [command]{{end}}{{if gt (len .Aliases) 0}}
 
