@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/out"
 )
 
 // Command returns the "profile" command (the primary config interface).
@@ -27,6 +28,7 @@ func Command(cl *client.Client) *cobra.Command {
 		listCommand(cl),
 		currentCommand(cl),
 		createCommand(cl),
+		setupCommand(cl),
 		dumpCommand(cl),
 		renameCommand(cl),
 		deleteCommand(cl),
@@ -49,6 +51,7 @@ func DeprecatedCommand(cl *client.Client) *cobra.Command {
 		listCommand(cl),
 		currentCommand(cl),
 		createCommand(cl),
+		setupCommand(cl),
 		dumpCommand(cl),
 		renameCommand(cl),
 		deleteCommand(cl),
@@ -145,18 +148,101 @@ func currentCommand(cl *client.Client) *cobra.Command {
 }
 
 func createCommand(cl *client.Client) *cobra.Command {
-	var noHelp bool
-	cmd := &cobra.Command{
-		Use:     "create",
-		Aliases: []string{"setup", "wizard"},
-		Short:   "Interactive configuration setup",
-		Args:    cobra.MaximumNArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
-			client.Wizard(noHelp)
+	return &cobra.Command{
+		Use:   "create NAME",
+		Short: "Create a profile from the -B, -X, and -R flags.",
+		Long: `Create a profile from the -B, -X, and -R flags.
+
+The profile is written as a [profiles.NAME] table in the config file,
+creating the file if needed. Any -X key can be saved. If no profile is
+current, the new one becomes current. Only flags are saved; KCL_*
+environment variables are not read.
+
+EXAMPLES:
+  kcl profile create local -B localhost:9092
+  kcl profile create prod -B k1:9093,k2:9093 -X tls.ca_cert_path=/etc/kafka/ca.pem -X sasl.method=scram-sha-256 -X sasl.user=me -X sasl.pass=secret
+  kcl profile create sr -B localhost:9092 -R http://localhost:8081
+
+SEE ALSO:
+  kcl profile use      switch the current profile
+  kcl profile list     list profiles
+  kcl profile dump     show the configuration kcl is running with
+`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			cfg, err := cl.FlagCfg()
+			if err != nil {
+				return out.Errf(out.ExitUsage, "%v", err)
+			}
+			name, cfgPath := args[0], cl.CfgFilePath()
+			current, err := createProfile(cfgPath, name, cfg)
+			if err != nil {
+				return err
+			}
+			if current {
+				fmt.Fprintf(os.Stderr, "Created profile %q in %s; it is now current\n", name, cfgPath)
+			} else {
+				fmt.Fprintf(os.Stderr, "Created profile %q in %s; switch with: kcl profile use %s\n", name, cfgPath, name)
+			}
+			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&noHelp, "no-help", false, "disable help text (only prompts will print)")
+}
+
+// setupCommand is the old name of create, kept working but out of the help.
+func setupCommand(cl *client.Client) *cobra.Command {
+	cmd := createCommand(cl)
+	cmd.Use = "setup NAME"
+	cmd.Hidden = true
 	return cmd
+}
+
+// createProfile adds cfg to the config file at path as [profiles.name],
+// creating the file and its directory if needed. It reports whether the new
+// profile became current, which happens when the file's current_profile is
+// unset or names a profile that does not exist.
+func createProfile(path, name string, cfg client.Cfg) (bool, error) {
+	if name == "" {
+		return false, out.Errf(out.ExitUsage, "profile name cannot be empty")
+	}
+
+	var cfgFile client.CfgFile
+	md, err := toml.DecodeFile(path, &cfgFile)
+	if err != nil && !os.IsNotExist(err) {
+		return false, fmt.Errorf("unable to read config: %v", err)
+	}
+
+	// A file with top level keys but no profiles is the flat single cluster
+	// layout. Adding a profile would silently stop those keys being read, so
+	// leave the conversion to the user.
+	if len(cfgFile.Profiles) == 0 {
+		for _, k := range md.Keys() {
+			if k[0] != "current_profile" {
+				return false, fmt.Errorf("config at %s is a flat single-cluster config; move its keys under a [profiles.NAME] table and set current_profile, then retry", path)
+			}
+		}
+	}
+	if _, exists := cfgFile.Profiles[name]; exists {
+		return false, fmt.Errorf("profile %q already exists", name)
+	}
+
+	if cfgFile.Profiles == nil {
+		cfgFile.Profiles = make(map[string]client.Cfg)
+	}
+	cfgFile.Profiles[name] = cfg
+	var current bool
+	if _, ok := cfgFile.Profiles[cfgFile.CurrentProfile]; !ok {
+		cfgFile.CurrentProfile = name
+		current = true
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return false, fmt.Errorf("unable to create config directory: %v", err)
+	}
+	if err := writeCfgFile(path, cfgFile); err != nil {
+		return false, err
+	}
+	return current, nil
 }
 
 func dumpCommand(cl *client.Client) *cobra.Command {

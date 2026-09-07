@@ -69,6 +69,16 @@ duration strings (`500ms`, `5s`, `2m30s`).
 
 For a full reference with examples, run `kcl profile --help`.
 
+`kcl profile create` writes a profile from the same flags a one-off command
+takes:
+
+```
+kcl profile create prod -B kafka-prod-1:9092,kafka-prod-2:9092
+kcl profile create cicd -B kafka-staging:9092 -X dial_timeout=2s -X sasl.method=plain -X sasl.user=ci -X sasl.pass=secret
+```
+
+If nothing is current yet, the new profile is; otherwise `kcl profile use NAME`.
+
 ### Quick example config
 
 ```toml
@@ -445,7 +455,7 @@ Or set a persistent profile for the fake so `-B` isn't needed on each
 invocation:
 
 ```
-kcl profile create            # interactive; name it e.g. "fake"
+kcl profile create fake -B 127.0.0.1:<port>
 kcl -C fake topic list
 ```
 

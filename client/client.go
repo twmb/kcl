@@ -371,8 +371,8 @@ func (c *Client) parseCfgFile() {
 	// First try decoding as a context-aware config file.
 	md, err := toml.DecodeFile(c.cfgPath, &c.cfgFile)
 	if os.IsNotExist(err) {
-		Wizard(false)
-		os.Exit(0)
+		// A missing file is the same as --no-config-file.
+		return
 	}
 	if err != nil {
 		out.Die("unable to decode config file %q: %v", c.cfgPath, err)
@@ -418,7 +418,9 @@ func (c *Client) LoadedCfgFile() CfgFile {
 	return c.cfgFile
 }
 
-func (c *Client) processOverrides() {
+// cfgSetters maps every config key, in its normalized underscore form, to
+// the function that sets it. See normCfgKey.
+var cfgSetters = func() map[string]func(*Cfg, string) error {
 	intoStrSlice := func(in string, dst *[]string) error {
 		*dst = nil
 		split := strings.Split(in, ",")
@@ -505,57 +507,77 @@ func (c *Client) processOverrides() {
 		"registry.tls.curve_preferences": func(c *Cfg, v string) error { mksrtls(c); return intoStrSlice(v, &c.SR.TLS.CurvePreferences) },
 	}
 
-	// The canonical keys above are dot-separated by field. We match against a
-	// flattened (dot->underscore) index so that both the dotted form and the
+	// The canonical keys above are dot-separated by field. We index by the
+	// flattened (dot->underscore) form so that both the dotted form and the
 	// legacy pure-underscore form (e.g. "sasl_user") resolve to the same
 	// handler. See normCfgKey.
 	flat := make(map[string]func(*Cfg, string) error, len(fns))
 	for k, fn := range fns {
 		flat[normCfgKey(k)] = fn
 	}
+	return flat
+}()
 
-	parse := func(kvs []string) {
-		for _, opt := range kvs {
-			kv := strings.SplitN(opt, "=", 2)
-			if len(kv) != 2 {
-				out.Die("opt %q not a key=value", opt)
-			}
-			k, v := kv[0], kv[1]
-
-			fn, exists := flat[normCfgKey(k)]
-			if !exists {
-				out.Die("unknown opt key %q", k)
-			}
-			if err := fn(&c.cfg, v); err != nil {
-				out.Die("%s", err)
-			}
+// applyCfgOpts applies key=value overrides to cfg in order.
+func applyCfgOpts(cfg *Cfg, opts []string) error {
+	for _, opt := range opts {
+		k, v, ok := strings.Cut(opt, "=")
+		if !ok {
+			return fmt.Errorf("opt %q not a key=value", opt)
+		}
+		fn, exists := cfgSetters[normCfgKey(k)]
+		if !exists {
+			return fmt.Errorf("unknown opt key %q", k)
+		}
+		if err := fn(cfg, v); err != nil {
+			return err
 		}
 	}
+	return nil
+}
 
+// applyShorthandFlags applies -B and -R, which win over any other setting
+// of seed_brokers and registry.urls.
+func (c *Client) applyShorthandFlags(cfg *Cfg) {
+	if len(c.bootstrapServers) > 0 {
+		cfg.SeedBrokers = c.bootstrapServers
+	}
+	if len(c.registryURLs) > 0 {
+		if cfg.SR == nil {
+			cfg.SR = new(CfgSR)
+		}
+		cfg.SR.URLs = c.registryURLs
+	}
+}
+
+func (c *Client) processOverrides() {
 	// Environment variables use the flattened (underscore) form, uppercased,
 	// since env var names cannot contain dots: KCL_REGISTRY_TLS_SERVER_NAME.
 	var envOverrides []string
-	for k := range fns {
-		if v, exists := os.LookupEnv(c.envPfx + strings.ToUpper(normCfgKey(k))); exists {
+	for k := range cfgSetters {
+		if v, exists := os.LookupEnv(c.envPfx + strings.ToUpper(k)); exists {
 			envOverrides = append(envOverrides, k+"="+v)
 		}
 	}
+	if err := applyCfgOpts(&c.cfg, envOverrides); err != nil {
+		out.Die("%s", err)
+	}
+	if err := applyCfgOpts(&c.cfg, c.flagOverrides); err != nil {
+		out.Die("%s", err)
+	}
+	c.applyShorthandFlags(&c.cfg)
+}
 
-	parse(envOverrides)
-	parse(c.flagOverrides)
-	// -B/--bootstrap-servers is applied last so it wins over any
-	// profile/config/-X setting of seed_brokers.
-	if len(c.bootstrapServers) > 0 {
-		c.cfg.SeedBrokers = c.bootstrapServers
+// FlagCfg returns the configuration given on the command line through -X,
+// -B, and -R alone. The config file, environment variables, and defaults are
+// not consulted. This is what "kcl profile create" saves.
+func (c *Client) FlagCfg() (Cfg, error) {
+	var cfg Cfg
+	if err := applyCfgOpts(&cfg, c.flagOverrides); err != nil {
+		return Cfg{}, err
 	}
-	// -R/--registry is applied last so it wins over any profile/config/-X
-	// setting of registry.urls.
-	if len(c.registryURLs) > 0 {
-		if c.cfg.SR == nil {
-			c.cfg.SR = new(CfgSR)
-		}
-		c.cfg.SR.URLs = c.registryURLs
-	}
+	c.applyShorthandFlags(&cfg)
+	return cfg, nil
 }
 
 func (c *Client) maybeAddMaxVersions() {
