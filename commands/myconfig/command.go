@@ -20,7 +20,7 @@ import (
 func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "profile",
-		Short: "Manage connection profiles (use, list, create, set, dump, rename, delete).",
+		Short: "Manage connection profiles.",
 		Long:  configHelpText(cl),
 	}
 
@@ -167,8 +167,8 @@ EXAMPLES:
   kcl profile create sr -B localhost:9092 -R http://localhost:8081
 
 SEE ALSO:
+  kcl -X help          every key, with its meaning
   kcl profile use      switch the current profile
-  kcl profile list     list profiles
   kcl profile dump     show the configuration kcl is running with
 `,
 		Args: cobra.ExactArgs(1),
@@ -185,7 +185,7 @@ SEE ALSO:
 			if current {
 				fmt.Fprintf(os.Stderr, "Created profile %q in %s; it is now current\n", name, cfgPath)
 			} else {
-				fmt.Fprintf(os.Stderr, "Created profile %q in %s; switch with: kcl profile use %s\n", name, cfgPath, name)
+				fmt.Fprintf(os.Stderr, "Created profile %q in %s; switch with: kcl profile use %s\n", name, cfgPath, shellWord(name))
 			}
 			return nil
 		},
@@ -207,15 +207,15 @@ func setCommand(cl *client.Client) *cobra.Command {
 		Long: `Set keys in a profile from the -B, -X, and -R flags.
 
 The current profile is changed unless -C names another; a config without
-profiles is edited at the top level. The flags are the ones create builds a
-profile from, so anything that works as a one-off override can be saved.
-Nothing is written unless every flag parses.
+profiles is edited at the top level. Nothing is written unless every flag
+parses.
 
 EXAMPLES:
   kcl profile set -B k1:9092,k2:9092
   kcl -C prod profile set -X sasl.method=scram-sha-256 -X sasl.user=me -X sasl.pass=secret
 
 SEE ALSO:
+  kcl -X help          every key, with its meaning
   kcl profile create   create a profile from the same flags
   kcl profile dump     show the configuration kcl is running with
 `,
@@ -235,7 +235,7 @@ SEE ALSO:
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(os.Stderr, "Set %s in %s\n", strings.Join(keys, ", "), where)
+			fmt.Fprintf(os.Stderr, "Set %s in %s\n", strings.Join(uniq(keys), ", "), where)
 			return nil
 		},
 	}
@@ -289,6 +289,30 @@ func setProfile(path, name string, apply func(*client.Cfg) error) (string, error
 		return "", err
 	}
 	return fmt.Sprintf("profile %q", name), nil
+}
+
+// uniq drops repeated strings, keeping first positions.
+func uniq(ss []string) []string {
+	seen := make(map[string]bool, len(ss))
+	var out []string
+	for _, s := range ss {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// shellWord quotes s for pasting into a shell when it needs it.
+func shellWord(s string) string {
+	for _, r := range s {
+		plain := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_-./:@+=", r)
+		if !plain {
+			return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+		}
+	}
+	return s
 }
 
 // isFlat reports whether a decoded config uses the flat single cluster
@@ -351,7 +375,7 @@ func createProfile(path, name string, cfg client.Cfg) (bool, error) {
 func dumpCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "dump",
-		Short: "Dump the loaded configuration",
+		Short: "Dump the loaded configuration, with ${NAME} references as written.",
 		Args:  cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
 			toml.NewEncoder(os.Stdout).Encode(cl.DiskCfg())
@@ -429,102 +453,32 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 }
 
 func configHelpText(cl *client.Client) string {
-	return `Manage connection profiles (use, list, create, set, dump, rename, delete).
+	return `Manage connection profiles.
 
-On your machine, kcl takes configuration options by default from:
+Profiles are [profiles.NAME] tables in the config file; current_profile names
+the one in use, and -C picks another for one command. The file is read from:
 
   ` + cl.DefaultCfgPath() + `
 
-The config path can be set with --config-path, while --no-config-file disables
-loading a config file entirely (as well as KCL_NO_CONFIG_FILE being non-empty).
-To show the configuration that kcl is running with, use the dump command.
-
-Three environment variables can be used to override default file path
-semantics: KCL_CONFIG_DIR, KCL_CONFIG_FILE, and KCL_CONFIG_PATH. The first
-changes the directory searched, the middle changes the file name used, and the
-last overrides the former two (as a shortcut for setting both).
-
+--config-path or KCL_CONFIG_PATH move it, --no-config-file or a non-empty
+KCL_NO_CONFIG_FILE skip it, and KCL_CONFIG_DIR and KCL_CONFIG_FILE set the
+directory and file name separately.
 
 PRIORITY (highest wins)
 
-  1. -B/--bootstrap-servers flag       (overrides seed_brokers only)
-  2. -X key=value flags                (repeatable; any config key)
-  3. KCL_<KEY> environment variables   (prefix configurable via --config-env-prefix)
-  4. Active profile ([profiles.NAME])  (selected by --profile/-C or current_profile)
-  5. Top-level config file keys        (flat layout)
-  6. Built-in defaults
+  1. -B, -X, and -R flags
+  2. KCL_<KEY> environment variables, e.g. KCL_SASL_USER
+  3. The profile, or the top level keys of a file without profiles
+  4. Built-in defaults
 
+Only set keys take effect. "kcl -X help" describes every key; "kcl profile
+dump" shows the result.
 
-OPTIONS
-
-Top-level:
-
-  seed_brokers   list of "host:port" strings; default ["localhost:9092"]
-  broker_timeout Go duration sent to the broker in the wire TimeoutMs
-                 field of admin-write requests (CreateTopics, DeleteTopics,
-                 ElectLeaders, WriteTxnMarkers, etc.). Tells the broker how
-                 long it may work on the request before returning
-                 REQUEST_TIMED_OUT. Default 5s.
-  dial_timeout   Go duration bounding a single TCP dial attempt. Zero
-                 uses kgo's default (10s).
-  retry_timeout  Go duration bounding total client request + retries.
-                 Zero uses kgo's default (30s for most requests, 45s
-                 for group-session requests).
-
-Durations accept Go duration strings: "500ms", "5s", "1m", "2m30s".
-
-The [tls] section: ca_cert_path, client_cert_path, client_key_path,
-server_name, min_version, cipher_suites, curve_preferences, insecure.
-
-The [sasl] section: method (plain, scram-sha-256, scram-sha-512,
-aws_msk_iam), zid, user, pass, is_token.
-
-
-TIMEOUT RELATIONSHIP
-
-  dial_timeout   - caller-side, per TCP dial attempt.
-  retry_timeout  - client-side; gates whether to START a retry, NOT a wall
-                   clock budget for the whole operation. An in-flight attempt
-                   is not cancelled when retry_timeout elapses.
-  broker_timeout - sent to broker; enforced server-side, only on requests
-                   that carry a TimeoutMs wire field.
-
-Recommended ordering:
-
-  dial_timeout <= broker_timeout <= retry_timeout
-
-If broker_timeout > retry_timeout, a broker reply that takes the full
-broker_timeout still returns successfully; retry_timeout is only consulted
-if that attempt ERRORS. Worst-case total wall time when a retry fires can
-reach ~2 * broker_timeout (first attempt runs to broker_timeout, errors,
-kgo checks retry_timeout and retries if still within budget, second attempt
-then runs to its own broker_timeout). If dial_timeout >= retry_timeout,
-retries are useless because a single failed dial already consumed the
-retry budget.
-
-
-EXAMPLES
-
-Fast-fail for CI:
-
-  [profiles.cicd]
-  seed_brokers   = ["kafka-staging:9092"]
-  dial_timeout   = "2s"
-  broker_timeout = "5s"
-  retry_timeout  = "5s"
-
-Patient debugging:
-
-  [profiles.debug]
-  seed_brokers   = ["localhost:9092"]
-  broker_timeout = "60s"
-  dial_timeout   = "10s"
-  retry_timeout  = "90s"
-
-One-off overrides:
-
-  kcl -X dial_timeout=2s -B prod:9092 topic list
-  kcl -B host1:9092,host2:9092 topic list   # same as -X seed_brokers=host1:9092,host2:9092
+EXAMPLES:
+  kcl profile create prod -B k1:9092,k2:9092 -X sasl.method=scram-sha-256 -X sasl.user=me -X sasl.pass='${KAFKA_PASS}'
+  kcl -C prod topic list                   # one command against prod
+  kcl profile use prod                     # every command against prod
+  kcl profile set -X dial_timeout=2s       # change the current profile
 `
 }
 

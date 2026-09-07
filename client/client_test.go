@@ -2,9 +2,11 @@ package client
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -83,7 +85,7 @@ broker_timeout = "5s"
 		format:  "text",
 		cfg: Cfg{
 			SeedBrokers:   []string{"default:9092"},
-			BrokerTimeout: Duration(time.Second),
+			BrokerTimeout: Dur(time.Second),
 		},
 	}
 	c.parseCfgFile()
@@ -144,7 +146,7 @@ broker_timeout = "3s"
 		format:  "text",
 		cfg: Cfg{
 			SeedBrokers:   []string{"default:9092"},
-			BrokerTimeout: Duration(time.Second),
+			BrokerTimeout: Dur(time.Second),
 		},
 	}
 	c.parseCfgFile()
@@ -162,7 +164,7 @@ func TestCfgFileNoCfgFile(t *testing.T) {
 		format:    "text",
 		cfg: Cfg{
 			SeedBrokers:   []string{"default:9092"},
-			BrokerTimeout: Duration(5 * time.Second),
+			BrokerTimeout: Dur(5 * time.Second),
 		},
 	}
 	c.parseCfgFile()
@@ -384,38 +386,41 @@ func TestFlagCfg(t *testing.T) {
 		wantErr   bool
 	}{
 		{
-			name: "nothing given is a zero cfg",
+			name: "nothing given is the defaults",
+			want: defaultCfg(),
 		},
 		{
 			name:      "bootstrap shorthand",
 			bootstrap: []string{"a:9092", "b:9092"},
-			want:      Cfg{SeedBrokers: []string{"a:9092", "b:9092"}},
+			want:      Cfg{SeedBrokers: []string{"a:9092", "b:9092"}, BrokerTimeout: Dur(5 * time.Second)},
 		},
 		{
 			name:      "bootstrap wins over -X seed_brokers",
 			flags:     []string{"seed_brokers=x:9092"},
 			bootstrap: []string{"a:9092"},
-			want:      Cfg{SeedBrokers: []string{"a:9092"}},
+			want:      Cfg{SeedBrokers: []string{"a:9092"}, BrokerTimeout: Dur(5 * time.Second)},
 		},
 		{
 			name:  "tls and sasl, dotted and legacy underscore",
-			flags: []string{"tls.ca_cert_path=/ca.pem", "sasl.method=scram-sha-256", "sasl_user=alice", "dial_timeout=2s"},
+			flags: []string{"tls.ca_cert_path=/ca.pem", "sasl.method=scram-sha-256", "sasl_user=alice", "dial_timeout=2s", "broker_timeout=1s"},
 			want: Cfg{
-				DialTimeout: Duration(2 * time.Second),
-				TLS:         &CfgTLS{CACert: "/ca.pem"},
-				SASL:        &CfgSASL{Method: "scram-sha-256", User: "alice"},
+				SeedBrokers:   []string{"localhost:9092"},
+				BrokerTimeout: Dur(time.Second),
+				DialTimeout:   Dur(2 * time.Second),
+				TLS:           &CfgTLS{CACert: "/ca.pem"},
+				SASL:          &CfgSASL{Method: "scram-sha-256", User: "alice"},
 			},
 		},
 		{
 			name:     "registry shorthand",
 			registry: []string{"http://sr:8081"},
-			want:     Cfg{SR: &CfgSR{URLs: []string{"http://sr:8081"}}},
+			want:     Cfg{SeedBrokers: []string{"localhost:9092"}, BrokerTimeout: Dur(5 * time.Second), SR: &CfgSR{URLs: []string{"http://sr:8081"}}},
 		},
 		{
 			name:      "environment is ignored",
 			env:       map[string]string{"KCL_SASL_PASS": "secret", "KCL_SEED_BROKERS": "env:9092"},
 			bootstrap: []string{"a:9092"},
-			want:      Cfg{SeedBrokers: []string{"a:9092"}},
+			want:      Cfg{SeedBrokers: []string{"a:9092"}, BrokerTimeout: Dur(5 * time.Second)},
 		},
 		{
 			name:    "unknown key",
@@ -463,7 +468,7 @@ func TestCfgEncodeOmitsZeroDurations(t *testing.T) {
 	err := toml.NewEncoder(&buf).Encode(CfgFile{
 		CurrentProfile: "p",
 		Profiles: map[string]Cfg{
-			"p": {SeedBrokers: []string{"a:9092"}, DialTimeout: Duration(2 * time.Second)},
+			"p": {SeedBrokers: []string{"a:9092"}, DialTimeout: Dur(2 * time.Second)},
 		},
 	})
 	if err != nil {
@@ -481,7 +486,7 @@ func TestApplyFlagsKeysAndPreservation(t *testing.T) {
 		bootstrapServers: []string{"a:9092"},
 		registryURLs:     []string{"http://sr:8081"},
 	}
-	cfg := Cfg{SeedBrokers: []string{"old:9092"}, BrokerTimeout: Duration(10 * time.Second)}
+	cfg := Cfg{SeedBrokers: []string{"old:9092"}, BrokerTimeout: Dur(10 * time.Second)}
 	keys, err := c.ApplyFlags(&cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -494,5 +499,347 @@ func TestApplyFlagsKeysAndPreservation(t *testing.T) {
 	}
 	if keys, err := (&Client{}).ApplyFlags(&Cfg{}); err != nil || len(keys) != 0 {
 		t.Errorf("no flags: keys=%v err=%v", keys, err)
+	}
+}
+
+// TestCfgFileLaysOverDefaults pins that a config file only changes the keys
+// it has: a profile without broker_timeout keeps the 5s default, one written
+// as "0s" is zero, and top level keys do not leak into a selected profile.
+func TestCfgFileLaysOverDefaults(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		file        string
+		profile     string
+		wantBrokers string
+		wantTimeout time.Duration
+	}{
+		{
+			name:        "profile without timeout keeps default",
+			file:        "current_profile = \"p\"\n[profiles.p]\nseed_brokers = [\"p:9092\"]\n",
+			wantBrokers: "p:9092",
+			wantTimeout: 5 * time.Second,
+		},
+		{
+			name:        "profile written as zero is zero",
+			file:        "current_profile = \"p\"\n[profiles.p]\nbroker_timeout = \"0s\"\n",
+			wantBrokers: "localhost:9092",
+			wantTimeout: 0,
+		},
+		{
+			name:        "top level keys do not leak into a profile",
+			file:        "current_profile = \"p\"\nbroker_timeout = \"3s\"\n[profiles.p]\nseed_brokers = [\"p:9092\"]\n",
+			wantBrokers: "p:9092",
+			wantTimeout: 5 * time.Second,
+		},
+		{
+			name:        "flat file without timeout keeps default",
+			file:        "seed_brokers = [\"flat:9092\"]\n",
+			wantBrokers: "flat:9092",
+			wantTimeout: 5 * time.Second,
+		},
+		{
+			name:        "flat file written as zero is zero",
+			file:        "broker_timeout = \"0s\"\n",
+			wantBrokers: "localhost:9092",
+			wantTimeout: 0,
+		},
+		{
+			name:        "-C selects and still lays over defaults",
+			file:        "current_profile = \"a\"\n[profiles.a]\nbroker_timeout = \"1s\"\n[profiles.b]\nseed_brokers = [\"b:9092\"]\n",
+			profile:     "b",
+			wantBrokers: "b:9092",
+			wantTimeout: 5 * time.Second,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(test.file), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			c := &Client{cfgPath: path, format: "text", profileName: test.profile, cfg: defaultCfg()}
+			c.parseCfgFile()
+			c.processOverrides()
+			if len(c.cfg.SeedBrokers) != 1 || c.cfg.SeedBrokers[0] != test.wantBrokers {
+				t.Errorf("seed_brokers = %v, want [%s]", c.cfg.SeedBrokers, test.wantBrokers)
+			}
+			if got := c.cfg.BrokerTimeout.D(); got != test.wantTimeout {
+				t.Errorf("broker_timeout = %v, want %v", got, test.wantTimeout)
+			}
+		})
+	}
+}
+
+func TestApplyCfgOptsUnsetAndBools(t *testing.T) {
+	tlsOn := func() Cfg { return Cfg{TLS: &CfgTLS{InsecureSkipVerify: true, CACert: "/ca"}} }
+	sasl := func() Cfg { return Cfg{SASL: &CfgSASL{Method: "plain", User: "u", Pass: "p"}} }
+	for _, test := range []struct {
+		name    string
+		start   Cfg
+		opts    []string
+		want    Cfg
+		wantErr string
+	}{
+		{name: "false does not create the tls table", opts: []string{"tls.insecure=false"}, want: Cfg{}},
+		{name: "false on an existing table", start: tlsOn(), opts: []string{"tls.insecure=false"}, want: Cfg{TLS: &CfgTLS{CACert: "/ca"}}},
+		{name: "bare boolean means true", opts: []string{"tls.insecure"}, want: Cfg{TLS: &CfgTLS{InsecureSkipVerify: true}}},
+		{name: "empty boolean unsets", start: tlsOn(), opts: []string{"tls.insecure="}, want: Cfg{TLS: &CfgTLS{CACert: "/ca"}}},
+		{name: "bad boolean", opts: []string{"tls.insecure=maybe"}, wantErr: "invalid boolean"},
+		{name: "empty string unsets and keeps the table", start: sasl(), opts: []string{"sasl.user="}, want: Cfg{SASL: &CfgSASL{Method: "plain", Pass: "p"}}},
+		{name: "unsetting in an absent table stays absent", opts: []string{"sasl.user="}, want: Cfg{}},
+		{name: "table removal", start: sasl(), opts: []string{"sasl="}, want: Cfg{}},
+		{name: "table with a value", opts: []string{"sasl=x"}, wantErr: "is a table"},
+		{name: "slice unset", start: Cfg{SeedBrokers: []string{"a:1"}}, opts: []string{"seed_brokers="}, want: Cfg{}},
+		{name: "slice with an empty element", opts: []string{"seed_brokers=a,,b"}, wantErr: "invalid empty value"},
+		{name: "duration unset", start: Cfg{BrokerTimeout: Dur(time.Second)}, opts: []string{"broker_timeout="}, want: Cfg{}},
+		{name: "duration zero is set", opts: []string{"broker_timeout=0s"}, want: Cfg{BrokerTimeout: Dur(0)}},
+		{name: "use_tls bare", opts: []string{"use_tls"}, want: Cfg{TLS: &CfgTLS{}}},
+		{name: "use_tls false removes the table", start: tlsOn(), opts: []string{"use_tls=false"}, want: Cfg{}},
+		{name: "registry tls removal keeps the registry", start: Cfg{SR: &CfgSR{URLs: []string{"http://sr"}, TLS: &CfgTLS{CACert: "/ca"}}}, opts: []string{"registry.tls="}, want: Cfg{SR: &CfgSR{URLs: []string{"http://sr"}}}},
+		{name: "registry tls key creates both tables", opts: []string{"registry.tls.insecure"}, want: Cfg{SR: &CfgSR{TLS: &CfgTLS{InsecureSkipVerify: true}}}},
+		{name: "bare non-boolean", opts: []string{"sasl.user"}, wantErr: "needs a value; sasl.user= unsets it"},
+		{name: "unknown key points at profile keys", opts: []string{"sasl.usr=me"}, wantErr: "kcl -X help"},
+		{name: "legacy underscore form", opts: []string{"sasl_user=me"}, want: Cfg{SASL: &CfgSASL{User: "me"}}},
+		{name: "renamed timeout_ms still explains itself", opts: []string{"timeout_ms=5000"}, wantErr: "renamed to broker_timeout"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := test.start
+			err := ApplyCfgOpts(&cfg, test.opts)
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("err = %v, want containing %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(cfg, test.want) {
+				t.Errorf("got %+v tls=%+v sasl=%+v sr=%+v\nwant %+v", cfg, cfg.TLS, cfg.SASL, cfg.SR, test.want)
+			}
+		})
+	}
+}
+
+func TestCfgKeysDescribed(t *testing.T) {
+	seen := make(map[string]bool)
+	for _, k := range CfgKeys() {
+		if k.Desc == "" {
+			t.Errorf("key %q has no description", k.Name)
+		}
+		if seen[normCfgKey(k.Name)] {
+			t.Errorf("key %q collides with another after normalization", k.Name)
+		}
+		seen[normCfgKey(k.Name)] = true
+	}
+	if !seen["sasl_user"] || !seen["registry_tls_ca_cert_path"] || seen["timeout_ms"] {
+		t.Errorf("unexpected key set: %v", seen)
+	}
+}
+
+// TestEnvSkipsTableKeys pins that KCL_TLS or KCL_SASL in the environment,
+// which would only ever be a mistake, is not read as a table removal.
+func TestEnvSkipsTableKeys(t *testing.T) {
+	t.Setenv("KCL_TLS", "1")
+	t.Setenv("KCL_SASL", "1")
+	t.Setenv("KCL_SASL_USER", "env")
+	c := &Client{envPfx: "KCL_", format: "text", cfg: Cfg{TLS: &CfgTLS{CACert: "/ca"}}}
+	c.processOverrides()
+	if c.cfg.TLS == nil || c.cfg.SASL == nil || c.cfg.SASL.User != "env" {
+		t.Errorf("cfg tls=%+v sasl=%+v", c.cfg.TLS, c.cfg.SASL)
+	}
+}
+
+func TestExpandEnvRefs(t *testing.T) {
+	t.Setenv("KCL_TEST_PASS", "s3cret")
+	t.Setenv("KCL_TEST_HOST", "kafka.internal")
+	for _, test := range []struct {
+		name    string
+		cfg     Cfg
+		want    Cfg
+		wantErr string
+	}{
+		{
+			name: "plain values untouched, including a lone dollar",
+			cfg:  Cfg{SASL: &CfgSASL{Pass: "a$b$$c"}},
+			want: Cfg{SASL: &CfgSASL{Pass: "a$b$$c"}},
+		},
+		{
+			name: "reference in a nested table",
+			cfg:  Cfg{SASL: &CfgSASL{User: "me", Pass: "${KCL_TEST_PASS}"}},
+			want: Cfg{SASL: &CfgSASL{User: "me", Pass: "s3cret"}},
+		},
+		{
+			name: "reference inside a list element and text",
+			cfg:  Cfg{SeedBrokers: []string{"${KCL_TEST_HOST}:9092", "b:9092"}},
+			want: Cfg{SeedBrokers: []string{"kafka.internal:9092", "b:9092"}},
+		},
+		{
+			name: "two references and an escape",
+			cfg:  Cfg{SR: &CfgSR{BearerToken: "${KCL_TEST_PASS}-${KCL_TEST_PASS}", Context: "$${KCL_TEST_PASS}"}},
+			want: Cfg{SR: &CfgSR{BearerToken: "s3cret-s3cret", Context: "${KCL_TEST_PASS}"}},
+		},
+		{
+			name: "registry tls path",
+			cfg:  Cfg{SR: &CfgSR{TLS: &CfgTLS{CACert: "/etc/${KCL_TEST_HOST}/ca.pem"}}},
+			want: Cfg{SR: &CfgSR{TLS: &CfgTLS{CACert: "/etc/kafka.internal/ca.pem"}}},
+		},
+		{
+			name: "not an identifier is left alone",
+			cfg:  Cfg{SASL: &CfgSASL{Pass: "${not-a-name}"}},
+			want: Cfg{SASL: &CfgSASL{Pass: "${not-a-name}"}},
+		},
+		{
+			name:    "missing variable is an error",
+			cfg:     Cfg{SASL: &CfgSASL{Pass: "${KCL_TEST_DEFINITELY_UNSET}"}},
+			wantErr: "${KCL_TEST_DEFINITELY_UNSET}, which is not set",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := test.cfg
+			err := expandEnvRefs(&cfg)
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("err = %v, want containing %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(cfg, test.want) {
+				t.Errorf("got sasl=%+v sr=%+v brokers=%v", cfg.SASL, cfg.SR, cfg.SeedBrokers)
+			}
+		})
+	}
+}
+
+// TestLoadCfgExpandsFileAndFlags pins that references are expanded after
+// the file, environment, and flags are combined, so every source is treated
+// the same way.
+func TestLoadCfgExpandsFileAndFlags(t *testing.T) {
+	t.Setenv("KCL_TEST_PASS", "s3cret")
+	t.Setenv("KCL_TEST_USER", "alice")
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[sasl]\npass = \"${KCL_TEST_PASS}\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{cfgPath: path, format: "text", envPfx: "KCL_", flagOverrides: []string{"sasl.user=${KCL_TEST_USER}"}, cfg: defaultCfg()}
+	c.loadCfg()
+	if c.cfg.SASL == nil || c.cfg.SASL.Pass != "s3cret" || c.cfg.SASL.User != "alice" {
+		t.Errorf("sasl = %+v", c.cfg.SASL)
+	}
+}
+
+func TestXListAndHelpCoverEveryKey(t *testing.T) {
+	list := XList()
+	help := XHelp()
+	for _, k := range CfgKeys() {
+		line := k.Name + "=" + k.Example
+		if !strings.Contains(list, line+"\n") {
+			t.Errorf("-X list lacks %q", line)
+		}
+		if !strings.Contains(help, "\n"+line+"\n  ") {
+			t.Errorf("-X help lacks %q followed by an indented description", line)
+		}
+	}
+	if strings.Contains(list, "timeout_ms") || strings.Contains(help, "timeout_ms=") {
+		t.Error("the renamed timeout_ms is listed")
+	}
+	if !strings.Contains(list, "sasl=\n") {
+		t.Error("a table key should print as NAME= with nothing after")
+	}
+	if !strings.Contains(help, "(-X sasl.pass=) unsets the key") {
+		t.Error("help does not say how to unset a bool")
+	}
+	keys := CfgKeys()
+	if !slices.IsSortedFunc(keys, func(a, b CfgKey) int { return strings.Compare(a.Name, b.Name) }) {
+		t.Error("keys are not sorted by name")
+	}
+	if i := strings.Index(list, "\nregistry.tls=\n"); i < 0 || !strings.HasPrefix(list[i+len("\nregistry.tls=\n"):], "registry.tls.ca_cert_path=") {
+		t.Error("a table key should directly precede its own keys")
+	}
+	for _, line := range strings.Split(help, "\n") {
+		if len(line) > 80 {
+			t.Errorf("help line over 80 columns: %q", line)
+		}
+	}
+	if got := wrap("a bb ccc dddd", 8, "  "); got != "  a bb\n  ccc\n  dddd\n" {
+		t.Errorf("wrap = %q", got)
+	}
+}
+
+func TestMaybeXHelp(t *testing.T) {
+	capture := func(f func() bool) (string, bool) {
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		old := os.Stdout
+		os.Stdout = w
+		ok := f()
+		w.Close()
+		os.Stdout = old
+		b, _ := io.ReadAll(r)
+		return string(b), ok
+	}
+	for _, test := range []struct {
+		name   string
+		flags  []string
+		format string
+		want   string // substring of stdout
+		wantOK bool
+	}{
+		{name: "nothing", flags: []string{"sasl.user=me"}, format: "text"},
+		{name: "help", flags: []string{"help"}, format: "text", want: "\nsasl.pass=${KAFKA_PASS}\n  Password.", wantOK: true},
+		{name: "list", flags: []string{"sasl.user=me", "list"}, format: "text", want: "sasl.user=alice\n", wantOK: true},
+		{name: "help as json", flags: []string{"help"}, format: "json", want: `"key": "tls.insecure"`, wantOK: true},
+		{name: "list as awk", flags: []string{"list"}, format: "awk", want: "tls.insecure\tbool\ttrue\t", wantOK: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := &Client{flagOverrides: test.flags, format: test.format}
+			got, ok := capture(c.MaybeXHelp)
+			if ok != test.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, test.wantOK)
+			}
+			if !strings.Contains(got, test.want) {
+				t.Errorf("stdout lacks %q:\n%s", test.want, got)
+			}
+		})
+	}
+}
+
+func TestDiskCfgKeepsReferences(t *testing.T) {
+	t.Setenv("KCL_TEST_PASS", "s3cret")
+	c := &Client{noCfgFile: true, format: "text", envPfx: "KCL_", flagOverrides: []string{"sasl.method=plain", "sasl.pass=${KCL_TEST_PASS}", "seed_brokers=${KCL_TEST_PASS}.example:1"}, cfg: defaultCfg()}
+	c.loadCfg()
+	if c.cfg.SASL.Pass != "s3cret" || c.cfg.SeedBrokers[0] != "s3cret.example:1" {
+		t.Errorf("running cfg not expanded: %+v %v", c.cfg.SASL, c.cfg.SeedBrokers)
+	}
+	if c.cfgWritten.SASL.Pass != "${KCL_TEST_PASS}" || c.cfgWritten.SeedBrokers[0] != "${KCL_TEST_PASS}.example:1" || c.cfgWritten.SASL.Method != "plain" {
+		t.Errorf("written cfg changed: %+v %v", c.cfgWritten.SASL, c.cfgWritten.SeedBrokers)
+	}
+}
+
+func TestCfgCloneIsDeep(t *testing.T) {
+	orig := Cfg{
+		SeedBrokers:   []string{"a:1"},
+		BrokerTimeout: Dur(time.Second),
+		TLS:           &CfgTLS{CACert: "/ca", CipherSuites: []string{"x"}},
+		SASL:          &CfgSASL{User: "u"},
+		SR:            &CfgSR{URLs: []string{"http://sr"}, TLS: &CfgTLS{ServerName: "sr"}},
+	}
+	c := orig.clone()
+	if !reflect.DeepEqual(c, orig) {
+		t.Fatalf("clone differs: %+v vs %+v", c, orig)
+	}
+	c.SeedBrokers[0] = "changed"
+	*c.BrokerTimeout = Duration(2 * time.Second)
+	c.TLS.CACert = "changed"
+	c.TLS.CipherSuites[0] = "changed"
+	c.SASL.User = "changed"
+	c.SR.URLs[0] = "changed"
+	c.SR.TLS.ServerName = "changed"
+	if orig.SeedBrokers[0] != "a:1" || orig.BrokerTimeout.D() != time.Second || orig.TLS.CACert != "/ca" || orig.TLS.CipherSuites[0] != "x" || orig.SASL.User != "u" || orig.SR.URLs[0] != "http://sr" || orig.SR.TLS.ServerName != "sr" {
+		t.Errorf("mutating the clone reached the original: %+v tls=%+v sasl=%+v sr=%+v", orig, orig.TLS, orig.SASL, orig.SR)
 	}
 }

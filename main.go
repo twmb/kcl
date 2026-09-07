@@ -206,6 +206,22 @@ Command completion is available at:
 	// We look for the flag in the arguments rather than parsing them: Execute
 	// parses again, and slice flags such as -B append on every parse, so
 	// parsing twice doubled every seed broker.
+	usageErrors(root)
+
+	// -X help and -X list are answered here, after cobra has parsed the flags
+	// so that --format applies. The registry group has a persistent pre-run
+	// of its own, and cobra runs only the nearest one unless told to walk
+	// them all.
+	cobra.EnableTraverseRunHooks = true
+	root.PersistentPreRun = func(*cobra.Command, []string) {
+		if cl.MaybeXHelp() {
+			os.Exit(0)
+		}
+	}
+	root.RegisterFlagCompletionFunc("config-opt", func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
+		return client.XCompletions(), cobra.ShellCompDirectiveNoFileComp | cobra.ShellCompDirectiveNoSpace
+	})
+
 	if wantsHelpJSON(os.Args[1:]) {
 		tree := buildCommandJSON(root, false)
 		enc := json.NewEncoder(os.Stdout)
@@ -215,8 +231,49 @@ Command completion is available at:
 	}
 
 	if err := root.Execute(); err != nil {
-		out.HandleError(err, cl.Format())
+		out.HandleError(asUsageError(err), cl.Format())
 	}
+}
+
+// usageErrors wraps every command's argument validator and the flag error
+// handler so that cobra's own errors, a bad argument count or an unknown
+// flag, exit 2 like every other usage error. A group with no Run of its own
+// gets one that treats a stray argument as an unknown subcommand; cobra
+// itself only reports those at the root, and answered "kcl profile nope"
+// with the help text and exit 0.
+func usageErrors(root *cobra.Command) {
+	allCommands(root, func(cmd *cobra.Command) {
+		if cmd.HasSubCommands() && !cmd.Runnable() {
+			cmd.RunE = func(c *cobra.Command, args []string) error {
+				if len(args) > 0 {
+					return out.Errf(out.ExitUsage, "unknown command %q for %q", args[0], c.CommandPath())
+				}
+				return c.Help()
+			}
+		}
+		validate := cmd.Args
+		if validate == nil {
+			return
+		}
+		cmd.Args = func(c *cobra.Command, args []string) error {
+			if err := validate(c, args); err != nil {
+				return out.Errf(out.ExitUsage, "%v", err)
+			}
+			return nil
+		}
+	})
+	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+		return out.Errf(out.ExitUsage, "%v", err)
+	})
+}
+
+// asUsageError marks cobra's unknown command error, which no hook of ours
+// can produce, as a usage error.
+func asUsageError(err error) error {
+	if err != nil && strings.HasPrefix(err.Error(), "unknown command ") {
+		return out.Errf(out.ExitUsage, "%v", err)
+	}
+	return err
 }
 
 func allCommands(root *cobra.Command, fn func(*cobra.Command)) {

@@ -11,6 +11,10 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -97,7 +101,20 @@ func (d Duration) MarshalText() ([]byte, error) {
 }
 
 // D returns the underlying time.Duration.
-func (d Duration) D() time.Duration { return time.Duration(d) }
+// D returns the duration, or zero when d is nil, which is what an unset
+// timeout means.
+func (d *Duration) D() time.Duration {
+	if d == nil {
+		return 0
+	}
+	return time.Duration(*d)
+}
+
+// Dur returns d as a *Duration, for the timeout fields of Cfg.
+func Dur(d time.Duration) *Duration {
+	dd := Duration(d)
+	return &dd
+}
 
 // Cfg contains kcl options that can be defined in a file.
 type Cfg struct {
@@ -106,17 +123,18 @@ type Cfg struct {
 	// BrokerTimeout is the wire TimeoutMs value sent to the broker
 	// in admin-style requests (e.g. CreateTopics.TimeoutMs). It
 	// tells the broker how long to wait before giving up on the
-	// server side.
-	BrokerTimeout Duration `toml:"broker_timeout,omitzero"`
+	// server side. The timeouts are pointers so that a key written
+	// as zero is kept apart from a key that is not set at all.
+	BrokerTimeout *Duration `toml:"broker_timeout,omitempty"`
 
 	// DialTimeout bounds how long kgo waits for a single TCP dial.
 	// Zero leaves kgo's default (10s).
-	DialTimeout Duration `toml:"dial_timeout,omitzero"`
+	DialTimeout *Duration `toml:"dial_timeout,omitempty"`
 
 	// RetryTimeout bounds total time for a client request and its
 	// retries. Zero leaves kgo's default (30s for most requests,
 	// 45s for group-session requests).
-	RetryTimeout Duration `toml:"retry_timeout,omitzero"`
+	RetryTimeout *Duration `toml:"retry_timeout,omitempty"`
 
 	TLS  *CfgTLS  `toml:"tls,omitzero"`
 	SASL *CfgSASL `toml:"sasl,omitempty"`
@@ -163,6 +181,7 @@ type Client struct {
 	profileName      string   // --context/-C override
 	cfgFile          CfgFile
 	cfg              Cfg
+	cfgWritten       Cfg // cfg before ${NAME} expansion, for profile dump
 }
 
 // Format returns the output format: "text", "json", or "awk".
@@ -205,6 +224,15 @@ func SetVersion(v string) {
 	}
 }
 
+// defaultCfg is what kcl runs with when nothing sets a key. The config file,
+// environment, and flags are laid over it.
+func defaultCfg() Cfg {
+	return Cfg{
+		SeedBrokers:   []string{"localhost:9092"},
+		BrokerTimeout: Dur(5 * time.Second),
+	}
+}
+
 // New returns a new Client with the given config and installs some
 // persistent flags and commands to root.
 func New(root *cobra.Command) *Client {
@@ -215,10 +243,7 @@ func New(root *cobra.Command) *Client {
 			// audit logs and metrics.
 			kgo.ClientID("kcl/" + clientVersion),
 		},
-		cfg: Cfg{
-			SeedBrokers:   []string{"localhost:9092"},
-			BrokerTimeout: Duration(5 * time.Second),
-		},
+		cfg: defaultCfg(),
 	}
 
 	cfgDir, err := os.UserConfigDir()
@@ -241,7 +266,7 @@ func New(root *cobra.Command) *Client {
 
 	root.PersistentFlags().StringVar(&c.logLevel, "log-level", "none", "log level to use for basic logging (none, error, warn, info, debug)")
 	root.PersistentFlags().StringVar(&c.logFile, "log-file", "STDERR", "log to this file (if log-level is not none; file must not exist; STDERR sets to stderr & STDOUT sets to stdout)")
-	root.PersistentFlags().StringVar(&c.cfgPath, "config-path", c.defaultCfgPath, "path to confile file (lowest priority)")
+	root.PersistentFlags().StringVar(&c.cfgPath, "config-path", c.defaultCfgPath, "path to config file (lowest priority)")
 	root.PersistentFlags().BoolVar(&c.noCfgFile, "no-config-file", false, "do not load any config file")
 	root.PersistentFlags().StringVar(&c.envPfx, "config-env-prefix", "KCL_", "environment variable prefix for config overrides (middle priority)")
 	root.PersistentFlags().StringArrayVarP(&c.flagOverrides, "config-opt", "X", nil, "flag provided config option (highest priority)")
@@ -278,10 +303,48 @@ func (c *Client) GroupTransactSession() *kgo.GroupTransactSession {
 	return c.txnSess
 }
 
-// DiskCfg returns the loaded disk configuration.
+// DiskCfg returns the configuration as written, with ${NAME} references
+// unexpanded, so that showing it does not show a secret.
 func (c *Client) DiskCfg() Cfg {
 	c.loadClientOnce()
-	return c.cfg
+	return c.cfgWritten
+}
+
+// clone returns a deep copy of c, so that expanding one does not touch the
+// other.
+func (c Cfg) clone() Cfg {
+	cloneTLS := func(t *CfgTLS) *CfgTLS {
+		if t == nil {
+			return nil
+		}
+		d := *t
+		d.CipherSuites = slices.Clone(t.CipherSuites)
+		d.CurvePreferences = slices.Clone(t.CurvePreferences)
+		return &d
+	}
+	d := c
+	d.SeedBrokers = slices.Clone(c.SeedBrokers)
+	if c.BrokerTimeout != nil {
+		d.BrokerTimeout = Dur(c.BrokerTimeout.D())
+	}
+	if c.DialTimeout != nil {
+		d.DialTimeout = Dur(c.DialTimeout.D())
+	}
+	if c.RetryTimeout != nil {
+		d.RetryTimeout = Dur(c.RetryTimeout.D())
+	}
+	d.TLS = cloneTLS(c.TLS)
+	if c.SASL != nil {
+		sasl := *c.SASL
+		d.SASL = &sasl
+	}
+	if c.SR != nil {
+		sr := *c.SR
+		sr.URLs = slices.Clone(c.SR.URLs)
+		sr.TLS = cloneTLS(c.SR.TLS)
+		d.SR = &sr
+	}
+	return d
 }
 
 // DefaultCfgPath returns the default path that is used to load configs.
@@ -326,6 +389,10 @@ func (c *Client) loadCfg() {
 	c.cfgOnce.Do(func() {
 		c.parseCfgFile()     // loads config file if needed
 		c.processOverrides() // overrides config values just loaded
+		c.cfgWritten = c.cfg.clone()
+		if err := expandEnvRefs(&c.cfg); err != nil {
+			out.Die("%s", err)
+		}
 	})
 }
 
@@ -368,8 +435,15 @@ func (c *Client) parseCfgFile() {
 		return
 	}
 
-	// First try decoding as a context-aware config file.
-	md, err := toml.DecodeFile(c.cfgPath, &c.cfgFile)
+	// Profiles decode as primitives so that the selected one can be laid
+	// over the defaults already in c.cfg: only keys present in the file
+	// change anything, and a key written as zero stays zero.
+	var raw struct {
+		CurrentProfile string                    `toml:"current_profile"`
+		Profiles       map[string]toml.Primitive `toml:"profiles"`
+		Cfg
+	}
+	md, err := toml.DecodeFile(c.cfgPath, &raw)
 	if os.IsNotExist(err) {
 		// A missing file is the same as --no-config-file.
 		return
@@ -377,34 +451,52 @@ func (c *Client) parseCfgFile() {
 	if err != nil {
 		out.Die("unable to decode config file %q: %v", c.cfgPath, err)
 	}
-	// Warn on unknown top-level keys so typos and stale names from
-	// old configs don't get silently dropped. This catches "timeout_ms"
-	// after the rename, "tls_xxx" typos, etc.
+
+	c.cfgFile = CfgFile{CurrentProfile: raw.CurrentProfile, Cfg: raw.Cfg}
+	if len(raw.Profiles) > 0 {
+		c.cfgFile.Profiles = make(map[string]Cfg, len(raw.Profiles))
+	}
+	for name, prim := range raw.Profiles {
+		var p Cfg
+		if err := md.PrimitiveDecode(prim, &p); err != nil {
+			out.Die("unable to decode profile %q in %s: %v", name, c.cfgPath, err)
+		}
+		c.cfgFile.Profiles[name] = p
+	}
+
+	// Warn on unknown keys so typos and stale names from old configs do
+	// not get silently dropped. This catches "timeout_ms" after the
+	// rename, "tls_xxx" typos, etc. Keys inside profiles count as
+	// undecoded until PrimitiveDecode above has seen them.
 	if undecoded := md.Undecoded(); len(undecoded) > 0 {
 		for _, k := range undecoded {
 			fmt.Fprintf(os.Stderr, "kcl: warning: unknown config key %q in %s\n", k, c.cfgPath)
 		}
 	}
 
-	// If the file has named profiles, select the appropriate one.
-	if len(c.cfgFile.Profiles) > 0 {
-		name := c.cfgFile.CurrentProfile
+	if len(raw.Profiles) > 0 {
+		name := raw.CurrentProfile
 		if c.profileName != "" {
 			name = c.profileName
 		}
 		if name == "" {
 			out.Die("config has profiles but no current_profile set; use --profile or set current_profile in config")
 		}
-		p, ok := c.cfgFile.Profiles[name]
+		prim, ok := raw.Profiles[name]
 		if !ok {
 			out.Die("profile %q not found in config file", name)
 		}
-		c.cfg = p
+		if err := md.PrimitiveDecode(prim, &c.cfg); err != nil {
+			out.Die("unable to decode profile %q in %s: %v", name, c.cfgPath, err)
+		}
 		return
 	}
 
-	// No profiles: use the flat config (backward compatible).
-	c.cfg = c.cfgFile.Cfg
+	// No profiles: the flat layout. Decoding the file straight into c.cfg
+	// lays its keys over the defaults the same way.
+	if _, err := toml.DecodeFile(c.cfgPath, &c.cfg); err != nil {
+		out.Die("unable to decode config file %q: %v", c.cfgPath, err)
+	}
 }
 
 // CfgFilePath returns the path to the config file.
@@ -423,123 +515,438 @@ func (c *Client) LoadedCfgFile() CfgFile {
 	return c.cfgFile
 }
 
-// cfgSetters maps every config key, in its normalized underscore form, to
-// the function that sets it. See normCfgKey.
-var cfgSetters = func() map[string]func(*Cfg, string) error {
-	intoStrSlice := func(in string, dst *[]string) error {
-		*dst = nil
-		split := strings.Split(in, ",")
-		for _, on := range split {
-			on = strings.TrimSpace(on)
-			if len(on) == 0 {
-				return fmt.Errorf("invalid empty value in %q", in)
+// CfgKey is one -X key: its dotted name, what it does, and its Type, one of
+// string, list, duration, bool, or table. A bool may be given bare
+// (-X tls.insecure) to mean true. A table takes only the empty value, which
+// removes the whole table. An empty value (-X sasl.pass=) unsets any key.
+type CfgKey struct {
+	Name    string
+	Example string
+	Desc    string
+	Type    string
+
+	set    func(*Cfg, string) error
+	hidden bool // an old name that only errors
+}
+
+// XList renders every key as KEY=EXAMPLE, one per line, the short form of
+// -X help and the source for -X tab completion.
+func XList() string {
+	var b strings.Builder
+	for _, k := range CfgKeys() {
+		fmt.Fprintf(&b, "%s=%s\n", k.Name, k.Example)
+	}
+	return b.String()
+}
+
+// XCompletions returns completions for the -X flag: each key with a
+// trailing =, described by its example.
+func XCompletions() []string {
+	var cs []string
+	for _, k := range CfgKeys() {
+		cs = append(cs, k.Name+"=\t"+k.Example)
+	}
+	return cs
+}
+
+const xHelpIntro = `-X KEY=VALUE is a repeatable flag to set config keys. The same keys are read
+from the environment as KCL_<KEY> (where dots are underscores:
+KCL_SASL_USER), and from the config file, which "kcl profile" describes.
+
+A bool given bare is true (-X tls.insecure); =false or an empty value
+(-X sasl.pass=) unsets the key. A value may reference an environment
+variable as ${NAME}.
+
+"-X list" prints all keys and can be used with --format.
+`
+
+const xHelpTimeouts = `TIMEOUTS
+
+dial_timeout bounds one TCP dial. retry_timeout gates whether to start a
+retry; an attempt in flight is not cancelled when it elapses. broker_timeout
+is enforced by the broker, on requests that carry a TimeoutMs field.
+
+Keep dial_timeout <= broker_timeout <= retry_timeout. retry_timeout is only
+checked when an attempt errors, so one retry can take about twice
+broker_timeout. If dial_timeout is at or above retry_timeout, one failed
+dial spends the retry budget and nothing is retried.
+`
+
+// XHelp renders the long form of -X help: an intro, every key as
+// KEY=EXAMPLE with its description beneath, and the timeout guidance.
+func XHelp() string {
+	var b strings.Builder
+	b.WriteString(xHelpIntro)
+	for _, k := range CfgKeys() {
+		fmt.Fprintf(&b, "\n%s=%s\n%s", k.Name, k.Example, wrap(k.Desc, 76, "  "))
+	}
+	b.WriteString("\n" + xHelpTimeouts)
+	return b.String()
+}
+
+// wrap word wraps s to width, prefixing every line with indent.
+func wrap(s string, width int, indent string) string {
+	var b strings.Builder
+	line := indent
+	for _, word := range strings.Fields(s) {
+		if len(line) > len(indent) && len(line)+1+len(word) > width {
+			b.WriteString(line + "\n")
+			line = indent
+		}
+		if len(line) > len(indent) {
+			line += " "
+		}
+		line += word
+	}
+	if len(line) > len(indent) {
+		b.WriteString(line + "\n")
+	}
+	return b.String()
+}
+
+// MaybeXHelp answers -X help and -X list: it prints the keys in the current
+// --format and reports true, or does nothing and reports false.
+func (c *Client) MaybeXHelp() bool {
+	var long, short bool
+	for _, x := range c.flagOverrides {
+		switch x {
+		case "help":
+			long = true
+		case "list":
+			short = true
+		}
+	}
+	if !long && !short {
+		return false
+	}
+	if c.Format() != out.FormatText {
+		table := out.NewFormattedTable(c.Format(), "keys", 1, "keys", "KEY", "TYPE", "EXAMPLE", "DESCRIPTION")
+		for _, k := range CfgKeys() {
+			table.Row(k.Name, k.Type, k.Example, k.Desc)
+		}
+		table.Flush()
+		return true
+	}
+	if long {
+		fmt.Print(XHelp())
+	} else {
+		fmt.Print(XList())
+	}
+	return true
+}
+
+// CfgKeys returns every -X key kcl accepts, sorted by name, which keeps a
+// table key directly ahead of its own keys.
+func CfgKeys() []CfgKey {
+	var keys []CfgKey
+	for _, k := range cfgKeys {
+		if !k.hidden {
+			keys = append(keys, k)
+		}
+	}
+	slices.SortFunc(keys, func(a, b CfgKey) int { return strings.Compare(a.Name, b.Name) })
+	return keys
+}
+
+// A cfgTable knows how to find, create, and remove one optional table of
+// Cfg. Unsetting a key in a table that does not exist leaves the table
+// absent, since an empty [tls] table is itself a setting.
+type cfgTable struct {
+	has func(*Cfg) bool
+	mk  func(*Cfg)
+	rm  func(*Cfg)
+}
+
+var (
+	topTable = cfgTable{has: func(*Cfg) bool { return true }, mk: func(*Cfg) {}}
+
+	tlsTable = cfgTable{
+		has: func(c *Cfg) bool { return c.TLS != nil },
+		mk: func(c *Cfg) {
+			if c.TLS == nil {
+				c.TLS = new(CfgTLS)
 			}
-			*dst = append(*dst, on)
+		},
+		rm: func(c *Cfg) { c.TLS = nil },
+	}
+
+	saslTable = cfgTable{
+		has: func(c *Cfg) bool { return c.SASL != nil },
+		mk: func(c *Cfg) {
+			if c.SASL == nil {
+				c.SASL = new(CfgSASL)
+			}
+		},
+		rm: func(c *Cfg) { c.SASL = nil },
+	}
+
+	srTable = cfgTable{
+		has: func(c *Cfg) bool { return c.SR != nil },
+		mk: func(c *Cfg) {
+			if c.SR == nil {
+				c.SR = new(CfgSR)
+			}
+		},
+		rm: func(c *Cfg) { c.SR = nil },
+	}
+
+	srTLSTable = cfgTable{
+		has: func(c *Cfg) bool { return c.SR != nil && c.SR.TLS != nil },
+		mk: func(c *Cfg) {
+			srTable.mk(c)
+			if c.SR.TLS == nil {
+				c.SR.TLS = new(CfgTLS)
+			}
+		},
+		rm: func(c *Cfg) {
+			if c.SR != nil {
+				c.SR.TLS = nil
+			}
+		},
+	}
+)
+
+func intoStrSlice(in string, dst *[]string) error {
+	*dst = nil
+	for _, on := range strings.Split(in, ",") {
+		on = strings.TrimSpace(on)
+		if len(on) == 0 {
+			return fmt.Errorf("invalid empty value in %q", in)
 		}
+		*dst = append(*dst, on)
+	}
+	return nil
+}
+
+func str(name, example, desc string, t cfgTable, f func(*Cfg) *string) CfgKey {
+	return CfgKey{Name: name, Example: example, Desc: desc, Type: "string", set: func(c *Cfg, v string) error {
+		if v == "" && !t.has(c) {
+			return nil
+		}
+		t.mk(c)
+		*f(c) = v
 		return nil
-	}
+	}}
+}
 
-	mktls := func(c *Cfg) {
-		if c.TLS == nil {
-			c.TLS = new(CfgTLS)
+func boolean(name, desc string, t cfgTable, f func(*Cfg) *bool) CfgKey {
+	return CfgKey{Name: name, Example: "true", Desc: desc, Type: "bool", set: func(c *Cfg, v string) error {
+		b, err := parseBoolOpt(v)
+		if err != nil {
+			return err
 		}
-	}
-
-	mksasl := func(c *Cfg) {
-		if c.SASL == nil {
-			c.SASL = new(CfgSASL)
+		if !b && !t.has(c) {
+			return nil
 		}
-	}
+		t.mk(c)
+		*f(c) = b
+		return nil
+	}}
+}
 
-	mksr := func(c *Cfg) {
-		if c.SR == nil {
-			c.SR = new(CfgSR)
+func list(name, example, desc string, t cfgTable, f func(*Cfg) *[]string) CfgKey {
+	return CfgKey{Name: name, Example: example, Desc: desc, Type: "list", set: func(c *Cfg, v string) error {
+		if v == "" {
+			if t.has(c) {
+				*f(c) = nil
+			}
+			return nil
 		}
-	}
+		t.mk(c)
+		return intoStrSlice(v, f(c))
+	}}
+}
 
-	mksrtls := func(c *Cfg) {
-		mksr(c)
-		if c.SR.TLS == nil {
-			c.SR.TLS = new(CfgTLS)
+func duration(name, example, desc string, f func(*Cfg) **Duration) CfgKey {
+	return CfgKey{Name: name, Example: example, Desc: desc, Type: "duration", set: func(c *Cfg, v string) error {
+		if v == "" {
+			*f(c) = nil
+			return nil
 		}
-	}
-
-	intoDuration := func(v string, dst *Duration) error {
 		d, err := time.ParseDuration(v)
 		if err != nil {
 			return fmt.Errorf("invalid duration %q: %v", v, err)
 		}
-		*dst = Duration(d)
+		*f(c) = Dur(d)
 		return nil
-	}
+	}}
+}
 
-	fns := map[string]func(*Cfg, string) error{
-		"seed_brokers":   func(c *Cfg, v string) error { return intoStrSlice(v, &c.SeedBrokers) },
-		"broker_timeout": func(c *Cfg, v string) error { return intoDuration(v, &c.BrokerTimeout) },
-		"dial_timeout":   func(c *Cfg, v string) error { return intoDuration(v, &c.DialTimeout) },
-		"retry_timeout":  func(c *Cfg, v string) error { return intoDuration(v, &c.RetryTimeout) },
-		// Removed in favor of duration-based names above.
-		"timeout_ms": func(c *Cfg, v string) error {
+func table(name, desc string, t cfgTable) CfgKey {
+	return CfgKey{Name: name, Desc: desc, Type: "table", set: func(c *Cfg, v string) error {
+		if v != "" {
+			return fmt.Errorf("%s is a table: set its keys, or %s= to remove it", name, name)
+		}
+		t.rm(c)
+		return nil
+	}}
+}
+
+// parseBoolOpt reads a boolean -X value; empty is false, which unsets.
+func parseBoolOpt(v string) (bool, error) {
+	if v == "" {
+		return false, nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("invalid boolean %q", v)
+	}
+	return b, nil
+}
+
+func tlsKeys(prefix string, t cfgTable, tls func(*Cfg) *CfgTLS, what string) []CfgKey {
+	return []CfgKey{
+		table(prefix, "Turns "+what+" off (removes every "+prefix+".* key).", t),
+		str(prefix+".ca_cert_path", "/etc/kafka/ca.pem", "CA certificate, PEM.", t, func(c *Cfg) *string { return &tls(c).CACert }),
+		str(prefix+".client_cert_path", "/etc/kafka/client.pem", "Client certificate, PEM, for mTLS.", t, func(c *Cfg) *string { return &tls(c).ClientCertPath }),
+		str(prefix+".client_key_path", "/etc/kafka/client.key", "Client key, PEM, for mTLS.", t, func(c *Cfg) *string { return &tls(c).ClientKeyPath }),
+		str(prefix+".server_name", "kafka.example.com", "Name to verify the certificate against, if not the host dialed.", t, func(c *Cfg) *string { return &tls(c).ServerName }),
+		boolean(prefix+".insecure", "Skip certificate verification.", t, func(c *Cfg) *bool { return &tls(c).InsecureSkipVerify }),
+		str(prefix+".min_version", "1.3", "1.0, 1.1, 1.2, or 1.3. Default 1.2.", t, func(c *Cfg) *string { return &tls(c).MinVersion }),
+		list(prefix+".cipher_suites", "TLS_AES_128_GCM_SHA256,TLS_AES_256_GCM_SHA384", "Go cipher suite names, comma separated.", t, func(c *Cfg) *[]string { return &tls(c).CipherSuites }),
+		list(prefix+".curve_preferences", "X25519,P256", "Curve names, comma separated.", t, func(c *Cfg) *[]string { return &tls(c).CurvePreferences }),
+	}
+}
+
+// cfgKeys is every -X key. CfgKeys sorts them for display.
+var cfgKeys = func() []CfgKey {
+	keys := []CfgKey{
+		list("seed_brokers", "host1:9092,host2:9092", "Brokers, comma separated. Default localhost:9092.", topTable, func(c *Cfg) *[]string { return &c.SeedBrokers }),
+		duration("broker_timeout", "5s", "Wire TimeoutMs on admin requests. Default 5s.", func(c *Cfg) **Duration { return &c.BrokerTimeout }),
+		duration("dial_timeout", "2s", "Bound on one TCP dial. Default 10s.", func(c *Cfg) **Duration { return &c.DialTimeout }),
+		duration("retry_timeout", "30s", "Bound on a request and its retries. Default 30s, 45s for group requests.", func(c *Cfg) **Duration { return &c.RetryTimeout }),
+		{Name: "timeout_ms", hidden: true, set: func(*Cfg, string) error {
 			return fmt.Errorf("timeout_ms was renamed to broker_timeout and now takes a Go duration (e.g. -X broker_timeout=5s); please update your config or -X flags")
-		},
-		"use_tls":               func(c *Cfg, _ string) error { mktls(c); return nil },
-		"tls.ca_cert_path":      func(c *Cfg, v string) error { mktls(c); c.TLS.CACert = v; return nil },
-		"tls.client_cert_path":  func(c *Cfg, v string) error { mktls(c); c.TLS.ClientCertPath = v; return nil },
-		"tls.client_key_path":   func(c *Cfg, v string) error { mktls(c); c.TLS.ClientKeyPath = v; return nil },
-		"tls.insecure":          func(c *Cfg, _ string) error { mktls(c); c.TLS.InsecureSkipVerify = true; return nil },
-		"tls.server_name":       func(c *Cfg, v string) error { mktls(c); c.TLS.ServerName = v; return nil },
-		"tls.min_version":       func(c *Cfg, v string) error { mktls(c); c.TLS.MinVersion = v; return nil },
-		"tls.cipher_suites":     func(c *Cfg, v string) error { mktls(c); return intoStrSlice(v, &c.TLS.CipherSuites) },
-		"tls.curve_preferences": func(c *Cfg, v string) error { mktls(c); return intoStrSlice(v, &c.TLS.CurvePreferences) },
-		"sasl.method":           func(c *Cfg, v string) error { mksasl(c); c.SASL.Method = v; return nil },
-		"sasl.zid":              func(c *Cfg, v string) error { mksasl(c); c.SASL.Zid = v; return nil },
-		"sasl.user":             func(c *Cfg, v string) error { mksasl(c); c.SASL.User = v; return nil },
-		"sasl.pass":             func(c *Cfg, v string) error { mksasl(c); c.SASL.Pass = v; return nil },
-		"sasl.is_token":         func(c *Cfg, _ string) error { mksasl(c); c.SASL.IsToken = true; return nil }, // accepts any val
-
-		"registry.urls":                  func(c *Cfg, v string) error { mksr(c); return intoStrSlice(v, &c.SR.URLs) },
-		"registry.user":                  func(c *Cfg, v string) error { mksr(c); c.SR.User = v; return nil },
-		"registry.pass":                  func(c *Cfg, v string) error { mksr(c); c.SR.Pass = v; return nil },
-		"registry.bearer_token":          func(c *Cfg, v string) error { mksr(c); c.SR.BearerToken = v; return nil },
-		"registry.context":               func(c *Cfg, v string) error { mksr(c); c.SR.Context = v; return nil },
-		"registry.tls.ca_cert_path":      func(c *Cfg, v string) error { mksrtls(c); c.SR.TLS.CACert = v; return nil },
-		"registry.tls.client_cert_path":  func(c *Cfg, v string) error { mksrtls(c); c.SR.TLS.ClientCertPath = v; return nil },
-		"registry.tls.client_key_path":   func(c *Cfg, v string) error { mksrtls(c); c.SR.TLS.ClientKeyPath = v; return nil },
-		"registry.tls.insecure":          func(c *Cfg, _ string) error { mksrtls(c); c.SR.TLS.InsecureSkipVerify = true; return nil },
-		"registry.tls.server_name":       func(c *Cfg, v string) error { mksrtls(c); c.SR.TLS.ServerName = v; return nil },
-		"registry.tls.min_version":       func(c *Cfg, v string) error { mksrtls(c); c.SR.TLS.MinVersion = v; return nil },
-		"registry.tls.cipher_suites":     func(c *Cfg, v string) error { mksrtls(c); return intoStrSlice(v, &c.SR.TLS.CipherSuites) },
-		"registry.tls.curve_preferences": func(c *Cfg, v string) error { mksrtls(c); return intoStrSlice(v, &c.SR.TLS.CurvePreferences) },
+		}},
+		{Name: "use_tls", Example: "true", Type: "bool", Desc: "TLS with the system roots. Any tls.* key implies it.", set: func(c *Cfg, v string) error {
+			b, err := parseBoolOpt(v)
+			if err != nil {
+				return err
+			}
+			if b {
+				tlsTable.mk(c)
+			} else {
+				tlsTable.rm(c)
+			}
+			return nil
+		}},
 	}
-
-	// The canonical keys above are dot-separated by field. We index by the
-	// flattened (dot->underscore) form so that both the dotted form and the
-	// legacy pure-underscore form (e.g. "sasl_user") resolve to the same
-	// handler. See normCfgKey.
-	flat := make(map[string]func(*Cfg, string) error, len(fns))
-	for k, fn := range fns {
-		flat[normCfgKey(k)] = fn
-	}
-	return flat
+	keys = append(keys, tlsKeys("tls", tlsTable, func(c *Cfg) *CfgTLS { return c.TLS }, "TLS")...)
+	keys = append(keys,
+		table("sasl", "Turns SASL off (removes every sasl.* key).", saslTable),
+		str("sasl.method", "scram-sha-256", "plain, scram-sha-256, scram-sha-512, or aws_msk_iam.", saslTable, func(c *Cfg) *string { return &c.SASL.Method }),
+		str("sasl.zid", "", "Authorization id, if not the user.", saslTable, func(c *Cfg) *string { return &c.SASL.Zid }),
+		str("sasl.user", "alice", "User name.", saslTable, func(c *Cfg) *string { return &c.SASL.User }),
+		str("sasl.pass", "${KAFKA_PASS}", "Password.", saslTable, func(c *Cfg) *string { return &c.SASL.Pass }),
+		boolean("sasl.is_token", "The password is a delegation token.", saslTable, func(c *Cfg) *bool { return &c.SASL.IsToken }),
+		table("registry", "Removes every registry.* key.", srTable),
+		list("registry.urls", "http://sr1:8081,http://sr2:8081", "Registry URLs, comma separated. Default http://localhost:8081.", srTable, func(c *Cfg) *[]string { return &c.SR.URLs }),
+		str("registry.user", "alice", "Basic auth user name.", srTable, func(c *Cfg) *string { return &c.SR.User }),
+		str("registry.pass", "${SR_PASS}", "Basic auth password.", srTable, func(c *Cfg) *string { return &c.SR.Pass }),
+		str("registry.bearer_token", "${SR_TOKEN}", "Bearer token, in place of basic auth.", srTable, func(c *Cfg) *string { return &c.SR.BearerToken }),
+		str("registry.context", ".mycontext", "Registry context.", srTable, func(c *Cfg) *string { return &c.SR.Context }),
+	)
+	keys = append(keys, tlsKeys("registry.tls", srTLSTable, func(c *Cfg) *CfgTLS { return c.SR.TLS }, "registry TLS")...)
+	return keys
 }()
 
-// ApplyCfgOpts applies key=value pairs to cfg in order, using the same keys
-// as -X. The first bad pair stops it with an error.
+// cfgSetters indexes cfgKeys by the flattened (dot->underscore) name, so
+// both the dotted form and the legacy pure-underscore form (e.g.
+// "sasl_user") resolve to the same key. See normCfgKey.
+var cfgSetters = func() map[string]CfgKey {
+	m := make(map[string]CfgKey, len(cfgKeys))
+	for _, k := range cfgKeys {
+		m[normCfgKey(k.Name)] = k
+	}
+	return m
+}()
+
+// ApplyCfgOpts applies -X style options to cfg in order. Each is KEY=VALUE,
+// an empty VALUE unsets the key, and a boolean key may be given bare. The
+// first bad option stops it with an error.
 func ApplyCfgOpts(cfg *Cfg, opts []string) error {
 	for _, opt := range opts {
-		k, v, ok := strings.Cut(opt, "=")
-		if !ok {
-			return fmt.Errorf("opt %q not a key=value", opt)
-		}
-		fn, exists := cfgSetters[normCfgKey(k)]
+		k, v, hasEq := strings.Cut(opt, "=")
+		key, exists := cfgSetters[normCfgKey(k)]
 		if !exists {
-			return fmt.Errorf("unknown opt key %q", k)
+			return fmt.Errorf("unknown opt key %q; see kcl -X help", k)
 		}
-		if err := fn(cfg, v); err != nil {
+		if !hasEq {
+			if key.Type != "bool" {
+				return fmt.Errorf("%s needs a value; %s= unsets it", k, k)
+			}
+			v = "true"
+		}
+		if err := key.set(cfg, v); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// envRef matches ${NAME}, and the escape $${ for a literal ${.
+var envRef = regexp.MustCompile(`\$\$\{|\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// expandEnvRefs replaces ${NAME} in every string value of cfg with the
+// environment variable NAME, so a config file can point at a secret kept in
+// the environment rather than hold it. A reference to a variable that is not
+// set is an error, since an empty password would only fail later and further
+// away. $${ is a literal ${.
+func expandEnvRefs(cfg *Cfg) error {
+	return expandStrings(reflect.ValueOf(cfg).Elem())
+}
+
+func expandStrings(v reflect.Value) error {
+	switch v.Kind() {
+	case reflect.String:
+		s, err := expandRefs(v.String())
+		if err != nil {
+			return err
+		}
+		v.SetString(s)
+	case reflect.Slice:
+		for i := 0; i < v.Len(); i++ {
+			if err := expandStrings(v.Index(i)); err != nil {
+				return err
+			}
+		}
+	case reflect.Ptr:
+		if !v.IsNil() {
+			return expandStrings(v.Elem())
+		}
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			if v.Type().Field(i).IsExported() {
+				if err := expandStrings(v.Field(i)); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func expandRefs(s string) (string, error) {
+	if !strings.Contains(s, "${") {
+		return s, nil
+	}
+	var missing string
+	expanded := envRef.ReplaceAllStringFunc(s, func(m string) string {
+		if m == "$${" {
+			return "${"
+		}
+		name := m[2 : len(m)-1]
+		v, ok := os.LookupEnv(name)
+		if !ok {
+			missing = name
+			return m
+		}
+		return v
+	})
+	if missing != "" {
+		return "", fmt.Errorf("config references ${%s}, which is not set in the environment", missing)
+	}
+	return expanded, nil
 }
 
 // applyShorthandFlags applies -B and -R, which win over any other setting
@@ -560,7 +967,10 @@ func (c *Client) processOverrides() {
 	// Environment variables use the flattened (underscore) form, uppercased,
 	// since env var names cannot contain dots: KCL_REGISTRY_TLS_SERVER_NAME.
 	var envOverrides []string
-	for k := range cfgSetters {
+	for k, key := range cfgSetters {
+		if key.Type == "table" {
+			continue
+		}
 		if v, exists := os.LookupEnv(c.envPfx + strings.ToUpper(k)); exists {
 			envOverrides = append(envOverrides, k+"="+v)
 		}
@@ -596,10 +1006,11 @@ func (c *Client) ApplyFlags(cfg *Cfg) ([]string, error) {
 	return keys, nil
 }
 
-// FlagCfg returns the configuration given by the -X, -B, and -R flags alone.
-// This is what "kcl profile create" saves.
+// FlagCfg returns the defaults with the -X, -B, and -R flags laid over them.
+// This is what "kcl profile create" saves, so a new profile spells out what
+// it runs with.
 func (c *Client) FlagCfg() (Cfg, error) {
-	var cfg Cfg
+	cfg := defaultCfg()
 	if _, err := c.ApplyFlags(&cfg); err != nil {
 		return Cfg{}, err
 	}

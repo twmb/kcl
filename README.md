@@ -67,7 +67,7 @@ The configuration supports TLS, SASL (PLAIN, SCRAM-SHA-256, SCRAM-SHA-512,
 AWS_MSK_IAM), seed brokers, and client/server timeouts. Timeouts accept Go
 duration strings (`500ms`, `5s`, `2m30s`).
 
-For a full reference with examples, run `kcl profile --help`.
+`kcl -X help` describes every key; `kcl -X list` names them.
 
 `kcl profile create` writes a profile from the same flags a one-off command
 takes:
@@ -78,6 +78,8 @@ kcl profile create cicd -B kafka-staging:9092 -X dial_timeout=2s -X sasl.method=
 ```
 
 If nothing is current yet, the new profile is; otherwise `kcl profile use NAME`.
+A value may reference an environment variable as `${NAME}`, so a password can
+live in your environment rather than in the file.
 `kcl profile set` applies the same flags to the current profile, or to the one
 `-C` names.
 

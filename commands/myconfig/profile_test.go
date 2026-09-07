@@ -42,11 +42,11 @@ func TestWriteAndReadCfgFile(t *testing.T) {
 		Profiles: map[string]client.Cfg{
 			"prod": {
 				SeedBrokers:   []string{"kafka-prod:9092"},
-				BrokerTimeout: client.Duration(10 * time.Second),
+				BrokerTimeout: client.Dur(10 * time.Second),
 			},
 			"local": {
 				SeedBrokers:   []string{"localhost:9092"},
-				BrokerTimeout: client.Duration(5 * time.Second),
+				BrokerTimeout: client.Dur(5 * time.Second),
 			},
 		},
 	}
@@ -228,7 +228,7 @@ seed_brokers = ["p:9092"]
 			profile: "secure",
 			cfg: client.Cfg{
 				SeedBrokers: []string{"k:9093"},
-				DialTimeout: client.Duration(2 * time.Second),
+				DialTimeout: client.Dur(2 * time.Second),
 				TLS:         &client.CfgTLS{CACert: "/ca.pem"},
 				SASL:        &client.CfgSASL{Method: "scram-sha-256", User: "me", Pass: "pw"},
 			},
@@ -446,11 +446,11 @@ seed_brokers = ["s:9092"]
 			wantCode: out.ExitUsage,
 		},
 		{
-			name:     "missing equals",
+			name:     "bare non-boolean key",
 			exists:   true,
 			existing: profiles,
 			opts:     []string{"seed_brokers"},
-			wantErr:  "not a key=value",
+			wantErr:  "needs a value",
 			wantCode: out.ExitUsage,
 		},
 	} {
@@ -641,5 +641,22 @@ ca_cert_path = "/ca.pem"
 	got.Profiles["prod"] = prod
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("set changed more than sasl.user:\n got %+v\nwant %+v", got, want)
+	}
+}
+
+func TestShellWordAndUniq(t *testing.T) {
+	for in, want := range map[string]string{
+		"prod":       "prod",
+		"with space": "'with space'",
+		"it's":       `'it'\''s'`,
+		"a/b.c:d":    "a/b.c:d",
+		"a$b":        "'a$b'",
+	} {
+		if got := shellWord(in); got != want {
+			t.Errorf("shellWord(%q) = %s, want %s", in, got, want)
+		}
+	}
+	if got := uniq([]string{"seed_brokers", "sasl.user", "seed_brokers"}); len(got) != 2 || got[0] != "seed_brokers" || got[1] != "sasl.user" {
+		t.Errorf("uniq = %v", got)
 	}
 }
