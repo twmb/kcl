@@ -67,7 +67,7 @@ The configuration supports TLS, SASL (PLAIN, SCRAM-SHA-256, SCRAM-SHA-512,
 AWS_MSK_IAM), seed brokers, and client/server timeouts. Timeouts accept Go
 duration strings (`500ms`, `5s`, `2m30s`).
 
-For a full reference with examples, run `kcl profile --help`.
+`kcl profile keys` lists every key with its meaning.
 
 `kcl profile create` writes a profile from the same flags a one-off command
 takes:
