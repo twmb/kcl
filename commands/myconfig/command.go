@@ -130,7 +130,7 @@ func listCommand(cl *client.Client) *cobra.Command {
 func currentCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "current",
-		Short: "Print the active profile name",
+		Short: "Print the profile in use: the one -C names, else current_profile.",
 		Args:  cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
 			cfgPath := cl.CfgFilePath()
@@ -140,10 +140,18 @@ func currentCommand(cl *client.Client) *cobra.Command {
 				return fmt.Errorf("unable to read config: %v", err)
 			}
 
-			if cfgFile.CurrentProfile == "" {
+			name := cl.ProfileName()
+			if name != "" {
+				if _, ok := cfgFile.Profiles[name]; !ok {
+					return fmt.Errorf("profile %q not found; available: %v", name, profileNames(cfgFile))
+				}
+			} else {
+				name = cfgFile.CurrentProfile
+			}
+			if name == "" {
 				fmt.Fprintln(os.Stderr, "(no profile set)")
 			} else {
-				fmt.Println(cfgFile.CurrentProfile)
+				fmt.Println(name)
 			}
 			return nil
 		},
@@ -221,13 +229,13 @@ SEE ALSO:
 `,
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			var keys []string
+			var set, unset []string
 			where, err := setProfile(cl.CfgFilePath(), cl.ProfileName(), func(cfg *client.Cfg) error {
 				var err error
-				if keys, err = cl.ApplyFlags(cfg); err != nil {
+				if set, unset, err = cl.ApplyFlags(cfg); err != nil {
 					return err
 				}
-				if len(keys) == 0 {
+				if len(set)+len(unset) == 0 {
 					return errors.New("nothing to set; pass -X key=value, -B, or -R")
 				}
 				return nil
@@ -235,7 +243,7 @@ SEE ALSO:
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(os.Stderr, "Set %s in %s\n", strings.Join(uniq(keys), ", "), where)
+			fmt.Fprintf(os.Stderr, "%s in %s\n", setMessage(set, unset), where)
 			return nil
 		},
 	}
@@ -289,6 +297,18 @@ func setProfile(path, name string, apply func(*client.Cfg) error) (string, error
 		return "", err
 	}
 	return fmt.Sprintf("profile %q", name), nil
+}
+
+// setMessage says what set did: "Set a, b", "Unset c", or "Set a; unset c".
+func setMessage(set, unset []string) string {
+	set, unset = uniq(set), uniq(unset)
+	switch {
+	case len(unset) == 0:
+		return "Set " + strings.Join(set, ", ")
+	case len(set) == 0:
+		return "Unset " + strings.Join(unset, ", ")
+	}
+	return "Set " + strings.Join(set, ", ") + "; unset " + strings.Join(unset, ", ")
 }
 
 // uniq drops repeated strings, keeping first positions.

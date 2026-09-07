@@ -2,6 +2,7 @@ package myconfig
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -658,5 +659,67 @@ func TestShellWordAndUniq(t *testing.T) {
 	}
 	if got := uniq([]string{"seed_brokers", "sasl.user", "seed_brokers"}); len(got) != 2 || got[0] != "seed_brokers" || got[1] != "sasl.user" {
 		t.Errorf("uniq = %v", got)
+	}
+}
+
+func TestSetMessage(t *testing.T) {
+	for _, test := range []struct {
+		set, unset []string
+		want       string
+	}{
+		{[]string{"seed_brokers", "seed_brokers"}, nil, "Set seed_brokers"},
+		{nil, []string{"sasl.pass"}, "Unset sasl.pass"},
+		{[]string{"sasl.user"}, []string{"sasl.pass", "dial_timeout"}, "Set sasl.user; unset sasl.pass, dial_timeout"},
+	} {
+		if got := setMessage(test.set, test.unset); got != test.want {
+			t.Errorf("setMessage(%v, %v) = %q, want %q", test.set, test.unset, got, test.want)
+		}
+	}
+}
+
+func TestCurrentHonorsProfileFlag(t *testing.T) {
+	const profiles = "current_profile = \"prod\"\n[profiles.prod]\nseed_brokers = [\"p:9092\"]\n[profiles.dev]\nseed_brokers = [\"d:9092\"]\n"
+	for _, test := range []struct {
+		name    string
+		args    []string
+		want    string
+		wantErr string
+	}{
+		{name: "current_profile", args: []string{"profile", "current"}, want: "prod\n"},
+		{name: "-C wins", args: []string{"-C", "dev", "profile", "current"}, want: "dev\n"},
+		{name: "-C unknown", args: []string{"-C", "nope", "profile", "current"}, wantErr: "not found"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(profiles), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			root := &cobra.Command{Use: "kcl", SilenceUsage: true, SilenceErrors: true}
+			cl := client.New(root)
+			root.AddCommand(Command(cl))
+			root.SetArgs(append([]string{"--config-path", path}, test.args...))
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			old := os.Stdout
+			os.Stdout = w
+			execErr := root.Execute()
+			w.Close()
+			os.Stdout = old
+			outb, _ := io.ReadAll(r)
+			if test.wantErr != "" {
+				if execErr == nil || !strings.Contains(execErr.Error(), test.wantErr) {
+					t.Fatalf("err = %v, want containing %q", execErr, test.wantErr)
+				}
+				return
+			}
+			if execErr != nil {
+				t.Fatal(execErr)
+			}
+			if string(outb) != test.want {
+				t.Errorf("stdout = %q, want %q", outb, test.want)
+			}
+		})
 	}
 }

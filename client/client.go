@@ -995,25 +995,28 @@ func (c *Client) processOverrides() {
 }
 
 // ApplyFlags applies the -X, -B, and -R flags to cfg, in that order so the
-// shorthands win, and returns the keys they set. The config file,
-// environment variables, and defaults are not consulted.
-func (c *Client) ApplyFlags(cfg *Cfg) ([]string, error) {
+// shorthands win, and returns the keys they set and the keys they unset. The
+// config file, environment variables, and defaults are not consulted.
+func (c *Client) ApplyFlags(cfg *Cfg) (set, unset []string, err error) {
 	if err := ApplyCfgOpts(cfg, c.flagOverrides); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var keys []string
 	for _, opt := range c.flagOverrides {
-		k, _, _ := strings.Cut(opt, "=")
-		keys = append(keys, k)
+		k, v, hasEq := strings.Cut(opt, "=")
+		if hasEq && v == "" {
+			unset = append(unset, k)
+		} else {
+			set = append(set, k)
+		}
 	}
 	if len(c.bootstrapServers) > 0 {
-		keys = append(keys, "seed_brokers")
+		set = append(set, "seed_brokers")
 	}
 	if len(c.registryURLs) > 0 {
-		keys = append(keys, "registry.urls")
+		set = append(set, "registry.urls")
 	}
 	c.applyShorthandFlags(cfg)
-	return keys, nil
+	return set, unset, nil
 }
 
 // FlagCfg returns the defaults with the -X, -B, and -R flags laid over them.
@@ -1021,7 +1024,7 @@ func (c *Client) ApplyFlags(cfg *Cfg) ([]string, error) {
 // it runs with.
 func (c *Client) FlagCfg() (Cfg, error) {
 	cfg := defaultCfg()
-	if _, err := c.ApplyFlags(&cfg); err != nil {
+	if _, _, err := c.ApplyFlags(&cfg); err != nil {
 		return Cfg{}, err
 	}
 	return cfg, nil

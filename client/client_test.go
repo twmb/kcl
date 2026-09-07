@@ -482,23 +482,26 @@ func TestCfgEncodeOmitsZeroDurations(t *testing.T) {
 
 func TestApplyFlagsKeysAndPreservation(t *testing.T) {
 	c := &Client{
-		flagOverrides:    []string{"sasl.user=me", "sasl_pass=pw"},
+		flagOverrides:    []string{"sasl.user=me", "sasl_pass=pw", "dial_timeout="},
 		bootstrapServers: []string{"a:9092"},
 		registryURLs:     []string{"http://sr:8081"},
 	}
-	cfg := Cfg{SeedBrokers: []string{"old:9092"}, BrokerTimeout: Dur(10 * time.Second)}
-	keys, err := c.ApplyFlags(&cfg)
+	cfg := Cfg{SeedBrokers: []string{"old:9092"}, BrokerTimeout: Dur(10 * time.Second), DialTimeout: Dur(time.Second)}
+	set, unset, err := c.ApplyFlags(&cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"sasl.user", "sasl_pass", "seed_brokers", "registry.urls"}; !reflect.DeepEqual(keys, want) {
-		t.Errorf("keys = %v, want %v", keys, want)
+	if want := []string{"sasl.user", "sasl_pass", "seed_brokers", "registry.urls"}; !reflect.DeepEqual(set, want) {
+		t.Errorf("set = %v, want %v", set, want)
+	}
+	if want := []string{"dial_timeout"}; !reflect.DeepEqual(unset, want) || cfg.DialTimeout != nil {
+		t.Errorf("unset = %v (dial_timeout=%v), want %v", unset, cfg.DialTimeout, want)
 	}
 	if cfg.BrokerTimeout.D() != 10*time.Second || cfg.SeedBrokers[0] != "a:9092" || cfg.SASL.Pass != "pw" || cfg.SR.URLs[0] != "http://sr:8081" {
 		t.Errorf("cfg = %+v sasl=%+v sr=%+v", cfg, cfg.SASL, cfg.SR)
 	}
-	if keys, err := (&Client{}).ApplyFlags(&Cfg{}); err != nil || len(keys) != 0 {
-		t.Errorf("no flags: keys=%v err=%v", keys, err)
+	if set, unset, err := (&Client{}).ApplyFlags(&Cfg{}); err != nil || len(set)+len(unset) != 0 {
+		t.Errorf("no flags: set=%v unset=%v err=%v", set, unset, err)
 	}
 }
 
