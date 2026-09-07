@@ -14,10 +14,22 @@ calling a change done, and say which items do not apply and why.
 - [ ] Does CHANGELOG.md need a bullet under the unreleased heading?
 - [ ] Are there sibling commands that should have gotten the same change?
 - [ ] Do the tests cover the paths you only exercised by hand?
+- [ ] Did you build it and use it?
 
-That last one is the one that bites. Twice in the fake control work a
+The last two are the ones that bite. Twice in the fake control work a
 smoke test found a bug the unit tests missed, because the tests covered
 the HTTP layer and the bug was in argument handling above it.
+
+Build the binary and drive it the way a user would, against an empty
+config dir and against `kcl fake`: the first run with nothing configured,
+the bare group command, the typo, the flag given twice, the value left
+empty, `--format json` on the error path, and the copy of the hint text
+pasted back in. Read the output as a stranger. The profile work shipped
+with unit tests green and still had `-B` applied twice, `0s` written for
+every unset timeout, a flagless create that bricked the default, and
+`tls.insecure=false` turning verification off; every one of those fell out
+of ten minutes at the prompt. Report what felt wrong even when it is not
+in scope, and fix what is.
 
 ## Output
 
