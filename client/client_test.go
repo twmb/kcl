@@ -83,7 +83,7 @@ broker_timeout = "5s"
 		format:  "text",
 		cfg: Cfg{
 			SeedBrokers:   []string{"default:9092"},
-			BrokerTimeout: Duration(time.Second),
+			BrokerTimeout: Dur(time.Second),
 		},
 	}
 	c.parseCfgFile()
@@ -144,7 +144,7 @@ broker_timeout = "3s"
 		format:  "text",
 		cfg: Cfg{
 			SeedBrokers:   []string{"default:9092"},
-			BrokerTimeout: Duration(time.Second),
+			BrokerTimeout: Dur(time.Second),
 		},
 	}
 	c.parseCfgFile()
@@ -162,7 +162,7 @@ func TestCfgFileNoCfgFile(t *testing.T) {
 		format:    "text",
 		cfg: Cfg{
 			SeedBrokers:   []string{"default:9092"},
-			BrokerTimeout: Duration(5 * time.Second),
+			BrokerTimeout: Dur(5 * time.Second),
 		},
 	}
 	c.parseCfgFile()
@@ -384,38 +384,41 @@ func TestFlagCfg(t *testing.T) {
 		wantErr   bool
 	}{
 		{
-			name: "nothing given is a zero cfg",
+			name: "nothing given is the defaults",
+			want: defaultCfg(),
 		},
 		{
 			name:      "bootstrap shorthand",
 			bootstrap: []string{"a:9092", "b:9092"},
-			want:      Cfg{SeedBrokers: []string{"a:9092", "b:9092"}},
+			want:      Cfg{SeedBrokers: []string{"a:9092", "b:9092"}, BrokerTimeout: Dur(5 * time.Second)},
 		},
 		{
 			name:      "bootstrap wins over -X seed_brokers",
 			flags:     []string{"seed_brokers=x:9092"},
 			bootstrap: []string{"a:9092"},
-			want:      Cfg{SeedBrokers: []string{"a:9092"}},
+			want:      Cfg{SeedBrokers: []string{"a:9092"}, BrokerTimeout: Dur(5 * time.Second)},
 		},
 		{
 			name:  "tls and sasl, dotted and legacy underscore",
-			flags: []string{"tls.ca_cert_path=/ca.pem", "sasl.method=scram-sha-256", "sasl_user=alice", "dial_timeout=2s"},
+			flags: []string{"tls.ca_cert_path=/ca.pem", "sasl.method=scram-sha-256", "sasl_user=alice", "dial_timeout=2s", "broker_timeout=1s"},
 			want: Cfg{
-				DialTimeout: Duration(2 * time.Second),
-				TLS:         &CfgTLS{CACert: "/ca.pem"},
-				SASL:        &CfgSASL{Method: "scram-sha-256", User: "alice"},
+				SeedBrokers:   []string{"localhost:9092"},
+				BrokerTimeout: Dur(time.Second),
+				DialTimeout:   Dur(2 * time.Second),
+				TLS:           &CfgTLS{CACert: "/ca.pem"},
+				SASL:          &CfgSASL{Method: "scram-sha-256", User: "alice"},
 			},
 		},
 		{
 			name:     "registry shorthand",
 			registry: []string{"http://sr:8081"},
-			want:     Cfg{SR: &CfgSR{URLs: []string{"http://sr:8081"}}},
+			want:     Cfg{SeedBrokers: []string{"localhost:9092"}, BrokerTimeout: Dur(5 * time.Second), SR: &CfgSR{URLs: []string{"http://sr:8081"}}},
 		},
 		{
 			name:      "environment is ignored",
 			env:       map[string]string{"KCL_SASL_PASS": "secret", "KCL_SEED_BROKERS": "env:9092"},
 			bootstrap: []string{"a:9092"},
-			want:      Cfg{SeedBrokers: []string{"a:9092"}},
+			want:      Cfg{SeedBrokers: []string{"a:9092"}, BrokerTimeout: Dur(5 * time.Second)},
 		},
 		{
 			name:    "unknown key",
@@ -463,7 +466,7 @@ func TestCfgEncodeOmitsZeroDurations(t *testing.T) {
 	err := toml.NewEncoder(&buf).Encode(CfgFile{
 		CurrentProfile: "p",
 		Profiles: map[string]Cfg{
-			"p": {SeedBrokers: []string{"a:9092"}, DialTimeout: Duration(2 * time.Second)},
+			"p": {SeedBrokers: []string{"a:9092"}, DialTimeout: Dur(2 * time.Second)},
 		},
 	})
 	if err != nil {
@@ -481,7 +484,7 @@ func TestApplyFlagsKeysAndPreservation(t *testing.T) {
 		bootstrapServers: []string{"a:9092"},
 		registryURLs:     []string{"http://sr:8081"},
 	}
-	cfg := Cfg{SeedBrokers: []string{"old:9092"}, BrokerTimeout: Duration(10 * time.Second)}
+	cfg := Cfg{SeedBrokers: []string{"old:9092"}, BrokerTimeout: Dur(10 * time.Second)}
 	keys, err := c.ApplyFlags(&cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -494,5 +497,72 @@ func TestApplyFlagsKeysAndPreservation(t *testing.T) {
 	}
 	if keys, err := (&Client{}).ApplyFlags(&Cfg{}); err != nil || len(keys) != 0 {
 		t.Errorf("no flags: keys=%v err=%v", keys, err)
+	}
+}
+
+// TestCfgFileLaysOverDefaults pins that a config file only changes the keys
+// it has: a profile without broker_timeout keeps the 5s default, one written
+// as "0s" is zero, and top level keys do not leak into a selected profile.
+func TestCfgFileLaysOverDefaults(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		file        string
+		profile     string
+		wantBrokers string
+		wantTimeout time.Duration
+	}{
+		{
+			name:        "profile without timeout keeps default",
+			file:        "current_profile = \"p\"\n[profiles.p]\nseed_brokers = [\"p:9092\"]\n",
+			wantBrokers: "p:9092",
+			wantTimeout: 5 * time.Second,
+		},
+		{
+			name:        "profile written as zero is zero",
+			file:        "current_profile = \"p\"\n[profiles.p]\nbroker_timeout = \"0s\"\n",
+			wantBrokers: "localhost:9092",
+			wantTimeout: 0,
+		},
+		{
+			name:        "top level keys do not leak into a profile",
+			file:        "current_profile = \"p\"\nbroker_timeout = \"3s\"\n[profiles.p]\nseed_brokers = [\"p:9092\"]\n",
+			wantBrokers: "p:9092",
+			wantTimeout: 5 * time.Second,
+		},
+		{
+			name:        "flat file without timeout keeps default",
+			file:        "seed_brokers = [\"flat:9092\"]\n",
+			wantBrokers: "flat:9092",
+			wantTimeout: 5 * time.Second,
+		},
+		{
+			name:        "flat file written as zero is zero",
+			file:        "broker_timeout = \"0s\"\n",
+			wantBrokers: "localhost:9092",
+			wantTimeout: 0,
+		},
+		{
+			name:        "-C selects and still lays over defaults",
+			file:        "current_profile = \"a\"\n[profiles.a]\nbroker_timeout = \"1s\"\n[profiles.b]\nseed_brokers = [\"b:9092\"]\n",
+			profile:     "b",
+			wantBrokers: "b:9092",
+			wantTimeout: 5 * time.Second,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(test.file), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			c := &Client{cfgPath: path, format: "text", profileName: test.profile, cfg: defaultCfg()}
+			c.parseCfgFile()
+			c.processOverrides()
+			if len(c.cfg.SeedBrokers) != 1 || c.cfg.SeedBrokers[0] != test.wantBrokers {
+				t.Errorf("seed_brokers = %v, want [%s]", c.cfg.SeedBrokers, test.wantBrokers)
+			}
+			if got := c.cfg.BrokerTimeout.D(); got != test.wantTimeout {
+				t.Errorf("broker_timeout = %v, want %v", got, test.wantTimeout)
+			}
+		})
 	}
 }

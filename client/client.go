@@ -97,7 +97,20 @@ func (d Duration) MarshalText() ([]byte, error) {
 }
 
 // D returns the underlying time.Duration.
-func (d Duration) D() time.Duration { return time.Duration(d) }
+// D returns the duration, or zero when d is nil, which is what an unset
+// timeout means.
+func (d *Duration) D() time.Duration {
+	if d == nil {
+		return 0
+	}
+	return time.Duration(*d)
+}
+
+// Dur returns d as a *Duration, for the timeout fields of Cfg.
+func Dur(d time.Duration) *Duration {
+	dd := Duration(d)
+	return &dd
+}
 
 // Cfg contains kcl options that can be defined in a file.
 type Cfg struct {
@@ -106,17 +119,18 @@ type Cfg struct {
 	// BrokerTimeout is the wire TimeoutMs value sent to the broker
 	// in admin-style requests (e.g. CreateTopics.TimeoutMs). It
 	// tells the broker how long to wait before giving up on the
-	// server side.
-	BrokerTimeout Duration `toml:"broker_timeout,omitzero"`
+	// server side. The timeouts are pointers so that a key written
+	// as zero is kept apart from a key that is not set at all.
+	BrokerTimeout *Duration `toml:"broker_timeout,omitempty"`
 
 	// DialTimeout bounds how long kgo waits for a single TCP dial.
 	// Zero leaves kgo's default (10s).
-	DialTimeout Duration `toml:"dial_timeout,omitzero"`
+	DialTimeout *Duration `toml:"dial_timeout,omitempty"`
 
 	// RetryTimeout bounds total time for a client request and its
 	// retries. Zero leaves kgo's default (30s for most requests,
 	// 45s for group-session requests).
-	RetryTimeout Duration `toml:"retry_timeout,omitzero"`
+	RetryTimeout *Duration `toml:"retry_timeout,omitempty"`
 
 	TLS  *CfgTLS  `toml:"tls,omitzero"`
 	SASL *CfgSASL `toml:"sasl,omitempty"`
@@ -205,6 +219,15 @@ func SetVersion(v string) {
 	}
 }
 
+// defaultCfg is what kcl runs with when nothing sets a key. The config file,
+// environment, and flags are laid over it.
+func defaultCfg() Cfg {
+	return Cfg{
+		SeedBrokers:   []string{"localhost:9092"},
+		BrokerTimeout: Dur(5 * time.Second),
+	}
+}
+
 // New returns a new Client with the given config and installs some
 // persistent flags and commands to root.
 func New(root *cobra.Command) *Client {
@@ -215,10 +238,7 @@ func New(root *cobra.Command) *Client {
 			// audit logs and metrics.
 			kgo.ClientID("kcl/" + clientVersion),
 		},
-		cfg: Cfg{
-			SeedBrokers:   []string{"localhost:9092"},
-			BrokerTimeout: Duration(5 * time.Second),
-		},
+		cfg: defaultCfg(),
 	}
 
 	cfgDir, err := os.UserConfigDir()
@@ -368,8 +388,15 @@ func (c *Client) parseCfgFile() {
 		return
 	}
 
-	// First try decoding as a context-aware config file.
-	md, err := toml.DecodeFile(c.cfgPath, &c.cfgFile)
+	// Profiles decode as primitives so that the selected one can be laid
+	// over the defaults already in c.cfg: only keys present in the file
+	// change anything, and a key written as zero stays zero.
+	var raw struct {
+		CurrentProfile string                    `toml:"current_profile"`
+		Profiles       map[string]toml.Primitive `toml:"profiles"`
+		Cfg
+	}
+	md, err := toml.DecodeFile(c.cfgPath, &raw)
 	if os.IsNotExist(err) {
 		// A missing file is the same as --no-config-file.
 		return
@@ -377,34 +404,52 @@ func (c *Client) parseCfgFile() {
 	if err != nil {
 		out.Die("unable to decode config file %q: %v", c.cfgPath, err)
 	}
-	// Warn on unknown top-level keys so typos and stale names from
-	// old configs don't get silently dropped. This catches "timeout_ms"
-	// after the rename, "tls_xxx" typos, etc.
+
+	c.cfgFile = CfgFile{CurrentProfile: raw.CurrentProfile, Cfg: raw.Cfg}
+	if len(raw.Profiles) > 0 {
+		c.cfgFile.Profiles = make(map[string]Cfg, len(raw.Profiles))
+	}
+	for name, prim := range raw.Profiles {
+		var p Cfg
+		if err := md.PrimitiveDecode(prim, &p); err != nil {
+			out.Die("unable to decode profile %q in %s: %v", name, c.cfgPath, err)
+		}
+		c.cfgFile.Profiles[name] = p
+	}
+
+	// Warn on unknown keys so typos and stale names from old configs do
+	// not get silently dropped. This catches "timeout_ms" after the
+	// rename, "tls_xxx" typos, etc. Keys inside profiles count as
+	// undecoded until PrimitiveDecode above has seen them.
 	if undecoded := md.Undecoded(); len(undecoded) > 0 {
 		for _, k := range undecoded {
 			fmt.Fprintf(os.Stderr, "kcl: warning: unknown config key %q in %s\n", k, c.cfgPath)
 		}
 	}
 
-	// If the file has named profiles, select the appropriate one.
-	if len(c.cfgFile.Profiles) > 0 {
-		name := c.cfgFile.CurrentProfile
+	if len(raw.Profiles) > 0 {
+		name := raw.CurrentProfile
 		if c.profileName != "" {
 			name = c.profileName
 		}
 		if name == "" {
 			out.Die("config has profiles but no current_profile set; use --profile or set current_profile in config")
 		}
-		p, ok := c.cfgFile.Profiles[name]
+		prim, ok := raw.Profiles[name]
 		if !ok {
 			out.Die("profile %q not found in config file", name)
 		}
-		c.cfg = p
+		if err := md.PrimitiveDecode(prim, &c.cfg); err != nil {
+			out.Die("unable to decode profile %q in %s: %v", name, c.cfgPath, err)
+		}
 		return
 	}
 
-	// No profiles: use the flat config (backward compatible).
-	c.cfg = c.cfgFile.Cfg
+	// No profiles: the flat layout. Decoding the file straight into c.cfg
+	// lays its keys over the defaults the same way.
+	if _, err := toml.DecodeFile(c.cfgPath, &c.cfg); err != nil {
+		out.Die("unable to decode config file %q: %v", c.cfgPath, err)
+	}
 }
 
 // CfgFilePath returns the path to the config file.
@@ -464,12 +509,12 @@ var cfgSetters = func() map[string]func(*Cfg, string) error {
 		}
 	}
 
-	intoDuration := func(v string, dst *Duration) error {
+	intoDuration := func(v string, dst **Duration) error {
 		d, err := time.ParseDuration(v)
 		if err != nil {
 			return fmt.Errorf("invalid duration %q: %v", v, err)
 		}
-		*dst = Duration(d)
+		*dst = Dur(d)
 		return nil
 	}
 
@@ -596,10 +641,11 @@ func (c *Client) ApplyFlags(cfg *Cfg) ([]string, error) {
 	return keys, nil
 }
 
-// FlagCfg returns the configuration given by the -X, -B, and -R flags alone.
-// This is what "kcl profile create" saves.
+// FlagCfg returns the defaults with the -X, -B, and -R flags laid over them.
+// This is what "kcl profile create" saves, so a new profile spells out what
+// it runs with.
 func (c *Client) FlagCfg() (Cfg, error) {
-	var cfg Cfg
+	cfg := defaultCfg()
 	if _, err := c.ApplyFlags(&cfg); err != nil {
 		return Cfg{}, err
 	}

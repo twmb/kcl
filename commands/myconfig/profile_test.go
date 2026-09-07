@@ -42,11 +42,11 @@ func TestWriteAndReadCfgFile(t *testing.T) {
 		Profiles: map[string]client.Cfg{
 			"prod": {
 				SeedBrokers:   []string{"kafka-prod:9092"},
-				BrokerTimeout: client.Duration(10 * time.Second),
+				BrokerTimeout: client.Dur(10 * time.Second),
 			},
 			"local": {
 				SeedBrokers:   []string{"localhost:9092"},
-				BrokerTimeout: client.Duration(5 * time.Second),
+				BrokerTimeout: client.Dur(5 * time.Second),
 			},
 		},
 	}
@@ -228,7 +228,7 @@ seed_brokers = ["p:9092"]
 			profile: "secure",
 			cfg: client.Cfg{
 				SeedBrokers: []string{"k:9093"},
-				DialTimeout: client.Duration(2 * time.Second),
+				DialTimeout: client.Dur(2 * time.Second),
 				TLS:         &client.CfgTLS{CACert: "/ca.pem"},
 				SASL:        &client.CfgSASL{Method: "scram-sha-256", User: "me", Pass: "pw"},
 			},
