@@ -412,6 +412,11 @@ func (c *Client) CfgFilePath() string {
 	return c.cfgPath
 }
 
+// ProfileName returns the profile named by -C, or "" if none was given.
+func (c *Client) ProfileName() string {
+	return c.profileName
+}
+
 // LoadedCfgFile returns the full loaded config file (may include contexts).
 func (c *Client) LoadedCfgFile() CfgFile {
 	c.loadClientOnce()
@@ -518,8 +523,9 @@ var cfgSetters = func() map[string]func(*Cfg, string) error {
 	return flat
 }()
 
-// applyCfgOpts applies key=value overrides to cfg in order.
-func applyCfgOpts(cfg *Cfg, opts []string) error {
+// ApplyCfgOpts applies key=value pairs to cfg in order, using the same keys
+// as -X. The first bad pair stops it with an error.
+func ApplyCfgOpts(cfg *Cfg, opts []string) error {
 	for _, opt := range opts {
 		k, v, ok := strings.Cut(opt, "=")
 		if !ok {
@@ -559,24 +565,44 @@ func (c *Client) processOverrides() {
 			envOverrides = append(envOverrides, k+"="+v)
 		}
 	}
-	if err := applyCfgOpts(&c.cfg, envOverrides); err != nil {
+	if err := ApplyCfgOpts(&c.cfg, envOverrides); err != nil {
 		out.Die("%s", err)
 	}
-	if err := applyCfgOpts(&c.cfg, c.flagOverrides); err != nil {
+	if err := ApplyCfgOpts(&c.cfg, c.flagOverrides); err != nil {
 		out.Die("%s", err)
 	}
 	c.applyShorthandFlags(&c.cfg)
 }
 
-// FlagCfg returns the configuration given on the command line through -X,
-// -B, and -R alone. The config file, environment variables, and defaults are
-// not consulted. This is what "kcl profile create" saves.
+// ApplyFlags applies the -X, -B, and -R flags to cfg, in that order so the
+// shorthands win, and returns the keys they set. The config file,
+// environment variables, and defaults are not consulted.
+func (c *Client) ApplyFlags(cfg *Cfg) ([]string, error) {
+	if err := ApplyCfgOpts(cfg, c.flagOverrides); err != nil {
+		return nil, err
+	}
+	var keys []string
+	for _, opt := range c.flagOverrides {
+		k, _, _ := strings.Cut(opt, "=")
+		keys = append(keys, k)
+	}
+	if len(c.bootstrapServers) > 0 {
+		keys = append(keys, "seed_brokers")
+	}
+	if len(c.registryURLs) > 0 {
+		keys = append(keys, "registry.urls")
+	}
+	c.applyShorthandFlags(cfg)
+	return keys, nil
+}
+
+// FlagCfg returns the configuration given by the -X, -B, and -R flags alone.
+// This is what "kcl profile create" saves.
 func (c *Client) FlagCfg() (Cfg, error) {
 	var cfg Cfg
-	if err := applyCfgOpts(&cfg, c.flagOverrides); err != nil {
+	if _, err := c.ApplyFlags(&cfg); err != nil {
 		return Cfg{}, err
 	}
-	c.applyShorthandFlags(&cfg)
 	return cfg, nil
 }
 

@@ -474,3 +474,25 @@ func TestCfgEncodeOmitsZeroDurations(t *testing.T) {
 		t.Errorf("unexpected encoding:\n%s", got)
 	}
 }
+
+func TestApplyFlagsKeysAndPreservation(t *testing.T) {
+	c := &Client{
+		flagOverrides:    []string{"sasl.user=me", "sasl_pass=pw"},
+		bootstrapServers: []string{"a:9092"},
+		registryURLs:     []string{"http://sr:8081"},
+	}
+	cfg := Cfg{SeedBrokers: []string{"old:9092"}, BrokerTimeout: Duration(10 * time.Second)}
+	keys, err := c.ApplyFlags(&cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"sasl.user", "sasl_pass", "seed_brokers", "registry.urls"}; !reflect.DeepEqual(keys, want) {
+		t.Errorf("keys = %v, want %v", keys, want)
+	}
+	if cfg.BrokerTimeout.D() != 10*time.Second || cfg.SeedBrokers[0] != "a:9092" || cfg.SASL.Pass != "pw" || cfg.SR.URLs[0] != "http://sr:8081" {
+		t.Errorf("cfg = %+v sasl=%+v sr=%+v", cfg, cfg.SASL, cfg.SR)
+	}
+	if keys, err := (&Client{}).ApplyFlags(&Cfg{}); err != nil || len(keys) != 0 {
+		t.Errorf("no flags: keys=%v err=%v", keys, err)
+	}
+}

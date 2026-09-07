@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -308,6 +309,7 @@ func TestCreateVisibleSetupHidden(t *testing.T) {
 		hidden bool
 	}{
 		{"create", false},
+		{"set", false},
 		{"setup", true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -325,5 +327,319 @@ func TestCreateVisibleSetupHidden(t *testing.T) {
 	}
 	if cmd, _, _ := Command(cl).Find([]string{"wizard"}); cmd != nil && cmd.Name() == "wizard" {
 		t.Error("wizard should no longer resolve")
+	}
+}
+
+func TestSetProfile(t *testing.T) {
+	const profiles = `current_profile = "prod"
+
+[profiles.prod]
+seed_brokers = ["p:9092"]
+broker_timeout = "10s"
+
+[profiles.staging]
+seed_brokers = ["s:9092"]
+`
+	for _, test := range []struct {
+		name      string
+		exists    bool
+		existing  string
+		profile   string
+		opts      []string
+		wantWhere string
+		wantErr   string
+		wantCode  int
+		check     func(t *testing.T, f client.CfgFile)
+	}{
+		{
+			name:      "current profile, one key, rest untouched",
+			exists:    true,
+			existing:  profiles,
+			opts:      []string{"seed_brokers=a:9092,b:9092"},
+			wantWhere: `profile "prod"`,
+			check: func(t *testing.T, f client.CfgFile) {
+				p := f.Profiles["prod"]
+				if len(p.SeedBrokers) != 2 || p.SeedBrokers[1] != "b:9092" || p.BrokerTimeout.D() != 10*time.Second {
+					t.Errorf("prod = %+v", p)
+				}
+				if f.CurrentProfile != "prod" || f.Profiles["staging"].SeedBrokers[0] != "s:9092" {
+					t.Errorf("other state changed: current=%q staging=%+v", f.CurrentProfile, f.Profiles["staging"])
+				}
+			},
+		},
+		{
+			name:      "-C picks another profile, several keys at once",
+			exists:    true,
+			existing:  profiles,
+			profile:   "staging",
+			opts:      []string{"sasl.method=scram-sha-256", "sasl_user=me", "dial_timeout=2s"},
+			wantWhere: `profile "staging"`,
+			check: func(t *testing.T, f client.CfgFile) {
+				p := f.Profiles["staging"]
+				if p.SASL == nil || p.SASL.Method != "scram-sha-256" || p.SASL.User != "me" || p.DialTimeout.D() != 2*time.Second {
+					t.Errorf("staging = %+v sasl=%+v", p, p.SASL)
+				}
+				if f.Profiles["prod"].SeedBrokers[0] != "p:9092" {
+					t.Errorf("prod changed: %+v", f.Profiles["prod"])
+				}
+			},
+		},
+		{
+			name:     "flat config is edited at the top level",
+			exists:   true,
+			existing: "seed_brokers = [\"x:9092\"]\n",
+			opts:     []string{"retry_timeout=5s"},
+			check: func(t *testing.T, f client.CfgFile) {
+				if len(f.Profiles) != 0 || f.SeedBrokers[0] != "x:9092" || f.RetryTimeout.D() != 5*time.Second {
+					t.Errorf("flat = %+v", f.Cfg)
+				}
+			},
+		},
+		{
+			name:    "missing file",
+			opts:    []string{"seed_brokers=a:9092"},
+			wantErr: "kcl profile create",
+		},
+		{
+			name:    "empty file has nothing to set",
+			exists:  true,
+			opts:    []string{"seed_brokers=a:9092"},
+			wantErr: "no profiles",
+		},
+		{
+			name:     "profiles but no current and no -C",
+			exists:   true,
+			existing: "[profiles.prod]\nseed_brokers = [\"p:9092\"]\n",
+			opts:     []string{"seed_brokers=a:9092"},
+			wantErr:  "no current profile",
+		},
+		{
+			name:     "-C names a missing profile",
+			exists:   true,
+			existing: profiles,
+			profile:  "nope",
+			opts:     []string{"seed_brokers=a:9092"},
+			wantErr:  "not found",
+		},
+		{
+			name:     "-C on a flat config",
+			exists:   true,
+			existing: "seed_brokers = [\"x:9092\"]\n",
+			profile:  "prod",
+			opts:     []string{"seed_brokers=a:9092"},
+			wantErr:  "no profiles",
+		},
+		{
+			name:     "unknown key",
+			exists:   true,
+			existing: profiles,
+			opts:     []string{"seed_brokers=a:9092", "nope=1"},
+			wantErr:  "unknown opt key",
+			wantCode: out.ExitUsage,
+		},
+		{
+			name:     "bad value",
+			exists:   true,
+			existing: profiles,
+			opts:     []string{"dial_timeout=soon"},
+			wantErr:  "invalid duration",
+			wantCode: out.ExitUsage,
+		},
+		{
+			name:     "missing equals",
+			exists:   true,
+			existing: profiles,
+			opts:     []string{"seed_brokers"},
+			wantErr:  "not a key=value",
+			wantCode: out.ExitUsage,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if test.exists {
+				if err := os.WriteFile(path, []byte(test.existing), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			where, err := setProfile(path, test.profile, func(cfg *client.Cfg) error {
+				return client.ApplyCfgOpts(cfg, test.opts)
+			})
+
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("err = %v, want containing %q", err, test.wantErr)
+				}
+				if test.wantCode != 0 {
+					var ce *out.ExitCodeError
+					if !errors.As(err, &ce) || ce.Code != test.wantCode {
+						t.Errorf("exit code = %v, want %d", err, test.wantCode)
+					}
+				}
+				// A refused set must leave the file exactly as it was.
+				got, rerr := os.ReadFile(path)
+				if test.exists {
+					if rerr != nil || string(got) != test.existing {
+						t.Errorf("file changed on error: %q (%v)", got, rerr)
+					}
+				} else if !os.IsNotExist(rerr) {
+					t.Errorf("file created on error: %q (%v)", got, rerr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if test.wantWhere == "" {
+				test.wantWhere = path
+			}
+			if where != test.wantWhere {
+				t.Errorf("where = %q, want %q", where, test.wantWhere)
+			}
+
+			var f client.CfgFile
+			if _, err := toml.DecodeFile(path, &f); err != nil {
+				t.Fatalf("decode written config: %v", err)
+			}
+			test.check(t, f)
+		})
+	}
+}
+
+// TestSetCommandFlags drives set through cobra, so the root -X, -B, and -R
+// flags reach the profile the way they do from the shell.
+func TestSetCommandFlags(t *testing.T) {
+	const profiles = `current_profile = "prod"
+
+[profiles.prod]
+seed_brokers = ["p:9092"]
+broker_timeout = "10s"
+`
+	for _, test := range []struct {
+		name     string
+		args     []string
+		wantErr  string
+		wantCode int
+		check    func(t *testing.T, f client.CfgFile)
+	}{
+		{
+			name: "-X and -B together",
+			args: []string{"profile", "set", "-X", "sasl.user=me", "-B", "a:9092,b:9092"},
+			check: func(t *testing.T, f client.CfgFile) {
+				p := f.Profiles["prod"]
+				if len(p.SeedBrokers) != 2 || p.SeedBrokers[1] != "b:9092" || p.SASL == nil || p.SASL.User != "me" || p.BrokerTimeout.D() != 10*time.Second {
+					t.Errorf("prod = %+v sasl=%+v", p, p.SASL)
+				}
+			},
+		},
+		{
+			name: "-R sets registry urls",
+			args: []string{"profile", "set", "-R", "http://sr:8081"},
+			check: func(t *testing.T, f client.CfgFile) {
+				if p := f.Profiles["prod"]; p.SR == nil || len(p.SR.URLs) != 1 || p.SR.URLs[0] != "http://sr:8081" || p.SeedBrokers[0] != "p:9092" {
+					t.Errorf("prod = %+v sr=%+v", p, p.SR)
+				}
+			},
+		},
+		{
+			name:     "nothing given",
+			args:     []string{"profile", "set"},
+			wantErr:  "nothing to set",
+			wantCode: out.ExitUsage,
+		},
+		{
+			name:    "positional pairs are not accepted",
+			args:    []string{"profile", "set", "sasl.user=me"},
+			wantErr: "unknown command",
+		},
+		{
+			name:     "bad -X leaves the file alone",
+			args:     []string{"profile", "set", "-X", "nope=1"},
+			wantErr:  "unknown opt key",
+			wantCode: out.ExitUsage,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(profiles), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			root := &cobra.Command{Use: "kcl", SilenceUsage: true, SilenceErrors: true}
+			cl := client.New(root)
+			root.AddCommand(Command(cl))
+			root.SetArgs(append([]string{"--config-path", path}, test.args...))
+
+			err := root.Execute()
+
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("err = %v, want containing %q", err, test.wantErr)
+				}
+				if test.wantCode != 0 {
+					var ce *out.ExitCodeError
+					if !errors.As(err, &ce) || ce.Code != test.wantCode {
+						t.Errorf("exit code = %v, want %d", err, test.wantCode)
+					}
+				}
+				if got, _ := os.ReadFile(path); string(got) != profiles {
+					t.Errorf("file changed on error:\n%s", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			var f client.CfgFile
+			if _, err := toml.DecodeFile(path, &f); err != nil {
+				t.Fatalf("decode written config: %v", err)
+			}
+			test.check(t, f)
+		})
+	}
+}
+
+// TestSetTouchesOnlyNamedKeys pins that set writes back what the file had,
+// plus the keys named on the command line, and no defaults for the rest.
+func TestSetTouchesOnlyNamedKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	const before = `current_profile = "prod"
+
+[profiles.prod]
+seed_brokers = ["p:9092"]
+
+[profiles.other]
+seed_brokers = ["o:9092"]
+dial_timeout = "2s"
+[profiles.other.tls]
+ca_cert_path = "/ca.pem"
+`
+	if err := os.WriteFile(path, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var want client.CfgFile
+	if _, err := toml.DecodeFile(path, &want); err != nil {
+		t.Fatal(err)
+	}
+
+	root := &cobra.Command{Use: "kcl", SilenceUsage: true, SilenceErrors: true}
+	cl := client.New(root)
+	root.AddCommand(Command(cl))
+	root.SetArgs([]string{"--config-path", path, "profile", "set", "-X", "sasl.user=me"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	var got client.CfgFile
+	if _, err := toml.DecodeFile(path, &got); err != nil {
+		t.Fatal(err)
+	}
+	prod := got.Profiles["prod"]
+	if prod.SASL == nil || prod.SASL.User != "me" {
+		t.Fatalf("sasl.user not set: %+v", prod.SASL)
+	}
+	prod.SASL = nil
+	got.Profiles["prod"] = prod
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("set changed more than sasl.user:\n got %+v\nwant %+v", got, want)
 	}
 }

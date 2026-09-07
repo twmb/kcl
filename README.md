@@ -78,6 +78,8 @@ kcl profile create cicd -B kafka-staging:9092 -X dial_timeout=2s -X sasl.method=
 ```
 
 If nothing is current yet, the new profile is; otherwise `kcl profile use NAME`.
+`kcl profile set` applies the same flags to the current profile, or to the one
+`-C` names.
 
 ### Quick example config
 
