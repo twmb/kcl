@@ -446,11 +446,11 @@ seed_brokers = ["s:9092"]
 			wantCode: out.ExitUsage,
 		},
 		{
-			name:     "missing equals",
+			name:     "bare non-boolean key",
 			exists:   true,
 			existing: profiles,
 			opts:     []string{"seed_brokers"},
-			wantErr:  "not a key=value",
+			wantErr:  "needs a value",
 			wantCode: out.ExitUsage,
 		},
 	} {

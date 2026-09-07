@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -468,119 +469,260 @@ func (c *Client) LoadedCfgFile() CfgFile {
 	return c.cfgFile
 }
 
-// cfgSetters maps every config key, in its normalized underscore form, to
-// the function that sets it. See normCfgKey.
-var cfgSetters = func() map[string]func(*Cfg, string) error {
-	intoStrSlice := func(in string, dst *[]string) error {
-		*dst = nil
-		split := strings.Split(in, ",")
-		for _, on := range split {
-			on = strings.TrimSpace(on)
-			if len(on) == 0 {
-				return fmt.Errorf("invalid empty value in %q", in)
+// CfgKey is one -X key: its dotted name, what it does, and its Type, one of
+// string, list, duration, bool, or table. A bool may be given bare
+// (-X tls.insecure) to mean true. A table takes only the empty value, which
+// removes the whole table. An empty value (-X sasl.pass=) unsets any key.
+type CfgKey struct {
+	Name string
+	Desc string
+	Type string
+
+	set    func(*Cfg, string) error
+	hidden bool // an old name that only errors
+}
+
+// CfgKeys returns every -X key kcl accepts, in display order.
+func CfgKeys() []CfgKey {
+	var keys []CfgKey
+	for _, k := range cfgKeys {
+		if !k.hidden {
+			keys = append(keys, k)
+		}
+	}
+	return keys
+}
+
+// A cfgTable knows how to find, create, and remove one optional table of
+// Cfg. Unsetting a key in a table that does not exist leaves the table
+// absent, since an empty [tls] table is itself a setting.
+type cfgTable struct {
+	has func(*Cfg) bool
+	mk  func(*Cfg)
+	rm  func(*Cfg)
+}
+
+var (
+	topTable = cfgTable{has: func(*Cfg) bool { return true }, mk: func(*Cfg) {}}
+
+	tlsTable = cfgTable{
+		has: func(c *Cfg) bool { return c.TLS != nil },
+		mk: func(c *Cfg) {
+			if c.TLS == nil {
+				c.TLS = new(CfgTLS)
 			}
-			*dst = append(*dst, on)
+		},
+		rm: func(c *Cfg) { c.TLS = nil },
+	}
+
+	saslTable = cfgTable{
+		has: func(c *Cfg) bool { return c.SASL != nil },
+		mk: func(c *Cfg) {
+			if c.SASL == nil {
+				c.SASL = new(CfgSASL)
+			}
+		},
+		rm: func(c *Cfg) { c.SASL = nil },
+	}
+
+	srTable = cfgTable{
+		has: func(c *Cfg) bool { return c.SR != nil },
+		mk: func(c *Cfg) {
+			if c.SR == nil {
+				c.SR = new(CfgSR)
+			}
+		},
+		rm: func(c *Cfg) { c.SR = nil },
+	}
+
+	srTLSTable = cfgTable{
+		has: func(c *Cfg) bool { return c.SR != nil && c.SR.TLS != nil },
+		mk: func(c *Cfg) {
+			srTable.mk(c)
+			if c.SR.TLS == nil {
+				c.SR.TLS = new(CfgTLS)
+			}
+		},
+		rm: func(c *Cfg) {
+			if c.SR != nil {
+				c.SR.TLS = nil
+			}
+		},
+	}
+)
+
+func intoStrSlice(in string, dst *[]string) error {
+	*dst = nil
+	for _, on := range strings.Split(in, ",") {
+		on = strings.TrimSpace(on)
+		if len(on) == 0 {
+			return fmt.Errorf("invalid empty value in %q", in)
 		}
+		*dst = append(*dst, on)
+	}
+	return nil
+}
+
+func str(name, desc string, t cfgTable, f func(*Cfg) *string) CfgKey {
+	return CfgKey{Name: name, Desc: desc, Type: "string", set: func(c *Cfg, v string) error {
+		if v == "" && !t.has(c) {
+			return nil
+		}
+		t.mk(c)
+		*f(c) = v
 		return nil
-	}
+	}}
+}
 
-	mktls := func(c *Cfg) {
-		if c.TLS == nil {
-			c.TLS = new(CfgTLS)
+func boolean(name, desc string, t cfgTable, f func(*Cfg) *bool) CfgKey {
+	return CfgKey{Name: name, Desc: desc, Type: "bool", set: func(c *Cfg, v string) error {
+		b, err := parseBoolOpt(v)
+		if err != nil {
+			return err
 		}
-	}
-
-	mksasl := func(c *Cfg) {
-		if c.SASL == nil {
-			c.SASL = new(CfgSASL)
+		if !b && !t.has(c) {
+			return nil
 		}
-	}
+		t.mk(c)
+		*f(c) = b
+		return nil
+	}}
+}
 
-	mksr := func(c *Cfg) {
-		if c.SR == nil {
-			c.SR = new(CfgSR)
+func list(name, desc string, t cfgTable, f func(*Cfg) *[]string) CfgKey {
+	return CfgKey{Name: name, Desc: desc, Type: "list", set: func(c *Cfg, v string) error {
+		if v == "" {
+			if t.has(c) {
+				*f(c) = nil
+			}
+			return nil
 		}
-	}
+		t.mk(c)
+		return intoStrSlice(v, f(c))
+	}}
+}
 
-	mksrtls := func(c *Cfg) {
-		mksr(c)
-		if c.SR.TLS == nil {
-			c.SR.TLS = new(CfgTLS)
+func duration(name, desc string, f func(*Cfg) **Duration) CfgKey {
+	return CfgKey{Name: name, Desc: desc, Type: "duration", set: func(c *Cfg, v string) error {
+		if v == "" {
+			*f(c) = nil
+			return nil
 		}
-	}
-
-	intoDuration := func(v string, dst **Duration) error {
 		d, err := time.ParseDuration(v)
 		if err != nil {
 			return fmt.Errorf("invalid duration %q: %v", v, err)
 		}
-		*dst = Dur(d)
+		*f(c) = Dur(d)
 		return nil
-	}
+	}}
+}
 
-	fns := map[string]func(*Cfg, string) error{
-		"seed_brokers":   func(c *Cfg, v string) error { return intoStrSlice(v, &c.SeedBrokers) },
-		"broker_timeout": func(c *Cfg, v string) error { return intoDuration(v, &c.BrokerTimeout) },
-		"dial_timeout":   func(c *Cfg, v string) error { return intoDuration(v, &c.DialTimeout) },
-		"retry_timeout":  func(c *Cfg, v string) error { return intoDuration(v, &c.RetryTimeout) },
-		// Removed in favor of duration-based names above.
-		"timeout_ms": func(c *Cfg, v string) error {
+func table(name, desc string, t cfgTable) CfgKey {
+	return CfgKey{Name: name, Desc: desc, Type: "table", set: func(c *Cfg, v string) error {
+		if v != "" {
+			return fmt.Errorf("%s is a table: set its keys, or %s= to remove it", name, name)
+		}
+		t.rm(c)
+		return nil
+	}}
+}
+
+// parseBoolOpt reads a boolean -X value; empty is false, which unsets.
+func parseBoolOpt(v string) (bool, error) {
+	if v == "" {
+		return false, nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("invalid boolean %q", v)
+	}
+	return b, nil
+}
+
+func tlsKeys(prefix string, t cfgTable, tls func(*Cfg) *CfgTLS, suffix string) []CfgKey {
+	return []CfgKey{
+		table(prefix, "The TLS table. "+prefix+"= removes it, turning TLS off"+suffix+".", t),
+		str(prefix+".ca_cert_path", "PEM file holding the CA that signed the server certificates"+suffix+".", t, func(c *Cfg) *string { return &tls(c).CACert }),
+		str(prefix+".client_cert_path", "PEM client certificate, for mutual TLS"+suffix+".", t, func(c *Cfg) *string { return &tls(c).ClientCertPath }),
+		str(prefix+".client_key_path", "PEM client key, for mutual TLS"+suffix+".", t, func(c *Cfg) *string { return &tls(c).ClientKeyPath }),
+		str(prefix+".server_name", "Name to verify the server certificate against, when it is not the host dialed"+suffix+".", t, func(c *Cfg) *string { return &tls(c).ServerName }),
+		boolean(prefix+".insecure", "Skip certificate verification"+suffix+".", t, func(c *Cfg) *bool { return &tls(c).InsecureSkipVerify }),
+		str(prefix+".min_version", "Lowest TLS version accepted: 1.0, 1.1, 1.2, or 1.3. Default 1.2"+suffix+".", t, func(c *Cfg) *string { return &tls(c).MinVersion }),
+		list(prefix+".cipher_suites", "Cipher suites allowed, by Go name, comma separated"+suffix+".", t, func(c *Cfg) *[]string { return &tls(c).CipherSuites }),
+		list(prefix+".curve_preferences", "Curves allowed for key exchange, comma separated"+suffix+".", t, func(c *Cfg) *[]string { return &tls(c).CurvePreferences }),
+	}
+}
+
+// cfgKeys is every -X key, in the order kcl profile keys lists them.
+var cfgKeys = func() []CfgKey {
+	keys := []CfgKey{
+		list("seed_brokers", "Brokers to connect to, host:port, comma separated. Default localhost:9092.", topTable, func(c *Cfg) *[]string { return &c.SeedBrokers }),
+		duration("broker_timeout", "How long the broker may spend on an admin request, sent as the wire TimeoutMs. Default 5s.", func(c *Cfg) **Duration { return &c.BrokerTimeout }),
+		duration("dial_timeout", "Bound on one TCP dial. Unset uses kgo's 10s.", func(c *Cfg) **Duration { return &c.DialTimeout }),
+		duration("retry_timeout", "Bound on a request and its retries. Unset uses kgo's 30s, 45s for group requests.", func(c *Cfg) **Duration { return &c.RetryTimeout }),
+		{Name: "timeout_ms", hidden: true, set: func(*Cfg, string) error {
 			return fmt.Errorf("timeout_ms was renamed to broker_timeout and now takes a Go duration (e.g. -X broker_timeout=5s); please update your config or -X flags")
-		},
-		"use_tls":               func(c *Cfg, _ string) error { mktls(c); return nil },
-		"tls.ca_cert_path":      func(c *Cfg, v string) error { mktls(c); c.TLS.CACert = v; return nil },
-		"tls.client_cert_path":  func(c *Cfg, v string) error { mktls(c); c.TLS.ClientCertPath = v; return nil },
-		"tls.client_key_path":   func(c *Cfg, v string) error { mktls(c); c.TLS.ClientKeyPath = v; return nil },
-		"tls.insecure":          func(c *Cfg, _ string) error { mktls(c); c.TLS.InsecureSkipVerify = true; return nil },
-		"tls.server_name":       func(c *Cfg, v string) error { mktls(c); c.TLS.ServerName = v; return nil },
-		"tls.min_version":       func(c *Cfg, v string) error { mktls(c); c.TLS.MinVersion = v; return nil },
-		"tls.cipher_suites":     func(c *Cfg, v string) error { mktls(c); return intoStrSlice(v, &c.TLS.CipherSuites) },
-		"tls.curve_preferences": func(c *Cfg, v string) error { mktls(c); return intoStrSlice(v, &c.TLS.CurvePreferences) },
-		"sasl.method":           func(c *Cfg, v string) error { mksasl(c); c.SASL.Method = v; return nil },
-		"sasl.zid":              func(c *Cfg, v string) error { mksasl(c); c.SASL.Zid = v; return nil },
-		"sasl.user":             func(c *Cfg, v string) error { mksasl(c); c.SASL.User = v; return nil },
-		"sasl.pass":             func(c *Cfg, v string) error { mksasl(c); c.SASL.Pass = v; return nil },
-		"sasl.is_token":         func(c *Cfg, _ string) error { mksasl(c); c.SASL.IsToken = true; return nil }, // accepts any val
-
-		"registry.urls":                  func(c *Cfg, v string) error { mksr(c); return intoStrSlice(v, &c.SR.URLs) },
-		"registry.user":                  func(c *Cfg, v string) error { mksr(c); c.SR.User = v; return nil },
-		"registry.pass":                  func(c *Cfg, v string) error { mksr(c); c.SR.Pass = v; return nil },
-		"registry.bearer_token":          func(c *Cfg, v string) error { mksr(c); c.SR.BearerToken = v; return nil },
-		"registry.context":               func(c *Cfg, v string) error { mksr(c); c.SR.Context = v; return nil },
-		"registry.tls.ca_cert_path":      func(c *Cfg, v string) error { mksrtls(c); c.SR.TLS.CACert = v; return nil },
-		"registry.tls.client_cert_path":  func(c *Cfg, v string) error { mksrtls(c); c.SR.TLS.ClientCertPath = v; return nil },
-		"registry.tls.client_key_path":   func(c *Cfg, v string) error { mksrtls(c); c.SR.TLS.ClientKeyPath = v; return nil },
-		"registry.tls.insecure":          func(c *Cfg, _ string) error { mksrtls(c); c.SR.TLS.InsecureSkipVerify = true; return nil },
-		"registry.tls.server_name":       func(c *Cfg, v string) error { mksrtls(c); c.SR.TLS.ServerName = v; return nil },
-		"registry.tls.min_version":       func(c *Cfg, v string) error { mksrtls(c); c.SR.TLS.MinVersion = v; return nil },
-		"registry.tls.cipher_suites":     func(c *Cfg, v string) error { mksrtls(c); return intoStrSlice(v, &c.SR.TLS.CipherSuites) },
-		"registry.tls.curve_preferences": func(c *Cfg, v string) error { mksrtls(c); return intoStrSlice(v, &c.SR.TLS.CurvePreferences) },
+		}},
+		{Name: "use_tls", Type: "bool", Desc: "true turns TLS on with the system roots; false removes the tls table.", set: func(c *Cfg, v string) error {
+			b, err := parseBoolOpt(v)
+			if err != nil {
+				return err
+			}
+			if b {
+				tlsTable.mk(c)
+			} else {
+				tlsTable.rm(c)
+			}
+			return nil
+		}},
 	}
-
-	// The canonical keys above are dot-separated by field. We index by the
-	// flattened (dot->underscore) form so that both the dotted form and the
-	// legacy pure-underscore form (e.g. "sasl_user") resolve to the same
-	// handler. See normCfgKey.
-	flat := make(map[string]func(*Cfg, string) error, len(fns))
-	for k, fn := range fns {
-		flat[normCfgKey(k)] = fn
-	}
-	return flat
+	keys = append(keys, tlsKeys("tls", tlsTable, func(c *Cfg) *CfgTLS { return c.TLS }, "")...)
+	keys = append(keys,
+		table("sasl", "The SASL table. sasl= removes it.", saslTable),
+		str("sasl.method", "plain, scram-sha-256, scram-sha-512, or aws_msk_iam.", saslTable, func(c *Cfg) *string { return &c.SASL.Method }),
+		str("sasl.zid", "Authorization id, when it differs from the user.", saslTable, func(c *Cfg) *string { return &c.SASL.Zid }),
+		str("sasl.user", "User name.", saslTable, func(c *Cfg) *string { return &c.SASL.User }),
+		str("sasl.pass", "Password.", saslTable, func(c *Cfg) *string { return &c.SASL.Pass }),
+		boolean("sasl.is_token", "The password is a delegation token.", saslTable, func(c *Cfg) *bool { return &c.SASL.IsToken }),
+		table("registry", "The schema registry table. registry= removes it.", srTable),
+		list("registry.urls", "Schema registry URLs, comma separated. Default http://localhost:8081.", srTable, func(c *Cfg) *[]string { return &c.SR.URLs }),
+		str("registry.user", "Basic auth user name.", srTable, func(c *Cfg) *string { return &c.SR.User }),
+		str("registry.pass", "Basic auth password.", srTable, func(c *Cfg) *string { return &c.SR.Pass }),
+		str("registry.bearer_token", "Bearer token, in place of basic auth.", srTable, func(c *Cfg) *string { return &c.SR.BearerToken }),
+		str("registry.context", "Registry context that scopes every request.", srTable, func(c *Cfg) *string { return &c.SR.Context }),
+	)
+	keys = append(keys, tlsKeys("registry.tls", srTLSTable, func(c *Cfg) *CfgTLS { return c.SR.TLS }, " for the registry")...)
+	return keys
 }()
 
-// ApplyCfgOpts applies key=value pairs to cfg in order, using the same keys
-// as -X. The first bad pair stops it with an error.
+// cfgSetters indexes cfgKeys by the flattened (dot->underscore) name, so
+// both the dotted form and the legacy pure-underscore form (e.g.
+// "sasl_user") resolve to the same key. See normCfgKey.
+var cfgSetters = func() map[string]CfgKey {
+	m := make(map[string]CfgKey, len(cfgKeys))
+	for _, k := range cfgKeys {
+		m[normCfgKey(k.Name)] = k
+	}
+	return m
+}()
+
+// ApplyCfgOpts applies -X style options to cfg in order. Each is KEY=VALUE,
+// an empty VALUE unsets the key, and a boolean key may be given bare. The
+// first bad option stops it with an error.
 func ApplyCfgOpts(cfg *Cfg, opts []string) error {
 	for _, opt := range opts {
-		k, v, ok := strings.Cut(opt, "=")
-		if !ok {
-			return fmt.Errorf("opt %q not a key=value", opt)
-		}
-		fn, exists := cfgSetters[normCfgKey(k)]
+		k, v, hasEq := strings.Cut(opt, "=")
+		key, exists := cfgSetters[normCfgKey(k)]
 		if !exists {
-			return fmt.Errorf("unknown opt key %q", k)
+			return fmt.Errorf("unknown opt key %q; kcl profile keys lists them", k)
 		}
-		if err := fn(cfg, v); err != nil {
+		if !hasEq {
+			if key.Type != "bool" {
+				return fmt.Errorf("%s needs a value; %s= unsets it", k, k)
+			}
+			v = "true"
+		}
+		if err := key.set(cfg, v); err != nil {
 			return err
 		}
 	}
@@ -605,7 +747,10 @@ func (c *Client) processOverrides() {
 	// Environment variables use the flattened (underscore) form, uppercased,
 	// since env var names cannot contain dots: KCL_REGISTRY_TLS_SERVER_NAME.
 	var envOverrides []string
-	for k := range cfgSetters {
+	for k, key := range cfgSetters {
+		if key.Type == "table" {
+			continue
+		}
 		if v, exists := os.LookupEnv(c.envPfx + strings.ToUpper(k)); exists {
 			envOverrides = append(envOverrides, k+"="+v)
 		}

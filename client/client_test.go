@@ -566,3 +566,83 @@ func TestCfgFileLaysOverDefaults(t *testing.T) {
 		})
 	}
 }
+
+func TestApplyCfgOptsUnsetAndBools(t *testing.T) {
+	tlsOn := func() Cfg { return Cfg{TLS: &CfgTLS{InsecureSkipVerify: true, CACert: "/ca"}} }
+	sasl := func() Cfg { return Cfg{SASL: &CfgSASL{Method: "plain", User: "u", Pass: "p"}} }
+	for _, test := range []struct {
+		name    string
+		start   Cfg
+		opts    []string
+		want    Cfg
+		wantErr string
+	}{
+		{name: "false does not create the tls table", opts: []string{"tls.insecure=false"}, want: Cfg{}},
+		{name: "false on an existing table", start: tlsOn(), opts: []string{"tls.insecure=false"}, want: Cfg{TLS: &CfgTLS{CACert: "/ca"}}},
+		{name: "bare boolean means true", opts: []string{"tls.insecure"}, want: Cfg{TLS: &CfgTLS{InsecureSkipVerify: true}}},
+		{name: "empty boolean unsets", start: tlsOn(), opts: []string{"tls.insecure="}, want: Cfg{TLS: &CfgTLS{CACert: "/ca"}}},
+		{name: "bad boolean", opts: []string{"tls.insecure=maybe"}, wantErr: "invalid boolean"},
+		{name: "empty string unsets and keeps the table", start: sasl(), opts: []string{"sasl.user="}, want: Cfg{SASL: &CfgSASL{Method: "plain", Pass: "p"}}},
+		{name: "unsetting in an absent table stays absent", opts: []string{"sasl.user="}, want: Cfg{}},
+		{name: "table removal", start: sasl(), opts: []string{"sasl="}, want: Cfg{}},
+		{name: "table with a value", opts: []string{"sasl=x"}, wantErr: "is a table"},
+		{name: "slice unset", start: Cfg{SeedBrokers: []string{"a:1"}}, opts: []string{"seed_brokers="}, want: Cfg{}},
+		{name: "slice with an empty element", opts: []string{"seed_brokers=a,,b"}, wantErr: "invalid empty value"},
+		{name: "duration unset", start: Cfg{BrokerTimeout: Dur(time.Second)}, opts: []string{"broker_timeout="}, want: Cfg{}},
+		{name: "duration zero is set", opts: []string{"broker_timeout=0s"}, want: Cfg{BrokerTimeout: Dur(0)}},
+		{name: "use_tls bare", opts: []string{"use_tls"}, want: Cfg{TLS: &CfgTLS{}}},
+		{name: "use_tls false removes the table", start: tlsOn(), opts: []string{"use_tls=false"}, want: Cfg{}},
+		{name: "registry tls removal keeps the registry", start: Cfg{SR: &CfgSR{URLs: []string{"http://sr"}, TLS: &CfgTLS{CACert: "/ca"}}}, opts: []string{"registry.tls="}, want: Cfg{SR: &CfgSR{URLs: []string{"http://sr"}}}},
+		{name: "registry tls key creates both tables", opts: []string{"registry.tls.insecure"}, want: Cfg{SR: &CfgSR{TLS: &CfgTLS{InsecureSkipVerify: true}}}},
+		{name: "bare non-boolean", opts: []string{"sasl.user"}, wantErr: "needs a value; sasl.user= unsets it"},
+		{name: "unknown key points at profile keys", opts: []string{"sasl.usr=me"}, wantErr: "kcl profile keys"},
+		{name: "legacy underscore form", opts: []string{"sasl_user=me"}, want: Cfg{SASL: &CfgSASL{User: "me"}}},
+		{name: "renamed timeout_ms still explains itself", opts: []string{"timeout_ms=5000"}, wantErr: "renamed to broker_timeout"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := test.start
+			err := ApplyCfgOpts(&cfg, test.opts)
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("err = %v, want containing %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(cfg, test.want) {
+				t.Errorf("got %+v tls=%+v sasl=%+v sr=%+v\nwant %+v", cfg, cfg.TLS, cfg.SASL, cfg.SR, test.want)
+			}
+		})
+	}
+}
+
+func TestCfgKeysDescribed(t *testing.T) {
+	seen := make(map[string]bool)
+	for _, k := range CfgKeys() {
+		if k.Desc == "" {
+			t.Errorf("key %q has no description", k.Name)
+		}
+		if seen[normCfgKey(k.Name)] {
+			t.Errorf("key %q collides with another after normalization", k.Name)
+		}
+		seen[normCfgKey(k.Name)] = true
+	}
+	if !seen["sasl_user"] || !seen["registry_tls_ca_cert_path"] || seen["timeout_ms"] {
+		t.Errorf("unexpected key set: %v", seen)
+	}
+}
+
+// TestEnvSkipsTableKeys pins that KCL_TLS or KCL_SASL in the environment,
+// which would only ever be a mistake, is not read as a table removal.
+func TestEnvSkipsTableKeys(t *testing.T) {
+	t.Setenv("KCL_TLS", "1")
+	t.Setenv("KCL_SASL", "1")
+	t.Setenv("KCL_SASL_USER", "env")
+	c := &Client{envPfx: "KCL_", format: "text", cfg: Cfg{TLS: &CfgTLS{CACert: "/ca"}}}
+	c.processOverrides()
+	if c.cfg.TLS == nil || c.cfg.SASL == nil || c.cfg.SASL.User != "env" {
+		t.Errorf("cfg tls=%+v sasl=%+v", c.cfg.TLS, c.cfg.SASL)
+	}
+}
