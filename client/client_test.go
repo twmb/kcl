@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -746,6 +747,13 @@ func TestXListAndHelpCoverEveryKey(t *testing.T) {
 	}
 	if !strings.Contains(list, "sasl=\n") {
 		t.Error("a table key should print as NAME= with nothing after")
+	}
+	keys := CfgKeys()
+	if !slices.IsSortedFunc(keys, func(a, b CfgKey) int { return strings.Compare(a.Name, b.Name) }) {
+		t.Error("keys are not sorted by name")
+	}
+	if i := strings.Index(list, "\nregistry.tls=\n"); i < 0 || !strings.HasPrefix(list[i+len("\nregistry.tls=\n"):], "registry.tls.ca_cert_path=") {
+		t.Error("a table key should directly precede its own keys")
 	}
 	for _, line := range strings.Split(help, "\n") {
 		if len(line) > 80 {

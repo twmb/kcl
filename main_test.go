@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 
@@ -129,7 +130,7 @@ func TestXCompletionRegistered(t *testing.T) {
 		t.Fatal("no completion registered for -X")
 	}
 	got, _ := f(root, nil, "")
-	if len(got) == 0 || !strings.HasPrefix(got[0], "seed_brokers=\t") {
+	if len(got) == 0 || got[0] != "broker_timeout=\t5s" || !slices.Contains(got, "seed_brokers=\thost1:9092,host2:9092") {
 		t.Errorf("completions = %v", got)
 	}
 }

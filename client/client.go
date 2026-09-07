@@ -643,7 +643,8 @@ func (c *Client) MaybeXHelp() bool {
 	return true
 }
 
-// CfgKeys returns every -X key kcl accepts, in display order.
+// CfgKeys returns every -X key kcl accepts, sorted by name, which keeps a
+// table key directly ahead of its own keys.
 func CfgKeys() []CfgKey {
 	var keys []CfgKey
 	for _, k := range cfgKeys {
@@ -651,6 +652,7 @@ func CfgKeys() []CfgKey {
 			keys = append(keys, k)
 		}
 	}
+	slices.SortFunc(keys, func(a, b CfgKey) int { return strings.Compare(a.Name, b.Name) })
 	return keys
 }
 
@@ -815,7 +817,7 @@ func tlsKeys(prefix string, t cfgTable, tls func(*Cfg) *CfgTLS, who string) []Cf
 	}
 }
 
-// cfgKeys is every -X key, in the order kcl -X help lists them.
+// cfgKeys is every -X key. CfgKeys sorts them for display.
 var cfgKeys = func() []CfgKey {
 	keys := []CfgKey{
 		list("seed_brokers", "host1:9092,host2:9092", "Brokers to connect to, host:port, comma separated. Any one of them is enough to find the rest. Default localhost:9092.", topTable, func(c *Cfg) *[]string { return &c.SeedBrokers }),
