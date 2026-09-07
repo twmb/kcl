@@ -796,3 +796,39 @@ func TestMaybeXHelp(t *testing.T) {
 		})
 	}
 }
+
+func TestDiskCfgKeepsReferences(t *testing.T) {
+	t.Setenv("KCL_TEST_PASS", "s3cret")
+	c := &Client{noCfgFile: true, format: "text", envPfx: "KCL_", flagOverrides: []string{"sasl.method=plain", "sasl.pass=${KCL_TEST_PASS}", "seed_brokers=${KCL_TEST_PASS}.example:1"}, cfg: defaultCfg()}
+	c.loadCfg()
+	if c.cfg.SASL.Pass != "s3cret" || c.cfg.SeedBrokers[0] != "s3cret.example:1" {
+		t.Errorf("running cfg not expanded: %+v %v", c.cfg.SASL, c.cfg.SeedBrokers)
+	}
+	if c.cfgWritten.SASL.Pass != "${KCL_TEST_PASS}" || c.cfgWritten.SeedBrokers[0] != "${KCL_TEST_PASS}.example:1" || c.cfgWritten.SASL.Method != "plain" {
+		t.Errorf("written cfg changed: %+v %v", c.cfgWritten.SASL, c.cfgWritten.SeedBrokers)
+	}
+}
+
+func TestCfgCloneIsDeep(t *testing.T) {
+	orig := Cfg{
+		SeedBrokers:   []string{"a:1"},
+		BrokerTimeout: Dur(time.Second),
+		TLS:           &CfgTLS{CACert: "/ca", CipherSuites: []string{"x"}},
+		SASL:          &CfgSASL{User: "u"},
+		SR:            &CfgSR{URLs: []string{"http://sr"}, TLS: &CfgTLS{ServerName: "sr"}},
+	}
+	c := orig.clone()
+	if !reflect.DeepEqual(c, orig) {
+		t.Fatalf("clone differs: %+v vs %+v", c, orig)
+	}
+	c.SeedBrokers[0] = "changed"
+	*c.BrokerTimeout = Duration(2 * time.Second)
+	c.TLS.CACert = "changed"
+	c.TLS.CipherSuites[0] = "changed"
+	c.SASL.User = "changed"
+	c.SR.URLs[0] = "changed"
+	c.SR.TLS.ServerName = "changed"
+	if orig.SeedBrokers[0] != "a:1" || orig.BrokerTimeout.D() != time.Second || orig.TLS.CACert != "/ca" || orig.TLS.CipherSuites[0] != "x" || orig.SASL.User != "u" || orig.SR.URLs[0] != "http://sr" || orig.SR.TLS.ServerName != "sr" {
+		t.Errorf("mutating the clone reached the original: %+v tls=%+v sasl=%+v sr=%+v", orig, orig.TLS, orig.SASL, orig.SR)
+	}
+}

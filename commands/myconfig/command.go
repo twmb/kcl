@@ -376,7 +376,7 @@ func createProfile(path, name string, cfg client.Cfg) (bool, error) {
 func dumpCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "dump",
-		Short: "Dump the loaded configuration",
+		Short: "Dump the loaded configuration, with ${NAME} references as written.",
 		Args:  cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
 			toml.NewEncoder(os.Stdout).Encode(cl.DiskCfg())

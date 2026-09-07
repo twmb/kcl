@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -180,6 +181,7 @@ type Client struct {
 	profileName      string   // --context/-C override
 	cfgFile          CfgFile
 	cfg              Cfg
+	cfgWritten       Cfg // cfg before ${NAME} expansion, for profile dump
 }
 
 // Format returns the output format: "text", "json", or "awk".
@@ -301,10 +303,48 @@ func (c *Client) GroupTransactSession() *kgo.GroupTransactSession {
 	return c.txnSess
 }
 
-// DiskCfg returns the loaded disk configuration.
+// DiskCfg returns the configuration as written, with ${NAME} references
+// unexpanded, so that showing it does not show a secret.
 func (c *Client) DiskCfg() Cfg {
 	c.loadClientOnce()
-	return c.cfg
+	return c.cfgWritten
+}
+
+// clone returns a deep copy of c, so that expanding one does not touch the
+// other.
+func (c Cfg) clone() Cfg {
+	cloneTLS := func(t *CfgTLS) *CfgTLS {
+		if t == nil {
+			return nil
+		}
+		d := *t
+		d.CipherSuites = slices.Clone(t.CipherSuites)
+		d.CurvePreferences = slices.Clone(t.CurvePreferences)
+		return &d
+	}
+	d := c
+	d.SeedBrokers = slices.Clone(c.SeedBrokers)
+	if c.BrokerTimeout != nil {
+		d.BrokerTimeout = Dur(c.BrokerTimeout.D())
+	}
+	if c.DialTimeout != nil {
+		d.DialTimeout = Dur(c.DialTimeout.D())
+	}
+	if c.RetryTimeout != nil {
+		d.RetryTimeout = Dur(c.RetryTimeout.D())
+	}
+	d.TLS = cloneTLS(c.TLS)
+	if c.SASL != nil {
+		sasl := *c.SASL
+		d.SASL = &sasl
+	}
+	if c.SR != nil {
+		sr := *c.SR
+		sr.URLs = slices.Clone(c.SR.URLs)
+		sr.TLS = cloneTLS(c.SR.TLS)
+		d.SR = &sr
+	}
+	return d
 }
 
 // DefaultCfgPath returns the default path that is used to load configs.
@@ -349,6 +389,7 @@ func (c *Client) loadCfg() {
 	c.cfgOnce.Do(func() {
 		c.parseCfgFile()     // loads config file if needed
 		c.processOverrides() // overrides config values just loaded
+		c.cfgWritten = c.cfg.clone()
 		if err := expandEnvRefs(&c.cfg); err != nil {
 			out.Die("%s", err)
 		}
