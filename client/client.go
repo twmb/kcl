@@ -794,18 +794,17 @@ func parseBoolOpt(v string) (bool, error) {
 	return b, nil
 }
 
-func tlsKeys(prefix string, t cfgTable, tls func(*Cfg) *CfgTLS, who string) []CfgKey {
-	d := func(desc string) string { return who + desc }
+func tlsKeys(prefix string, t cfgTable, tls func(*Cfg) *CfgTLS, what string) []CfgKey {
 	return []CfgKey{
-		table(prefix, d("The TLS table; "+prefix+"= turns TLS off."), t),
-		str(prefix+".ca_cert_path", "/etc/kafka/ca.pem", d("CA certificate, PEM."), t, func(c *Cfg) *string { return &tls(c).CACert }),
-		str(prefix+".client_cert_path", "/etc/kafka/client.pem", d("Client certificate, PEM, for mTLS."), t, func(c *Cfg) *string { return &tls(c).ClientCertPath }),
-		str(prefix+".client_key_path", "/etc/kafka/client.key", d("Client key, PEM, for mTLS."), t, func(c *Cfg) *string { return &tls(c).ClientKeyPath }),
-		str(prefix+".server_name", "kafka.example.com", d("Name to verify the certificate against, if not the host dialed."), t, func(c *Cfg) *string { return &tls(c).ServerName }),
-		boolean(prefix+".insecure", d("Skip certificate verification."), t, func(c *Cfg) *bool { return &tls(c).InsecureSkipVerify }),
-		str(prefix+".min_version", "1.3", d("1.0, 1.1, 1.2, or 1.3. Default 1.2."), t, func(c *Cfg) *string { return &tls(c).MinVersion }),
-		list(prefix+".cipher_suites", "TLS_AES_128_GCM_SHA256,TLS_AES_256_GCM_SHA384", d("Go cipher suite names, comma separated."), t, func(c *Cfg) *[]string { return &tls(c).CipherSuites }),
-		list(prefix+".curve_preferences", "X25519,P256", d("Curve names, comma separated."), t, func(c *Cfg) *[]string { return &tls(c).CurvePreferences }),
+		table(prefix, "Turns "+what+" off (removes every "+prefix+".* key).", t),
+		str(prefix+".ca_cert_path", "/etc/kafka/ca.pem", "CA certificate, PEM.", t, func(c *Cfg) *string { return &tls(c).CACert }),
+		str(prefix+".client_cert_path", "/etc/kafka/client.pem", "Client certificate, PEM, for mTLS.", t, func(c *Cfg) *string { return &tls(c).ClientCertPath }),
+		str(prefix+".client_key_path", "/etc/kafka/client.key", "Client key, PEM, for mTLS.", t, func(c *Cfg) *string { return &tls(c).ClientKeyPath }),
+		str(prefix+".server_name", "kafka.example.com", "Name to verify the certificate against, if not the host dialed.", t, func(c *Cfg) *string { return &tls(c).ServerName }),
+		boolean(prefix+".insecure", "Skip certificate verification.", t, func(c *Cfg) *bool { return &tls(c).InsecureSkipVerify }),
+		str(prefix+".min_version", "1.3", "1.0, 1.1, 1.2, or 1.3. Default 1.2.", t, func(c *Cfg) *string { return &tls(c).MinVersion }),
+		list(prefix+".cipher_suites", "TLS_AES_128_GCM_SHA256,TLS_AES_256_GCM_SHA384", "Go cipher suite names, comma separated.", t, func(c *Cfg) *[]string { return &tls(c).CipherSuites }),
+		list(prefix+".curve_preferences", "X25519,P256", "Curve names, comma separated.", t, func(c *Cfg) *[]string { return &tls(c).CurvePreferences }),
 	}
 }
 
@@ -832,22 +831,22 @@ var cfgKeys = func() []CfgKey {
 			return nil
 		}},
 	}
-	keys = append(keys, tlsKeys("tls", tlsTable, func(c *Cfg) *CfgTLS { return c.TLS }, "")...)
+	keys = append(keys, tlsKeys("tls", tlsTable, func(c *Cfg) *CfgTLS { return c.TLS }, "TLS")...)
 	keys = append(keys,
-		table("sasl", "The SASL table; sasl= turns SASL off.", saslTable),
+		table("sasl", "Turns SASL off (removes every sasl.* key).", saslTable),
 		str("sasl.method", "scram-sha-256", "plain, scram-sha-256, scram-sha-512, or aws_msk_iam.", saslTable, func(c *Cfg) *string { return &c.SASL.Method }),
 		str("sasl.zid", "", "Authorization id, if not the user.", saslTable, func(c *Cfg) *string { return &c.SASL.Zid }),
 		str("sasl.user", "alice", "User name.", saslTable, func(c *Cfg) *string { return &c.SASL.User }),
 		str("sasl.pass", "${KAFKA_PASS}", "Password.", saslTable, func(c *Cfg) *string { return &c.SASL.Pass }),
 		boolean("sasl.is_token", "The password is a delegation token.", saslTable, func(c *Cfg) *bool { return &c.SASL.IsToken }),
-		table("registry", "The schema registry table; registry= removes it.", srTable),
+		table("registry", "Removes every registry.* key.", srTable),
 		list("registry.urls", "http://sr1:8081,http://sr2:8081", "Registry URLs, comma separated. Default http://localhost:8081.", srTable, func(c *Cfg) *[]string { return &c.SR.URLs }),
 		str("registry.user", "alice", "Basic auth user name.", srTable, func(c *Cfg) *string { return &c.SR.User }),
 		str("registry.pass", "${SR_PASS}", "Basic auth password.", srTable, func(c *Cfg) *string { return &c.SR.Pass }),
 		str("registry.bearer_token", "${SR_TOKEN}", "Bearer token, in place of basic auth.", srTable, func(c *Cfg) *string { return &c.SR.BearerToken }),
 		str("registry.context", ".mycontext", "Registry context.", srTable, func(c *Cfg) *string { return &c.SR.Context }),
 	)
-	keys = append(keys, tlsKeys("registry.tls", srTLSTable, func(c *Cfg) *CfgTLS { return c.SR.TLS }, "Registry: ")...)
+	keys = append(keys, tlsKeys("registry.tls", srTLSTable, func(c *Cfg) *CfgTLS { return c.SR.TLS }, "registry TLS")...)
 	return keys
 }()
 
