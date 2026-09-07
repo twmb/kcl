@@ -202,7 +202,7 @@ times. If the parser needs more data than available, or if more input remains
 after '$', an error message will be appended.
 
 
-EXAMPLES
+EXAMPLES:
 
 Default (value only, newline-delimited):
   -f '%v\n'

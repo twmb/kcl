@@ -135,7 +135,7 @@ As well, these text options can be parsed with regular expressions:
   %k{re[\d*]}%v{re[\s+]}
 
 
-EXAMPLES
+EXAMPLES:
 
 To read a newline delimited file, each line a record (no keys):
   -f '%v\n'
