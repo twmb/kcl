@@ -549,35 +549,30 @@ func XCompletions() []string {
 	return cs
 }
 
-const xHelpIntro = `-X KEY=VALUE sets one configuration key for this command and may be
-repeated. The same keys are read from the environment as KCL_<KEY>, with dots
-as underscores (KCL_SASL_USER), and from the config file, where a profile is a
-[profiles.NAME] table. Flags win over the environment, which wins over the
-file, which wins over the defaults; only keys that are set take effect.
+const xHelpIntro = `-X KEY=VALUE sets one key for this command; repeat it for more. The same
+keys come from the environment as KCL_<KEY> (dots as underscores:
+KCL_SASL_USER) and from the config file. Flags beat the environment, which
+beats the file, which beats the defaults; only set keys take effect.
 
 A bool given bare is true (-X tls.insecure); =false or an empty value
-(-X sasl.pass=) unsets the key. The table keys tls, sasl, registry, and
-registry.tls take only the empty value and remove the whole table. A value
-may reference an environment variable as ${NAME}; $${ is a literal ${. A
-config file can name any environment variable this way, so treat a file you
-did not write like a script.
+(-X sasl.pass=) unsets the key. tls=, sasl=, registry=, and registry.tls=
+remove a whole table. ${NAME} in a value reads the environment; $${ is a
+literal ${. A config file can read any environment variable this way, so
+treat one you did not write like a script.
 
--X list prints the keys alone. --format json or awk prints them as data.
-Each key below is shown with an example value.
+-X list prints the keys alone; --format json or awk prints them as data.
 `
 
 const xHelpTimeouts = `TIMEOUTS
 
-dial_timeout is caller side, per TCP dial attempt. retry_timeout is client
-side and gates whether to START a retry; it is not a wall clock budget, so an
-in-flight attempt is not cancelled when it elapses. broker_timeout is sent to
-the broker and enforced there, only on requests that carry a TimeoutMs field.
+dial_timeout bounds one TCP dial. retry_timeout gates whether to start a
+retry; an attempt in flight is not cancelled when it elapses. broker_timeout
+is enforced by the broker, on requests that carry a TimeoutMs field.
 
 Keep dial_timeout <= broker_timeout <= retry_timeout. retry_timeout is only
-consulted when an attempt errors, so a slow but successful reply still
-succeeds and one retry can run to about twice broker_timeout in total. If
-dial_timeout is at or above retry_timeout, one failed dial uses the whole
-retry budget and nothing is retried.
+checked when an attempt errors, so one retry can take about twice
+broker_timeout. If dial_timeout is at or above retry_timeout, one failed
+dial spends the retry budget and nothing is retried.
 `
 
 // XHelp renders the long form of -X help: an intro, every key as
@@ -805,29 +800,29 @@ func parseBoolOpt(v string) (bool, error) {
 func tlsKeys(prefix string, t cfgTable, tls func(*Cfg) *CfgTLS, who string) []CfgKey {
 	d := func(desc string) string { return who + desc }
 	return []CfgKey{
-		table(prefix, d("The TLS table. Setting any "+prefix+".* key turns TLS on; "+prefix+"= removes the table, turning it off."), t),
-		str(prefix+".ca_cert_path", "/etc/kafka/ca.pem", d("PEM file holding the CA that signed the server certificates. Needed when the CA is not in the system roots."), t, func(c *Cfg) *string { return &tls(c).CACert }),
-		str(prefix+".client_cert_path", "/etc/kafka/client.pem", d("PEM client certificate, for mutual TLS. Set with "+prefix+".client_key_path."), t, func(c *Cfg) *string { return &tls(c).ClientCertPath }),
-		str(prefix+".client_key_path", "/etc/kafka/client.key", d("PEM client key, for mutual TLS."), t, func(c *Cfg) *string { return &tls(c).ClientKeyPath }),
-		str(prefix+".server_name", "kafka.example.com", d("Name to verify the server certificate against, when it is not the host dialed."), t, func(c *Cfg) *string { return &tls(c).ServerName }),
-		boolean(prefix+".insecure", d("Skip certificate verification. The connection is still encrypted, but anyone can sit in the middle of it."), t, func(c *Cfg) *bool { return &tls(c).InsecureSkipVerify }),
-		str(prefix+".min_version", "1.3", d("Lowest TLS version accepted: 1.0, 1.1, 1.2, or 1.3. Default 1.2."), t, func(c *Cfg) *string { return &tls(c).MinVersion }),
-		list(prefix+".cipher_suites", "TLS_AES_128_GCM_SHA256,TLS_AES_256_GCM_SHA384", d("Cipher suites allowed, by Go name, comma separated. Default is Go's list."), t, func(c *Cfg) *[]string { return &tls(c).CipherSuites }),
-		list(prefix+".curve_preferences", "X25519,P256", d("Curves allowed for key exchange, comma separated. Default is Go's list."), t, func(c *Cfg) *[]string { return &tls(c).CurvePreferences }),
+		table(prefix, d("The TLS table; "+prefix+"= turns TLS off."), t),
+		str(prefix+".ca_cert_path", "/etc/kafka/ca.pem", d("CA certificate, PEM."), t, func(c *Cfg) *string { return &tls(c).CACert }),
+		str(prefix+".client_cert_path", "/etc/kafka/client.pem", d("Client certificate, PEM, for mTLS."), t, func(c *Cfg) *string { return &tls(c).ClientCertPath }),
+		str(prefix+".client_key_path", "/etc/kafka/client.key", d("Client key, PEM, for mTLS."), t, func(c *Cfg) *string { return &tls(c).ClientKeyPath }),
+		str(prefix+".server_name", "kafka.example.com", d("Name to verify the certificate against, if not the host dialed."), t, func(c *Cfg) *string { return &tls(c).ServerName }),
+		boolean(prefix+".insecure", d("Skip certificate verification."), t, func(c *Cfg) *bool { return &tls(c).InsecureSkipVerify }),
+		str(prefix+".min_version", "1.3", d("1.0, 1.1, 1.2, or 1.3. Default 1.2."), t, func(c *Cfg) *string { return &tls(c).MinVersion }),
+		list(prefix+".cipher_suites", "TLS_AES_128_GCM_SHA256,TLS_AES_256_GCM_SHA384", d("Go cipher suite names, comma separated."), t, func(c *Cfg) *[]string { return &tls(c).CipherSuites }),
+		list(prefix+".curve_preferences", "X25519,P256", d("Curve names, comma separated."), t, func(c *Cfg) *[]string { return &tls(c).CurvePreferences }),
 	}
 }
 
 // cfgKeys is every -X key. CfgKeys sorts them for display.
 var cfgKeys = func() []CfgKey {
 	keys := []CfgKey{
-		list("seed_brokers", "host1:9092,host2:9092", "Brokers to connect to, host:port, comma separated. Any one of them is enough to find the rest. Default localhost:9092.", topTable, func(c *Cfg) *[]string { return &c.SeedBrokers }),
-		duration("broker_timeout", "5s", "How long the broker may spend on an admin request such as creating a topic, sent as the wire TimeoutMs. Default 5s.", func(c *Cfg) **Duration { return &c.BrokerTimeout }),
-		duration("dial_timeout", "2s", "Bound on one TCP dial. Unset uses kgo's 10s.", func(c *Cfg) **Duration { return &c.DialTimeout }),
-		duration("retry_timeout", "30s", "Bound on a request and its retries. Unset uses kgo's 30s, 45s for group requests.", func(c *Cfg) **Duration { return &c.RetryTimeout }),
+		list("seed_brokers", "host1:9092,host2:9092", "Brokers, comma separated. Default localhost:9092.", topTable, func(c *Cfg) *[]string { return &c.SeedBrokers }),
+		duration("broker_timeout", "5s", "Wire TimeoutMs on admin requests. Default 5s.", func(c *Cfg) **Duration { return &c.BrokerTimeout }),
+		duration("dial_timeout", "2s", "Bound on one TCP dial. Default 10s.", func(c *Cfg) **Duration { return &c.DialTimeout }),
+		duration("retry_timeout", "30s", "Bound on a request and its retries. Default 30s, 45s for group requests.", func(c *Cfg) **Duration { return &c.RetryTimeout }),
 		{Name: "timeout_ms", hidden: true, set: func(*Cfg, string) error {
 			return fmt.Errorf("timeout_ms was renamed to broker_timeout and now takes a Go duration (e.g. -X broker_timeout=5s); please update your config or -X flags")
 		}},
-		{Name: "use_tls", Example: "true", Type: "bool", Desc: "true turns TLS on with the system roots; false removes the tls table. Setting any tls.* key turns TLS on as well.", set: func(c *Cfg, v string) error {
+		{Name: "use_tls", Example: "true", Type: "bool", Desc: "TLS with the system roots. Any tls.* key implies it.", set: func(c *Cfg, v string) error {
 			b, err := parseBoolOpt(v)
 			if err != nil {
 				return err
@@ -842,18 +837,18 @@ var cfgKeys = func() []CfgKey {
 	}
 	keys = append(keys, tlsKeys("tls", tlsTable, func(c *Cfg) *CfgTLS { return c.TLS }, "")...)
 	keys = append(keys,
-		table("sasl", "The SASL table. sasl= removes it, turning authentication off.", saslTable),
-		str("sasl.method", "scram-sha-256", "plain, scram-sha-256, scram-sha-512, or aws_msk_iam; case and dashes do not matter.", saslTable, func(c *Cfg) *string { return &c.SASL.Method }),
-		str("sasl.zid", "", "Authorization id, when it differs from the user. Rarely needed.", saslTable, func(c *Cfg) *string { return &c.SASL.Zid }),
+		table("sasl", "The SASL table; sasl= turns SASL off.", saslTable),
+		str("sasl.method", "scram-sha-256", "plain, scram-sha-256, scram-sha-512, or aws_msk_iam.", saslTable, func(c *Cfg) *string { return &c.SASL.Method }),
+		str("sasl.zid", "", "Authorization id, if not the user.", saslTable, func(c *Cfg) *string { return &c.SASL.Zid }),
 		str("sasl.user", "alice", "User name.", saslTable, func(c *Cfg) *string { return &c.SASL.User }),
-		str("sasl.pass", "${KAFKA_PASS}", "Password. A reference like ${KAFKA_PASS} reads the environment when kcl starts, so the password need not sit in the file.", saslTable, func(c *Cfg) *string { return &c.SASL.Pass }),
+		str("sasl.pass", "${KAFKA_PASS}", "Password.", saslTable, func(c *Cfg) *string { return &c.SASL.Pass }),
 		boolean("sasl.is_token", "The password is a delegation token.", saslTable, func(c *Cfg) *bool { return &c.SASL.IsToken }),
-		table("registry", "The schema registry table. registry= removes it.", srTable),
-		list("registry.urls", "http://sr1:8081,http://sr2:8081", "Schema registry URLs, comma separated. Default http://localhost:8081.", srTable, func(c *Cfg) *[]string { return &c.SR.URLs }),
+		table("registry", "The schema registry table; registry= removes it.", srTable),
+		list("registry.urls", "http://sr1:8081,http://sr2:8081", "Registry URLs, comma separated. Default http://localhost:8081.", srTable, func(c *Cfg) *[]string { return &c.SR.URLs }),
 		str("registry.user", "alice", "Basic auth user name.", srTable, func(c *Cfg) *string { return &c.SR.User }),
 		str("registry.pass", "${SR_PASS}", "Basic auth password.", srTable, func(c *Cfg) *string { return &c.SR.Pass }),
 		str("registry.bearer_token", "${SR_TOKEN}", "Bearer token, in place of basic auth.", srTable, func(c *Cfg) *string { return &c.SR.BearerToken }),
-		str("registry.context", ".mycontext", "Registry context that scopes every request.", srTable, func(c *Cfg) *string { return &c.SR.Context }),
+		str("registry.context", ".mycontext", "Registry context.", srTable, func(c *Cfg) *string { return &c.SR.Context }),
 	)
 	keys = append(keys, tlsKeys("registry.tls", srTLSTable, func(c *Cfg) *CfgTLS { return c.SR.TLS }, "Registry: ")...)
 	return keys

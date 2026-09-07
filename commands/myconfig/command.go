@@ -207,9 +207,8 @@ func setCommand(cl *client.Client) *cobra.Command {
 		Long: `Set keys in a profile from the -B, -X, and -R flags.
 
 The current profile is changed unless -C names another; a config without
-profiles is edited at the top level. The flags are the ones create builds a
-profile from, so anything that works as a one-off override can be saved.
-Nothing is written unless every flag parses.
+profiles is edited at the top level. Nothing is written unless every flag
+parses.
 
 EXAMPLES:
   kcl profile set -B k1:9092,k2:9092
@@ -472,9 +471,8 @@ PRIORITY (highest wins)
   3. The profile, or the top level keys of a file without profiles
   4. Built-in defaults
 
-Only keys that are set take effect at each level; a key written as zero is
-zero. "kcl -X help" describes every key and "kcl -X list" names them;
-"kcl profile dump" shows the result.
+Only set keys take effect. "kcl -X help" describes every key; "kcl profile
+dump" shows the result.
 
 EXAMPLES:
   kcl profile create prod -B k1:9092,k2:9092 -X sasl.method=scram-sha-256 -X sasl.user=me -X sasl.pass='${KAFKA_PASS}'
