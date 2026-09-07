@@ -206,6 +206,8 @@ Command completion is available at:
 	// We look for the flag in the arguments rather than parsing them: Execute
 	// parses again, and slice flags such as -B append on every parse, so
 	// parsing twice doubled every seed broker.
+	usageErrors(root)
+
 	if wantsHelpJSON(os.Args[1:]) {
 		tree := buildCommandJSON(root, false)
 		enc := json.NewEncoder(os.Stdout)
@@ -215,8 +217,38 @@ Command completion is available at:
 	}
 
 	if err := root.Execute(); err != nil {
-		out.HandleError(err, cl.Format())
+		out.HandleError(asUsageError(err), cl.Format())
 	}
+}
+
+// usageErrors wraps every command's argument validator and the flag error
+// handler so that cobra's own errors, a bad argument count or an unknown
+// flag, exit 2 like every other usage error.
+func usageErrors(root *cobra.Command) {
+	allCommands(root, func(cmd *cobra.Command) {
+		validate := cmd.Args
+		if validate == nil {
+			return
+		}
+		cmd.Args = func(c *cobra.Command, args []string) error {
+			if err := validate(c, args); err != nil {
+				return out.Errf(out.ExitUsage, "%v", err)
+			}
+			return nil
+		}
+	})
+	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+		return out.Errf(out.ExitUsage, "%v", err)
+	})
+}
+
+// asUsageError marks cobra's unknown command error, which no hook of ours
+// can produce, as a usage error.
+func asUsageError(err error) error {
+	if err != nil && strings.HasPrefix(err.Error(), "unknown command ") {
+		return out.Errf(out.ExitUsage, "%v", err)
+	}
+	return err
 }
 
 func allCommands(root *cobra.Command, fn func(*cobra.Command)) {
