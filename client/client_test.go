@@ -482,23 +482,26 @@ func TestCfgEncodeOmitsZeroDurations(t *testing.T) {
 
 func TestApplyFlagsKeysAndPreservation(t *testing.T) {
 	c := &Client{
-		flagOverrides:    []string{"sasl.user=me", "sasl_pass=pw"},
+		flagOverrides:    []string{"sasl.user=me", "sasl_pass=pw", "dial_timeout="},
 		bootstrapServers: []string{"a:9092"},
 		registryURLs:     []string{"http://sr:8081"},
 	}
-	cfg := Cfg{SeedBrokers: []string{"old:9092"}, BrokerTimeout: Dur(10 * time.Second)}
-	keys, err := c.ApplyFlags(&cfg)
+	cfg := Cfg{SeedBrokers: []string{"old:9092"}, BrokerTimeout: Dur(10 * time.Second), DialTimeout: Dur(time.Second)}
+	set, unset, err := c.ApplyFlags(&cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"sasl.user", "sasl_pass", "seed_brokers", "registry.urls"}; !reflect.DeepEqual(keys, want) {
-		t.Errorf("keys = %v, want %v", keys, want)
+	if want := []string{"sasl.user", "sasl_pass", "seed_brokers", "registry.urls"}; !reflect.DeepEqual(set, want) {
+		t.Errorf("set = %v, want %v", set, want)
+	}
+	if want := []string{"dial_timeout"}; !reflect.DeepEqual(unset, want) || cfg.DialTimeout != nil {
+		t.Errorf("unset = %v (dial_timeout=%v), want %v", unset, cfg.DialTimeout, want)
 	}
 	if cfg.BrokerTimeout.D() != 10*time.Second || cfg.SeedBrokers[0] != "a:9092" || cfg.SASL.Pass != "pw" || cfg.SR.URLs[0] != "http://sr:8081" {
 		t.Errorf("cfg = %+v sasl=%+v sr=%+v", cfg, cfg.SASL, cfg.SR)
 	}
-	if keys, err := (&Client{}).ApplyFlags(&Cfg{}); err != nil || len(keys) != 0 {
-		t.Errorf("no flags: keys=%v err=%v", keys, err)
+	if set, unset, err := (&Client{}).ApplyFlags(&Cfg{}); err != nil || len(set)+len(unset) != 0 {
+		t.Errorf("no flags: set=%v unset=%v err=%v", set, unset, err)
 	}
 }
 
@@ -841,5 +844,20 @@ func TestCfgCloneIsDeep(t *testing.T) {
 	c.SR.TLS.ServerName = "changed"
 	if orig.SeedBrokers[0] != "a:1" || orig.BrokerTimeout.D() != time.Second || orig.TLS.CACert != "/ca" || orig.TLS.CipherSuites[0] != "x" || orig.SASL.User != "u" || orig.SR.URLs[0] != "http://sr" || orig.SR.TLS.ServerName != "sr" {
 		t.Errorf("mutating the clone reached the original: %+v tls=%+v sasl=%+v sr=%+v", orig, orig.TLS, orig.SASL, orig.SR)
+	}
+}
+
+// TestDiskCfgNeedsNoSecrets pins that dump can read a config whose ${NAME}
+// references are unset, and that a client built from it still fails.
+func TestDiskCfgNeedsNoSecrets(t *testing.T) {
+	c := &Client{noCfgFile: true, format: "text", envPfx: "KCL_", flagOverrides: []string{"sasl.method=plain", "sasl.pass=${KCL_TEST_DEFINITELY_UNSET}"}, cfg: defaultCfg()}
+	if got := c.DiskCfg(); got.SASL == nil || got.SASL.Pass != "${KCL_TEST_DEFINITELY_UNSET}" {
+		t.Errorf("DiskCfg = %+v", got.SASL)
+	}
+	if c.expandErr == nil || !strings.Contains(c.expandErr.Error(), "KCL_TEST_DEFINITELY_UNSET") {
+		t.Errorf("expandErr = %v", c.expandErr)
+	}
+	if _, err := c.SchemaRegistryClient(); err == nil || !strings.Contains(err.Error(), "KCL_TEST_DEFINITELY_UNSET") {
+		t.Errorf("registry client err = %v", err)
 	}
 }

@@ -93,7 +93,7 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 			group := &cobra.Command{Use: "group"}
 			group.AddCommand(&cobra.Command{Use: "sub", Run: func(*cobra.Command, []string) {}})
 			root.AddCommand(group)
-			usageErrors(root)
+			usageErrors(root, nil)
 			root.SetArgs(test.args)
 			err := asUsageError(root.Execute())
 			var ce *out.ExitCodeError
@@ -106,16 +106,50 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 		t.Error("nil should stay nil")
 	}
 
-	// A bare group still shows its help and succeeds.
-	root := &cobra.Command{Use: "kcl", SilenceUsage: true, SilenceErrors: true}
-	root.SetOut(io.Discard)
+	// A bare group still shows its help and succeeds, unless the flag check
+	// fails, which is a usage error.
+	for _, test := range []struct {
+		name    string
+		check   func() error
+		wantErr string
+	}{
+		{name: "help", check: nil},
+		{name: "flags ok", check: func() error { return nil }},
+		{name: "bad -X", check: func() error { return errors.New(`unknown opt key "hlep"`) }, wantErr: "hlep"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := &cobra.Command{Use: "kcl", SilenceUsage: true, SilenceErrors: true}
+			root.SetOut(io.Discard)
+			group := &cobra.Command{Use: "group"}
+			group.AddCommand(&cobra.Command{Use: "sub", Run: func(*cobra.Command, []string) {}})
+			root.AddCommand(group)
+			usageErrors(root, test.check)
+			root.SetArgs([]string{"group"})
+			err := root.Execute()
+			if test.wantErr == "" {
+				if err != nil {
+					t.Errorf("bare group: %v", err)
+				}
+				return
+			}
+			var ce *out.ExitCodeError
+			if err == nil || !errors.As(err, &ce) || ce.Code != out.ExitUsage || !strings.Contains(err.Error(), test.wantErr) {
+				t.Errorf("err = %v, want exit 2 containing %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestUsageLineOncePerGroup(t *testing.T) {
+	root := &cobra.Command{Use: "kcl"}
+	root.SetUsageTemplate(usageTmpl)
 	group := &cobra.Command{Use: "group"}
 	group.AddCommand(&cobra.Command{Use: "sub", Run: func(*cobra.Command, []string) {}})
 	root.AddCommand(group)
-	usageErrors(root)
-	root.SetArgs([]string{"group"})
-	if err := root.Execute(); err != nil {
-		t.Errorf("bare group: %v", err)
+	usageErrors(root, nil)
+	got := group.UsageString()
+	if strings.Contains(got, "\n  kcl group\n") || !strings.Contains(got, "\n  kcl group [command]\n") {
+		t.Errorf("usage:\n%s", got)
 	}
 }
 

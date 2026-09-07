@@ -181,7 +181,8 @@ type Client struct {
 	profileName      string   // --context/-C override
 	cfgFile          CfgFile
 	cfg              Cfg
-	cfgWritten       Cfg // cfg before ${NAME} expansion, for profile dump
+	cfgWritten       Cfg   // cfg before ${NAME} expansion, for profile dump
+	expandErr        error // a bad ${NAME} reference, reported when a client is built
 }
 
 // Format returns the output format: "text", "json", or "awk".
@@ -304,9 +305,11 @@ func (c *Client) GroupTransactSession() *kgo.GroupTransactSession {
 }
 
 // DiskCfg returns the configuration as written, with ${NAME} references
-// unexpanded, so that showing it does not show a secret.
+// unexpanded, so that showing it does not show a secret. It reads the file
+// without building a client, so it works with no broker and with the
+// referenced variables unset.
 func (c *Client) DiskCfg() Cfg {
-	c.loadClientOnce()
+	c.loadCfg()
 	return c.cfgWritten
 }
 
@@ -390,14 +393,21 @@ func (c *Client) loadCfg() {
 		c.parseCfgFile()     // loads config file if needed
 		c.processOverrides() // overrides config values just loaded
 		c.cfgWritten = c.cfg.clone()
-		if err := expandEnvRefs(&c.cfg); err != nil {
-			out.Die("%s", err)
-		}
+		c.expandErr = expandEnvRefs(&c.cfg)
 	})
 }
 
+// loadCfgForClient loads the config and dies on a bad ${NAME} reference,
+// which only matters once something is about to be dialed with the result.
+func (c *Client) loadCfgForClient() {
+	c.loadCfg()
+	if c.expandErr != nil {
+		out.Die("%s", c.expandErr)
+	}
+}
+
 func (c *Client) fillOpts() {
-	c.loadCfg()             // loads config file + overrides (once)
+	c.loadCfgForClient()    // loads config file + overrides (once)
 	c.maybeAddMaxVersions() // fills MaxVersions if necessary
 	c.parseLogLevel()       // adds basic logger if necessary
 
@@ -511,7 +521,7 @@ func (c *Client) ProfileName() string {
 
 // LoadedCfgFile returns the full loaded config file (may include contexts).
 func (c *Client) LoadedCfgFile() CfgFile {
-	c.loadClientOnce()
+	c.loadCfg()
 	return c.cfgFile
 }
 
@@ -985,25 +995,28 @@ func (c *Client) processOverrides() {
 }
 
 // ApplyFlags applies the -X, -B, and -R flags to cfg, in that order so the
-// shorthands win, and returns the keys they set. The config file,
-// environment variables, and defaults are not consulted.
-func (c *Client) ApplyFlags(cfg *Cfg) ([]string, error) {
+// shorthands win, and returns the keys they set and the keys they unset. The
+// config file, environment variables, and defaults are not consulted.
+func (c *Client) ApplyFlags(cfg *Cfg) (set, unset []string, err error) {
 	if err := ApplyCfgOpts(cfg, c.flagOverrides); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var keys []string
 	for _, opt := range c.flagOverrides {
-		k, _, _ := strings.Cut(opt, "=")
-		keys = append(keys, k)
+		k, v, hasEq := strings.Cut(opt, "=")
+		if hasEq && v == "" {
+			unset = append(unset, k)
+		} else {
+			set = append(set, k)
+		}
 	}
 	if len(c.bootstrapServers) > 0 {
-		keys = append(keys, "seed_brokers")
+		set = append(set, "seed_brokers")
 	}
 	if len(c.registryURLs) > 0 {
-		keys = append(keys, "registry.urls")
+		set = append(set, "registry.urls")
 	}
 	c.applyShorthandFlags(cfg)
-	return keys, nil
+	return set, unset, nil
 }
 
 // FlagCfg returns the defaults with the -X, -B, and -R flags laid over them.
@@ -1011,7 +1024,7 @@ func (c *Client) ApplyFlags(cfg *Cfg) ([]string, error) {
 // it runs with.
 func (c *Client) FlagCfg() (Cfg, error) {
 	cfg := defaultCfg()
-	if _, err := c.ApplyFlags(&cfg); err != nil {
+	if _, _, err := c.ApplyFlags(&cfg); err != nil {
 		return Cfg{}, err
 	}
 	return cfg, nil
