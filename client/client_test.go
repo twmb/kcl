@@ -1,10 +1,14 @@
 package client
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/BurntSushi/toml"
 )
 
 func TestFormatDefault(t *testing.T) {
@@ -352,5 +356,22 @@ func TestStrnorm(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("Strnorm(%q) = %q, want %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+func TestCfgEncodeOmitsZeroDurations(t *testing.T) {
+	var buf bytes.Buffer
+	err := toml.NewEncoder(&buf).Encode(CfgFile{
+		CurrentProfile: "p",
+		Profiles: map[string]Cfg{
+			"p": {SeedBrokers: []string{"a:9092"}, DialTimeout: Duration(2 * time.Second)},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	if strings.Contains(got, "0s") || strings.Count(got, "_timeout") != 1 || !strings.Contains(got, `dial_timeout = "2s"`) {
+		t.Errorf("unexpected encoding:\n%s", got)
 	}
 }

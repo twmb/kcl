@@ -107,16 +107,16 @@ type Cfg struct {
 	// in admin-style requests (e.g. CreateTopics.TimeoutMs). It
 	// tells the broker how long to wait before giving up on the
 	// server side.
-	BrokerTimeout Duration `toml:"broker_timeout,omitempty"`
+	BrokerTimeout Duration `toml:"broker_timeout,omitzero"`
 
 	// DialTimeout bounds how long kgo waits for a single TCP dial.
 	// Zero leaves kgo's default (10s).
-	DialTimeout Duration `toml:"dial_timeout,omitempty"`
+	DialTimeout Duration `toml:"dial_timeout,omitzero"`
 
 	// RetryTimeout bounds total time for a client request and its
 	// retries. Zero leaves kgo's default (30s for most requests,
 	// 45s for group-session requests).
-	RetryTimeout Duration `toml:"retry_timeout,omitempty"`
+	RetryTimeout Duration `toml:"retry_timeout,omitzero"`
 
 	TLS  *CfgTLS  `toml:"tls,omitzero"`
 	SASL *CfgSASL `toml:"sasl,omitempty"`
