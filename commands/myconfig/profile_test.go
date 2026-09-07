@@ -675,3 +675,20 @@ func TestKeysCommandLists(t *testing.T) {
 		t.Error("the renamed timeout_ms key is listed")
 	}
 }
+
+func TestShellWordAndUniq(t *testing.T) {
+	for in, want := range map[string]string{
+		"prod":       "prod",
+		"with space": "'with space'",
+		"it's":       `'it'\''s'`,
+		"a/b.c:d":    "a/b.c:d",
+		"a$b":        "'a$b'",
+	} {
+		if got := shellWord(in); got != want {
+			t.Errorf("shellWord(%q) = %s, want %s", in, got, want)
+		}
+	}
+	if got := uniq([]string{"seed_brokers", "sasl.user", "seed_brokers"}); len(got) != 2 || got[0] != "seed_brokers" || got[1] != "sasl.user" {
+		t.Errorf("uniq = %v", got)
+	}
+}

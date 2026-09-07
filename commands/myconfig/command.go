@@ -187,7 +187,7 @@ SEE ALSO:
 			if current {
 				fmt.Fprintf(os.Stderr, "Created profile %q in %s; it is now current\n", name, cfgPath)
 			} else {
-				fmt.Fprintf(os.Stderr, "Created profile %q in %s; switch with: kcl profile use %s\n", name, cfgPath, name)
+				fmt.Fprintf(os.Stderr, "Created profile %q in %s; switch with: kcl profile use %s\n", name, cfgPath, shellWord(name))
 			}
 			return nil
 		},
@@ -237,7 +237,7 @@ SEE ALSO:
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(os.Stderr, "Set %s in %s\n", strings.Join(keys, ", "), where)
+			fmt.Fprintf(os.Stderr, "Set %s in %s\n", strings.Join(uniq(keys), ", "), where)
 			return nil
 		},
 	}
@@ -291,6 +291,30 @@ func setProfile(path, name string, apply func(*client.Cfg) error) (string, error
 		return "", err
 	}
 	return fmt.Sprintf("profile %q", name), nil
+}
+
+// uniq drops repeated strings, keeping first positions.
+func uniq(ss []string) []string {
+	seen := make(map[string]bool, len(ss))
+	var out []string
+	for _, s := range ss {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// shellWord quotes s for pasting into a shell when it needs it.
+func shellWord(s string) string {
+	for _, r := range s {
+		plain := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_-./:@+=", r)
+		if !plain {
+			return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+		}
+	}
+	return s
 }
 
 // isFlat reports whether a decoded config uses the flat single cluster

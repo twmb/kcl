@@ -264,7 +264,7 @@ func New(root *cobra.Command) *Client {
 
 	root.PersistentFlags().StringVar(&c.logLevel, "log-level", "none", "log level to use for basic logging (none, error, warn, info, debug)")
 	root.PersistentFlags().StringVar(&c.logFile, "log-file", "STDERR", "log to this file (if log-level is not none; file must not exist; STDERR sets to stderr & STDOUT sets to stdout)")
-	root.PersistentFlags().StringVar(&c.cfgPath, "config-path", c.defaultCfgPath, "path to confile file (lowest priority)")
+	root.PersistentFlags().StringVar(&c.cfgPath, "config-path", c.defaultCfgPath, "path to config file (lowest priority)")
 	root.PersistentFlags().BoolVar(&c.noCfgFile, "no-config-file", false, "do not load any config file")
 	root.PersistentFlags().StringVar(&c.envPfx, "config-env-prefix", "KCL_", "environment variable prefix for config overrides (middle priority)")
 	root.PersistentFlags().StringArrayVarP(&c.flagOverrides, "config-opt", "X", nil, "flag provided config option (highest priority)")
@@ -644,17 +644,18 @@ func parseBoolOpt(v string) (bool, error) {
 	return b, nil
 }
 
-func tlsKeys(prefix string, t cfgTable, tls func(*Cfg) *CfgTLS, suffix string) []CfgKey {
+func tlsKeys(prefix string, t cfgTable, tls func(*Cfg) *CfgTLS, who string) []CfgKey {
+	d := func(desc string) string { return who + desc }
 	return []CfgKey{
-		table(prefix, "The TLS table. "+prefix+"= removes it, turning TLS off"+suffix+".", t),
-		str(prefix+".ca_cert_path", "PEM file holding the CA that signed the server certificates"+suffix+".", t, func(c *Cfg) *string { return &tls(c).CACert }),
-		str(prefix+".client_cert_path", "PEM client certificate, for mutual TLS"+suffix+".", t, func(c *Cfg) *string { return &tls(c).ClientCertPath }),
-		str(prefix+".client_key_path", "PEM client key, for mutual TLS"+suffix+".", t, func(c *Cfg) *string { return &tls(c).ClientKeyPath }),
-		str(prefix+".server_name", "Name to verify the server certificate against, when it is not the host dialed"+suffix+".", t, func(c *Cfg) *string { return &tls(c).ServerName }),
-		boolean(prefix+".insecure", "Skip certificate verification"+suffix+".", t, func(c *Cfg) *bool { return &tls(c).InsecureSkipVerify }),
-		str(prefix+".min_version", "Lowest TLS version accepted: 1.0, 1.1, 1.2, or 1.3. Default 1.2"+suffix+".", t, func(c *Cfg) *string { return &tls(c).MinVersion }),
-		list(prefix+".cipher_suites", "Cipher suites allowed, by Go name, comma separated"+suffix+".", t, func(c *Cfg) *[]string { return &tls(c).CipherSuites }),
-		list(prefix+".curve_preferences", "Curves allowed for key exchange, comma separated"+suffix+".", t, func(c *Cfg) *[]string { return &tls(c).CurvePreferences }),
+		table(prefix, d("The TLS table. "+prefix+"= removes it, turning TLS off."), t),
+		str(prefix+".ca_cert_path", d("PEM file holding the CA that signed the server certificates."), t, func(c *Cfg) *string { return &tls(c).CACert }),
+		str(prefix+".client_cert_path", d("PEM client certificate, for mutual TLS."), t, func(c *Cfg) *string { return &tls(c).ClientCertPath }),
+		str(prefix+".client_key_path", d("PEM client key, for mutual TLS."), t, func(c *Cfg) *string { return &tls(c).ClientKeyPath }),
+		str(prefix+".server_name", d("Name to verify the server certificate against, when it is not the host dialed."), t, func(c *Cfg) *string { return &tls(c).ServerName }),
+		boolean(prefix+".insecure", d("Skip certificate verification."), t, func(c *Cfg) *bool { return &tls(c).InsecureSkipVerify }),
+		str(prefix+".min_version", d("Lowest TLS version accepted: 1.0, 1.1, 1.2, or 1.3. Default 1.2."), t, func(c *Cfg) *string { return &tls(c).MinVersion }),
+		list(prefix+".cipher_suites", d("Cipher suites allowed, by Go name, comma separated."), t, func(c *Cfg) *[]string { return &tls(c).CipherSuites }),
+		list(prefix+".curve_preferences", d("Curves allowed for key exchange, comma separated."), t, func(c *Cfg) *[]string { return &tls(c).CurvePreferences }),
 	}
 }
 
@@ -696,7 +697,7 @@ var cfgKeys = func() []CfgKey {
 		str("registry.bearer_token", "Bearer token, in place of basic auth.", srTable, func(c *Cfg) *string { return &c.SR.BearerToken }),
 		str("registry.context", "Registry context that scopes every request.", srTable, func(c *Cfg) *string { return &c.SR.Context }),
 	)
-	keys = append(keys, tlsKeys("registry.tls", srTLSTable, func(c *Cfg) *CfgTLS { return c.SR.TLS }, " for the registry")...)
+	keys = append(keys, tlsKeys("registry.tls", srTLSTable, func(c *Cfg) *CfgTLS { return c.SR.TLS }, "Registry: ")...)
 	return keys
 }()
 
