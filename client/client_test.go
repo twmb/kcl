@@ -1,10 +1,15 @@
 package client
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/BurntSushi/toml"
 )
 
 func TestFormatDefault(t *testing.T) {
@@ -352,5 +357,142 @@ func TestStrnorm(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("Strnorm(%q) = %q, want %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+func TestCfgFileMissingIsEmpty(t *testing.T) {
+	c := &Client{
+		cfgPath: filepath.Join(t.TempDir(), "missing", "config.toml"),
+		format:  "text",
+		cfg:     Cfg{SeedBrokers: []string{"default:9092"}},
+	}
+	c.parseCfgFile()
+	c.processOverrides()
+	if got := c.cfg.SeedBrokers; len(got) != 1 || got[0] != "default:9092" {
+		t.Errorf("missing config file should preserve defaults, got %v", got)
+	}
+}
+
+func TestFlagCfg(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		flags     []string
+		bootstrap []string
+		registry  []string
+		env       map[string]string
+		want      Cfg
+		wantErr   bool
+	}{
+		{
+			name: "nothing given is a zero cfg",
+		},
+		{
+			name:      "bootstrap shorthand",
+			bootstrap: []string{"a:9092", "b:9092"},
+			want:      Cfg{SeedBrokers: []string{"a:9092", "b:9092"}},
+		},
+		{
+			name:      "bootstrap wins over -X seed_brokers",
+			flags:     []string{"seed_brokers=x:9092"},
+			bootstrap: []string{"a:9092"},
+			want:      Cfg{SeedBrokers: []string{"a:9092"}},
+		},
+		{
+			name:  "tls and sasl, dotted and legacy underscore",
+			flags: []string{"tls.ca_cert_path=/ca.pem", "sasl.method=scram-sha-256", "sasl_user=alice", "dial_timeout=2s"},
+			want: Cfg{
+				DialTimeout: Duration(2 * time.Second),
+				TLS:         &CfgTLS{CACert: "/ca.pem"},
+				SASL:        &CfgSASL{Method: "scram-sha-256", User: "alice"},
+			},
+		},
+		{
+			name:     "registry shorthand",
+			registry: []string{"http://sr:8081"},
+			want:     Cfg{SR: &CfgSR{URLs: []string{"http://sr:8081"}}},
+		},
+		{
+			name:      "environment is ignored",
+			env:       map[string]string{"KCL_SASL_PASS": "secret", "KCL_SEED_BROKERS": "env:9092"},
+			bootstrap: []string{"a:9092"},
+			want:      Cfg{SeedBrokers: []string{"a:9092"}},
+		},
+		{
+			name:    "unknown key",
+			flags:   []string{"nope=1"},
+			wantErr: true,
+		},
+		{
+			name:    "bad duration",
+			flags:   []string{"dial_timeout=soon"},
+			wantErr: true,
+		},
+		{
+			name:    "missing equals",
+			flags:   []string{"seed_brokers"},
+			wantErr: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for k, v := range test.env {
+				t.Setenv(k, v)
+			}
+			c := &Client{
+				envPfx:           "KCL_",
+				flagOverrides:    test.flags,
+				bootstrapServers: test.bootstrap,
+				registryURLs:     test.registry,
+				cfg:              Cfg{SeedBrokers: []string{"default:9092"}},
+			}
+			got, err := c.FlagCfg()
+			if (err != nil) != test.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, test.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			if !reflect.DeepEqual(got, test.want) {
+				t.Errorf("got %+v, want %+v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestCfgEncodeOmitsZeroDurations(t *testing.T) {
+	var buf bytes.Buffer
+	err := toml.NewEncoder(&buf).Encode(CfgFile{
+		CurrentProfile: "p",
+		Profiles: map[string]Cfg{
+			"p": {SeedBrokers: []string{"a:9092"}, DialTimeout: Duration(2 * time.Second)},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	if strings.Contains(got, "0s") || strings.Count(got, "_timeout") != 1 || !strings.Contains(got, `dial_timeout = "2s"`) {
+		t.Errorf("unexpected encoding:\n%s", got)
+	}
+}
+
+func TestApplyFlagsKeysAndPreservation(t *testing.T) {
+	c := &Client{
+		flagOverrides:    []string{"sasl.user=me", "sasl_pass=pw"},
+		bootstrapServers: []string{"a:9092"},
+		registryURLs:     []string{"http://sr:8081"},
+	}
+	cfg := Cfg{SeedBrokers: []string{"old:9092"}, BrokerTimeout: Duration(10 * time.Second)}
+	keys, err := c.ApplyFlags(&cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"sasl.user", "sasl_pass", "seed_brokers", "registry.urls"}; !reflect.DeepEqual(keys, want) {
+		t.Errorf("keys = %v, want %v", keys, want)
+	}
+	if cfg.BrokerTimeout.D() != 10*time.Second || cfg.SeedBrokers[0] != "a:9092" || cfg.SASL.Pass != "pw" || cfg.SR.URLs[0] != "http://sr:8081" {
+		t.Errorf("cfg = %+v sasl=%+v sr=%+v", cfg, cfg.SASL, cfg.SR)
+	}
+	if keys, err := (&Client{}).ApplyFlags(&Cfg{}); err != nil || len(keys) != 0 {
+		t.Errorf("no flags: keys=%v err=%v", keys, err)
 	}
 }

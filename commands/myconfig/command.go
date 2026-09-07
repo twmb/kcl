@@ -2,6 +2,7 @@
 package myconfig
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,13 +13,14 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/out"
 )
 
 // Command returns the "profile" command (the primary config interface).
 func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "profile",
-		Short: "Manage connection profiles (use, list, create, dump, rename, delete).",
+		Short: "Manage connection profiles (use, list, create, set, dump, rename, delete).",
 		Long:  configHelpText(cl),
 	}
 
@@ -27,6 +29,8 @@ func Command(cl *client.Client) *cobra.Command {
 		listCommand(cl),
 		currentCommand(cl),
 		createCommand(cl),
+		setupCommand(cl),
+		setCommand(cl),
 		dumpCommand(cl),
 		renameCommand(cl),
 		deleteCommand(cl),
@@ -49,6 +53,8 @@ func DeprecatedCommand(cl *client.Client) *cobra.Command {
 		listCommand(cl),
 		currentCommand(cl),
 		createCommand(cl),
+		setupCommand(cl),
+		setCommand(cl),
 		dumpCommand(cl),
 		renameCommand(cl),
 		deleteCommand(cl),
@@ -145,18 +151,201 @@ func currentCommand(cl *client.Client) *cobra.Command {
 }
 
 func createCommand(cl *client.Client) *cobra.Command {
-	var noHelp bool
-	cmd := &cobra.Command{
-		Use:     "create",
-		Aliases: []string{"setup", "wizard"},
-		Short:   "Interactive configuration setup",
-		Args:    cobra.MaximumNArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
-			client.Wizard(noHelp)
+	return &cobra.Command{
+		Use:   "create NAME",
+		Short: "Create a profile from the -B, -X, and -R flags.",
+		Long: `Create a profile from the -B, -X, and -R flags.
+
+The profile is written as a [profiles.NAME] table in the config file,
+creating the file if needed. Any -X key can be saved. If no profile is
+current, the new one becomes current. Only flags are saved; KCL_*
+environment variables are not read.
+
+EXAMPLES:
+  kcl profile create local -B localhost:9092
+  kcl profile create prod -B k1:9093,k2:9093 -X tls.ca_cert_path=/etc/kafka/ca.pem -X sasl.method=scram-sha-256 -X sasl.user=me -X sasl.pass=secret
+  kcl profile create sr -B localhost:9092 -R http://localhost:8081
+
+SEE ALSO:
+  kcl profile use      switch the current profile
+  kcl profile list     list profiles
+  kcl profile dump     show the configuration kcl is running with
+`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			cfg, err := cl.FlagCfg()
+			if err != nil {
+				return out.Errf(out.ExitUsage, "%v", err)
+			}
+			name, cfgPath := args[0], cl.CfgFilePath()
+			current, err := createProfile(cfgPath, name, cfg)
+			if err != nil {
+				return err
+			}
+			if current {
+				fmt.Fprintf(os.Stderr, "Created profile %q in %s; it is now current\n", name, cfgPath)
+			} else {
+				fmt.Fprintf(os.Stderr, "Created profile %q in %s; switch with: kcl profile use %s\n", name, cfgPath, name)
+			}
+			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&noHelp, "no-help", false, "disable help text (only prompts will print)")
+}
+
+// setupCommand is the old name of create, kept working but out of the help.
+func setupCommand(cl *client.Client) *cobra.Command {
+	cmd := createCommand(cl)
+	cmd.Use = "setup NAME"
+	cmd.Hidden = true
 	return cmd
+}
+
+func setCommand(cl *client.Client) *cobra.Command {
+	return &cobra.Command{
+		Use:   "set",
+		Short: "Set keys in a profile from the -B, -X, and -R flags.",
+		Long: `Set keys in a profile from the -B, -X, and -R flags.
+
+The current profile is changed unless -C names another; a config without
+profiles is edited at the top level. The flags are the ones create builds a
+profile from, so anything that works as a one-off override can be saved.
+Nothing is written unless every flag parses.
+
+EXAMPLES:
+  kcl profile set -B k1:9092,k2:9092
+  kcl -C prod profile set -X sasl.method=scram-sha-256 -X sasl.user=me -X sasl.pass=secret
+
+SEE ALSO:
+  kcl profile create   create a profile from the same flags
+  kcl profile dump     show the configuration kcl is running with
+`,
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			var keys []string
+			where, err := setProfile(cl.CfgFilePath(), cl.ProfileName(), func(cfg *client.Cfg) error {
+				var err error
+				if keys, err = cl.ApplyFlags(cfg); err != nil {
+					return err
+				}
+				if len(keys) == 0 {
+					return errors.New("nothing to set; pass -X key=value, -B, or -R")
+				}
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(os.Stderr, "Set %s in %s\n", strings.Join(keys, ", "), where)
+			return nil
+		},
+	}
+}
+
+// setProfile calls apply on the profile named name in the config file at
+// path, on the current profile when name is empty, or on the top level of a
+// config without profiles, and writes the result. An error from apply is a
+// usage error and nothing is written. It returns what was edited.
+func setProfile(path, name string, apply func(*client.Cfg) error) (string, error) {
+	var cfgFile client.CfgFile
+	md, err := toml.DecodeFile(path, &cfgFile)
+	if os.IsNotExist(err) {
+		return "", fmt.Errorf("no config file at %s; create a profile first with kcl profile create", path)
+	}
+	if err != nil {
+		return "", fmt.Errorf("unable to read config: %v", err)
+	}
+
+	if len(cfgFile.Profiles) == 0 {
+		if name != "" {
+			return "", fmt.Errorf("profile %q not found; config file has no profiles", name)
+		}
+		if !isFlat(md, cfgFile) {
+			return "", fmt.Errorf("config at %s has no profiles; create one first with kcl profile create", path)
+		}
+		if err := apply(&cfgFile.Cfg); err != nil {
+			return "", out.Errf(out.ExitUsage, "%v", err)
+		}
+		if err := writeCfgFile(path, cfgFile); err != nil {
+			return "", err
+		}
+		return path, nil
+	}
+
+	if name == "" {
+		name = cfgFile.CurrentProfile
+	}
+	if name == "" {
+		return "", fmt.Errorf("no current profile; pass -C NAME or run kcl profile use NAME")
+	}
+	p, ok := cfgFile.Profiles[name]
+	if !ok {
+		return "", fmt.Errorf("profile %q not found; available: %v", name, profileNames(cfgFile))
+	}
+	if err := apply(&p); err != nil {
+		return "", out.Errf(out.ExitUsage, "%v", err)
+	}
+	cfgFile.Profiles[name] = p
+	if err := writeCfgFile(path, cfgFile); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("profile %q", name), nil
+}
+
+// isFlat reports whether a decoded config uses the flat single cluster
+// layout: no profiles, and some key other than current_profile.
+func isFlat(md toml.MetaData, cfgFile client.CfgFile) bool {
+	if len(cfgFile.Profiles) > 0 {
+		return false
+	}
+	for _, k := range md.Keys() {
+		if k[0] != "current_profile" {
+			return true
+		}
+	}
+	return false
+}
+
+// createProfile adds cfg to the config file at path as [profiles.name],
+// creating the file and its directory if needed. It reports whether the new
+// profile became current, which happens when the file's current_profile is
+// unset or names a profile that does not exist.
+func createProfile(path, name string, cfg client.Cfg) (bool, error) {
+	if name == "" {
+		return false, out.Errf(out.ExitUsage, "profile name cannot be empty")
+	}
+
+	var cfgFile client.CfgFile
+	md, err := toml.DecodeFile(path, &cfgFile)
+	if err != nil && !os.IsNotExist(err) {
+		return false, fmt.Errorf("unable to read config: %v", err)
+	}
+
+	// Adding a profile to the flat layout would silently stop its keys being
+	// read, so leave the conversion to the user.
+	if isFlat(md, cfgFile) {
+		return false, fmt.Errorf("config at %s is a flat single-cluster config; move its keys under a [profiles.NAME] table and set current_profile, then retry", path)
+	}
+	if _, exists := cfgFile.Profiles[name]; exists {
+		return false, fmt.Errorf("profile %q already exists", name)
+	}
+
+	if cfgFile.Profiles == nil {
+		cfgFile.Profiles = make(map[string]client.Cfg)
+	}
+	cfgFile.Profiles[name] = cfg
+	var current bool
+	if _, ok := cfgFile.Profiles[cfgFile.CurrentProfile]; !ok {
+		cfgFile.CurrentProfile = name
+		current = true
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return false, fmt.Errorf("unable to create config directory: %v", err)
+	}
+	if err := writeCfgFile(path, cfgFile); err != nil {
+		return false, err
+	}
+	return current, nil
 }
 
 func dumpCommand(cl *client.Client) *cobra.Command {
@@ -240,7 +429,7 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 }
 
 func configHelpText(cl *client.Client) string {
-	return `Manage connection profiles (use, list, create, dump, rename, delete).
+	return `Manage connection profiles (use, list, create, set, dump, rename, delete).
 
 On your machine, kcl takes configuration options by default from:
 

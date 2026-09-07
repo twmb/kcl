@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -40,5 +41,30 @@ func TestBuildCommandJSONHiddenPropagates(t *testing.T) {
 	}
 	if !legacy.Commands["mid"].Commands["leaf"].Hidden {
 		t.Error("a grandchild of a hidden command should be marked hidden")
+	}
+}
+
+func TestWantsHelpJSON(t *testing.T) {
+	for _, test := range []struct {
+		args []string
+		want bool
+	}{
+		{nil, false},
+		{[]string{"topic", "list"}, false},
+		{[]string{"--help-json"}, true},
+		{[]string{"topic", "list", "--help-json"}, true},
+		{[]string{"--help-json=true"}, true},
+		{[]string{"--help-json=1"}, true},
+		{[]string{"--help-json=false"}, false},
+		{[]string{"--help-json=nope"}, false},
+		{[]string{"--help-json=false", "--help-json"}, true},
+		{[]string{"--help-json", "--help-json=false"}, false},
+		{[]string{"produce", "foo", "--", "--help-json"}, false},
+	} {
+		t.Run(strings.Join(test.args, " "), func(t *testing.T) {
+			if got := wantsHelpJSON(test.args); got != test.want {
+				t.Errorf("wantsHelpJSON(%q) = %v, want %v", test.args, got, test.want)
+			}
+		})
 	}
 }

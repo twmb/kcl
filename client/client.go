@@ -107,16 +107,16 @@ type Cfg struct {
 	// in admin-style requests (e.g. CreateTopics.TimeoutMs). It
 	// tells the broker how long to wait before giving up on the
 	// server side.
-	BrokerTimeout Duration `toml:"broker_timeout,omitempty"`
+	BrokerTimeout Duration `toml:"broker_timeout,omitzero"`
 
 	// DialTimeout bounds how long kgo waits for a single TCP dial.
 	// Zero leaves kgo's default (10s).
-	DialTimeout Duration `toml:"dial_timeout,omitempty"`
+	DialTimeout Duration `toml:"dial_timeout,omitzero"`
 
 	// RetryTimeout bounds total time for a client request and its
 	// retries. Zero leaves kgo's default (30s for most requests,
 	// 45s for group-session requests).
-	RetryTimeout Duration `toml:"retry_timeout,omitempty"`
+	RetryTimeout Duration `toml:"retry_timeout,omitzero"`
 
 	TLS  *CfgTLS  `toml:"tls,omitzero"`
 	SASL *CfgSASL `toml:"sasl,omitempty"`
@@ -371,8 +371,8 @@ func (c *Client) parseCfgFile() {
 	// First try decoding as a context-aware config file.
 	md, err := toml.DecodeFile(c.cfgPath, &c.cfgFile)
 	if os.IsNotExist(err) {
-		Wizard(false)
-		os.Exit(0)
+		// A missing file is the same as --no-config-file.
+		return
 	}
 	if err != nil {
 		out.Die("unable to decode config file %q: %v", c.cfgPath, err)
@@ -412,13 +412,20 @@ func (c *Client) CfgFilePath() string {
 	return c.cfgPath
 }
 
+// ProfileName returns the profile named by -C, or "" if none was given.
+func (c *Client) ProfileName() string {
+	return c.profileName
+}
+
 // LoadedCfgFile returns the full loaded config file (may include contexts).
 func (c *Client) LoadedCfgFile() CfgFile {
 	c.loadClientOnce()
 	return c.cfgFile
 }
 
-func (c *Client) processOverrides() {
+// cfgSetters maps every config key, in its normalized underscore form, to
+// the function that sets it. See normCfgKey.
+var cfgSetters = func() map[string]func(*Cfg, string) error {
 	intoStrSlice := func(in string, dst *[]string) error {
 		*dst = nil
 		split := strings.Split(in, ",")
@@ -505,57 +512,98 @@ func (c *Client) processOverrides() {
 		"registry.tls.curve_preferences": func(c *Cfg, v string) error { mksrtls(c); return intoStrSlice(v, &c.SR.TLS.CurvePreferences) },
 	}
 
-	// The canonical keys above are dot-separated by field. We match against a
-	// flattened (dot->underscore) index so that both the dotted form and the
+	// The canonical keys above are dot-separated by field. We index by the
+	// flattened (dot->underscore) form so that both the dotted form and the
 	// legacy pure-underscore form (e.g. "sasl_user") resolve to the same
 	// handler. See normCfgKey.
 	flat := make(map[string]func(*Cfg, string) error, len(fns))
 	for k, fn := range fns {
 		flat[normCfgKey(k)] = fn
 	}
+	return flat
+}()
 
-	parse := func(kvs []string) {
-		for _, opt := range kvs {
-			kv := strings.SplitN(opt, "=", 2)
-			if len(kv) != 2 {
-				out.Die("opt %q not a key=value", opt)
-			}
-			k, v := kv[0], kv[1]
-
-			fn, exists := flat[normCfgKey(k)]
-			if !exists {
-				out.Die("unknown opt key %q", k)
-			}
-			if err := fn(&c.cfg, v); err != nil {
-				out.Die("%s", err)
-			}
+// ApplyCfgOpts applies key=value pairs to cfg in order, using the same keys
+// as -X. The first bad pair stops it with an error.
+func ApplyCfgOpts(cfg *Cfg, opts []string) error {
+	for _, opt := range opts {
+		k, v, ok := strings.Cut(opt, "=")
+		if !ok {
+			return fmt.Errorf("opt %q not a key=value", opt)
+		}
+		fn, exists := cfgSetters[normCfgKey(k)]
+		if !exists {
+			return fmt.Errorf("unknown opt key %q", k)
+		}
+		if err := fn(cfg, v); err != nil {
+			return err
 		}
 	}
+	return nil
+}
 
+// applyShorthandFlags applies -B and -R, which win over any other setting
+// of seed_brokers and registry.urls.
+func (c *Client) applyShorthandFlags(cfg *Cfg) {
+	if len(c.bootstrapServers) > 0 {
+		cfg.SeedBrokers = c.bootstrapServers
+	}
+	if len(c.registryURLs) > 0 {
+		if cfg.SR == nil {
+			cfg.SR = new(CfgSR)
+		}
+		cfg.SR.URLs = c.registryURLs
+	}
+}
+
+func (c *Client) processOverrides() {
 	// Environment variables use the flattened (underscore) form, uppercased,
 	// since env var names cannot contain dots: KCL_REGISTRY_TLS_SERVER_NAME.
 	var envOverrides []string
-	for k := range fns {
-		if v, exists := os.LookupEnv(c.envPfx + strings.ToUpper(normCfgKey(k))); exists {
+	for k := range cfgSetters {
+		if v, exists := os.LookupEnv(c.envPfx + strings.ToUpper(k)); exists {
 			envOverrides = append(envOverrides, k+"="+v)
 		}
 	}
+	if err := ApplyCfgOpts(&c.cfg, envOverrides); err != nil {
+		out.Die("%s", err)
+	}
+	if err := ApplyCfgOpts(&c.cfg, c.flagOverrides); err != nil {
+		out.Die("%s", err)
+	}
+	c.applyShorthandFlags(&c.cfg)
+}
 
-	parse(envOverrides)
-	parse(c.flagOverrides)
-	// -B/--bootstrap-servers is applied last so it wins over any
-	// profile/config/-X setting of seed_brokers.
+// ApplyFlags applies the -X, -B, and -R flags to cfg, in that order so the
+// shorthands win, and returns the keys they set. The config file,
+// environment variables, and defaults are not consulted.
+func (c *Client) ApplyFlags(cfg *Cfg) ([]string, error) {
+	if err := ApplyCfgOpts(cfg, c.flagOverrides); err != nil {
+		return nil, err
+	}
+	var keys []string
+	for _, opt := range c.flagOverrides {
+		k, _, _ := strings.Cut(opt, "=")
+		keys = append(keys, k)
+	}
 	if len(c.bootstrapServers) > 0 {
-		c.cfg.SeedBrokers = c.bootstrapServers
+		keys = append(keys, "seed_brokers")
 	}
-	// -R/--registry is applied last so it wins over any profile/config/-X
-	// setting of registry.urls.
 	if len(c.registryURLs) > 0 {
-		if c.cfg.SR == nil {
-			c.cfg.SR = new(CfgSR)
-		}
-		c.cfg.SR.URLs = c.registryURLs
+		keys = append(keys, "registry.urls")
 	}
+	c.applyShorthandFlags(cfg)
+	return keys, nil
+}
+
+// FlagCfg returns the configuration given by the -X, -B, and -R flags alone.
+// This is what "kcl profile create" saves.
+func (c *Client) FlagCfg() (Cfg, error) {
+	var cfg Cfg
+	if _, err := c.ApplyFlags(&cfg); err != nil {
+		return Cfg{}, err
+	}
+	return cfg, nil
 }
 
 func (c *Client) maybeAddMaxVersions() {
