@@ -549,18 +549,15 @@ func XCompletions() []string {
 	return cs
 }
 
-const xHelpIntro = `-X KEY=VALUE sets one key for this command; repeat it for more. The same
-keys come from the environment as KCL_<KEY> (dots as underscores:
-KCL_SASL_USER) and from the config file. Flags beat the environment, which
-beats the file, which beats the defaults; only set keys take effect.
+const xHelpIntro = `-X KEY=VALUE is a repeatable flag to set config keys. The same keys are read
+from the environment as KCL_<KEY> (where dots are underscores:
+KCL_SASL_USER), and from the config file, which "kcl profile" describes.
 
 A bool given bare is true (-X tls.insecure); =false or an empty value
-(-X sasl.pass=) unsets the key. tls=, sasl=, registry=, and registry.tls=
-remove a whole table. ${NAME} in a value reads the environment; $${ is a
-literal ${. A config file can read any environment variable this way, so
-treat one you did not write like a script.
+(-X sasl.pass=) unsets the key. A value may reference an environment
+variable as ${NAME}.
 
--X list prints the keys alone; --format json or awk prints them as data.
+"-X list" prints all keys and can be used with --format.
 `
 
 const xHelpTimeouts = `TIMEOUTS
