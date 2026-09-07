@@ -843,3 +843,18 @@ func TestCfgCloneIsDeep(t *testing.T) {
 		t.Errorf("mutating the clone reached the original: %+v tls=%+v sasl=%+v sr=%+v", orig, orig.TLS, orig.SASL, orig.SR)
 	}
 }
+
+// TestDiskCfgNeedsNoSecrets pins that dump can read a config whose ${NAME}
+// references are unset, and that a client built from it still fails.
+func TestDiskCfgNeedsNoSecrets(t *testing.T) {
+	c := &Client{noCfgFile: true, format: "text", envPfx: "KCL_", flagOverrides: []string{"sasl.method=plain", "sasl.pass=${KCL_TEST_DEFINITELY_UNSET}"}, cfg: defaultCfg()}
+	if got := c.DiskCfg(); got.SASL == nil || got.SASL.Pass != "${KCL_TEST_DEFINITELY_UNSET}" {
+		t.Errorf("DiskCfg = %+v", got.SASL)
+	}
+	if c.expandErr == nil || !strings.Contains(c.expandErr.Error(), "KCL_TEST_DEFINITELY_UNSET") {
+		t.Errorf("expandErr = %v", c.expandErr)
+	}
+	if _, err := c.SchemaRegistryClient(); err == nil || !strings.Contains(err.Error(), "KCL_TEST_DEFINITELY_UNSET") {
+		t.Errorf("registry client err = %v", err)
+	}
+}

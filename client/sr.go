@@ -21,6 +21,9 @@ const DefaultRegistryURL = "http://localhost:8081"
 // service when they actually need it.
 func (c *Client) SchemaRegistryClient(opts ...sr.ClientOpt) (*sr.Client, error) {
 	c.loadCfg()
+	if c.expandErr != nil {
+		return nil, c.expandErr
+	}
 
 	cfg := c.cfg.SR
 	if cfg == nil {

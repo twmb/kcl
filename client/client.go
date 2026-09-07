@@ -181,7 +181,8 @@ type Client struct {
 	profileName      string   // --context/-C override
 	cfgFile          CfgFile
 	cfg              Cfg
-	cfgWritten       Cfg // cfg before ${NAME} expansion, for profile dump
+	cfgWritten       Cfg   // cfg before ${NAME} expansion, for profile dump
+	expandErr        error // a bad ${NAME} reference, reported when a client is built
 }
 
 // Format returns the output format: "text", "json", or "awk".
@@ -304,9 +305,11 @@ func (c *Client) GroupTransactSession() *kgo.GroupTransactSession {
 }
 
 // DiskCfg returns the configuration as written, with ${NAME} references
-// unexpanded, so that showing it does not show a secret.
+// unexpanded, so that showing it does not show a secret. It reads the file
+// without building a client, so it works with no broker and with the
+// referenced variables unset.
 func (c *Client) DiskCfg() Cfg {
-	c.loadClientOnce()
+	c.loadCfg()
 	return c.cfgWritten
 }
 
@@ -390,14 +393,21 @@ func (c *Client) loadCfg() {
 		c.parseCfgFile()     // loads config file if needed
 		c.processOverrides() // overrides config values just loaded
 		c.cfgWritten = c.cfg.clone()
-		if err := expandEnvRefs(&c.cfg); err != nil {
-			out.Die("%s", err)
-		}
+		c.expandErr = expandEnvRefs(&c.cfg)
 	})
 }
 
+// loadCfgForClient loads the config and dies on a bad ${NAME} reference,
+// which only matters once something is about to be dialed with the result.
+func (c *Client) loadCfgForClient() {
+	c.loadCfg()
+	if c.expandErr != nil {
+		out.Die("%s", c.expandErr)
+	}
+}
+
 func (c *Client) fillOpts() {
-	c.loadCfg()             // loads config file + overrides (once)
+	c.loadCfgForClient()    // loads config file + overrides (once)
 	c.maybeAddMaxVersions() // fills MaxVersions if necessary
 	c.parseLogLevel()       // adds basic logger if necessary
 
@@ -511,7 +521,7 @@ func (c *Client) ProfileName() string {
 
 // LoadedCfgFile returns the full loaded config file (may include contexts).
 func (c *Client) LoadedCfgFile() CfgFile {
-	c.loadClientOnce()
+	c.loadCfg()
 	return c.cfgFile
 }
 
