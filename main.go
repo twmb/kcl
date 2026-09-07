@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"runtime/debug"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -198,13 +199,14 @@ Command completion is available at:
 
 	root.SetUsageTemplate(usageTmpl)
 
-	var helpJSON bool
-	root.PersistentFlags().BoolVar(&helpJSON, "help-json", false, "dump the full command tree as JSON")
+	root.PersistentFlags().Bool("help-json", false, "dump the full command tree as JSON")
 
-	// Handle --help-json: parse flags early and check before Execute.
-	// This is needed because cobra processes help before PersistentPreRun.
-	root.ParseFlags(os.Args[1:])
-	if helpJSON {
+	// --help-json has to be answered before Execute, because cobra answers a
+	// non-runnable command like the bare root with help before any hook runs.
+	// We look for the flag in the arguments rather than parsing them: Execute
+	// parses again, and slice flags such as -B append on every parse, so
+	// parsing twice doubled every seed broker.
+	if wantsHelpJSON(os.Args[1:]) {
 		tree := buildCommandJSON(root, false)
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -323,3 +325,22 @@ GLOBAL FLAGS:
 
 Use "{{.CommandPath}} [command] --help" for more information about a command.{{end}}
 `
+
+// wantsHelpJSON reports whether args ask for --help-json, following pflag's
+// syntax for a boolean long flag: bare, or --help-json=VALUE with a boolean
+// VALUE, last one wins. Arguments after a bare "--" are positional.
+func wantsHelpJSON(args []string) bool {
+	var want bool
+	for _, a := range args {
+		switch {
+		case a == "--":
+			return want
+		case a == "--help-json":
+			want = true
+		case strings.HasPrefix(a, "--help-json="):
+			b, err := strconv.ParseBool(strings.TrimPrefix(a, "--help-json="))
+			want = err == nil && b
+		}
+	}
+	return want
+}
