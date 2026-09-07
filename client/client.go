@@ -555,12 +555,12 @@ as underscores (KCL_SASL_USER), and from the config file, where a profile is a
 [profiles.NAME] table. Flags win over the environment, which wins over the
 file, which wins over the defaults; only keys that are set take effect.
 
-An empty value unsets a key (-X sasl.pass=). A bool may be given bare
-(-X tls.insecure). The table keys tls, sasl, registry, and registry.tls take
-only the empty value and remove the whole table. A value may reference an
-environment variable as ${NAME}; $${ is a literal ${. A config file can name
-any environment variable this way, so treat a file you did not write like a
-script.
+A bool given bare is true (-X tls.insecure); =false or an empty value
+(-X sasl.pass=) unsets the key. The table keys tls, sasl, registry, and
+registry.tls take only the empty value and remove the whole table. A value
+may reference an environment variable as ${NAME}; $${ is a literal ${. A
+config file can name any environment variable this way, so treat a file you
+did not write like a script.
 
 -X list prints the keys alone. --format json or awk prints them as data.
 Each key below is shown with an example value.

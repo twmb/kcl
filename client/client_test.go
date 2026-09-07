@@ -748,6 +748,9 @@ func TestXListAndHelpCoverEveryKey(t *testing.T) {
 	if !strings.Contains(list, "sasl=\n") {
 		t.Error("a table key should print as NAME= with nothing after")
 	}
+	if !strings.Contains(help, "(-X sasl.pass=) unsets the key") {
+		t.Error("help does not say how to unset a bool")
+	}
 	keys := CfgKeys()
 	if !slices.IsSortedFunc(keys, func(a, b CfgKey) int { return strings.Compare(a.Name, b.Name) }) {
 		t.Error("keys are not sorted by name")
