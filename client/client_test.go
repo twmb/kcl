@@ -646,3 +646,84 @@ func TestEnvSkipsTableKeys(t *testing.T) {
 		t.Errorf("cfg tls=%+v sasl=%+v", c.cfg.TLS, c.cfg.SASL)
 	}
 }
+
+func TestExpandEnvRefs(t *testing.T) {
+	t.Setenv("KCL_TEST_PASS", "s3cret")
+	t.Setenv("KCL_TEST_HOST", "kafka.internal")
+	for _, test := range []struct {
+		name    string
+		cfg     Cfg
+		want    Cfg
+		wantErr string
+	}{
+		{
+			name: "plain values untouched, including a lone dollar",
+			cfg:  Cfg{SASL: &CfgSASL{Pass: "a$b$$c"}},
+			want: Cfg{SASL: &CfgSASL{Pass: "a$b$$c"}},
+		},
+		{
+			name: "reference in a nested table",
+			cfg:  Cfg{SASL: &CfgSASL{User: "me", Pass: "${KCL_TEST_PASS}"}},
+			want: Cfg{SASL: &CfgSASL{User: "me", Pass: "s3cret"}},
+		},
+		{
+			name: "reference inside a list element and text",
+			cfg:  Cfg{SeedBrokers: []string{"${KCL_TEST_HOST}:9092", "b:9092"}},
+			want: Cfg{SeedBrokers: []string{"kafka.internal:9092", "b:9092"}},
+		},
+		{
+			name: "two references and an escape",
+			cfg:  Cfg{SR: &CfgSR{BearerToken: "${KCL_TEST_PASS}-${KCL_TEST_PASS}", Context: "$${KCL_TEST_PASS}"}},
+			want: Cfg{SR: &CfgSR{BearerToken: "s3cret-s3cret", Context: "${KCL_TEST_PASS}"}},
+		},
+		{
+			name: "registry tls path",
+			cfg:  Cfg{SR: &CfgSR{TLS: &CfgTLS{CACert: "/etc/${KCL_TEST_HOST}/ca.pem"}}},
+			want: Cfg{SR: &CfgSR{TLS: &CfgTLS{CACert: "/etc/kafka.internal/ca.pem"}}},
+		},
+		{
+			name: "not an identifier is left alone",
+			cfg:  Cfg{SASL: &CfgSASL{Pass: "${not-a-name}"}},
+			want: Cfg{SASL: &CfgSASL{Pass: "${not-a-name}"}},
+		},
+		{
+			name:    "missing variable is an error",
+			cfg:     Cfg{SASL: &CfgSASL{Pass: "${KCL_TEST_DEFINITELY_UNSET}"}},
+			wantErr: "${KCL_TEST_DEFINITELY_UNSET}, which is not set",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := test.cfg
+			err := expandEnvRefs(&cfg)
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("err = %v, want containing %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(cfg, test.want) {
+				t.Errorf("got sasl=%+v sr=%+v brokers=%v", cfg.SASL, cfg.SR, cfg.SeedBrokers)
+			}
+		})
+	}
+}
+
+// TestLoadCfgExpandsFileAndFlags pins that references are expanded after
+// the file, environment, and flags are combined, so every source is treated
+// the same way.
+func TestLoadCfgExpandsFileAndFlags(t *testing.T) {
+	t.Setenv("KCL_TEST_PASS", "s3cret")
+	t.Setenv("KCL_TEST_USER", "alice")
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[sasl]\npass = \"${KCL_TEST_PASS}\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{cfgPath: path, format: "text", envPfx: "KCL_", flagOverrides: []string{"sasl.user=${KCL_TEST_USER}"}, cfg: defaultCfg()}
+	c.loadCfg()
+	if c.cfg.SASL == nil || c.cfg.SASL.Pass != "s3cret" || c.cfg.SASL.User != "alice" {
+		t.Errorf("sasl = %+v", c.cfg.SASL)
+	}
+}

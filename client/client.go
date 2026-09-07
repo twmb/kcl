@@ -11,6 +11,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -347,6 +349,9 @@ func (c *Client) loadCfg() {
 	c.cfgOnce.Do(func() {
 		c.parseCfgFile()     // loads config file if needed
 		c.processOverrides() // overrides config values just loaded
+		if err := expandEnvRefs(&c.cfg); err != nil {
+			out.Die("%s", err)
+		}
 	})
 }
 
@@ -727,6 +732,71 @@ func ApplyCfgOpts(cfg *Cfg, opts []string) error {
 		}
 	}
 	return nil
+}
+
+// envRef matches ${NAME}, and the escape $${ for a literal ${.
+var envRef = regexp.MustCompile(`\$\$\{|\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// expandEnvRefs replaces ${NAME} in every string value of cfg with the
+// environment variable NAME, so a config file can point at a secret kept in
+// the environment rather than hold it. A reference to a variable that is not
+// set is an error, since an empty password would only fail later and further
+// away. $${ is a literal ${.
+func expandEnvRefs(cfg *Cfg) error {
+	return expandStrings(reflect.ValueOf(cfg).Elem())
+}
+
+func expandStrings(v reflect.Value) error {
+	switch v.Kind() {
+	case reflect.String:
+		s, err := expandRefs(v.String())
+		if err != nil {
+			return err
+		}
+		v.SetString(s)
+	case reflect.Slice:
+		for i := 0; i < v.Len(); i++ {
+			if err := expandStrings(v.Index(i)); err != nil {
+				return err
+			}
+		}
+	case reflect.Ptr:
+		if !v.IsNil() {
+			return expandStrings(v.Elem())
+		}
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			if v.Type().Field(i).IsExported() {
+				if err := expandStrings(v.Field(i)); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func expandRefs(s string) (string, error) {
+	if !strings.Contains(s, "${") {
+		return s, nil
+	}
+	var missing string
+	expanded := envRef.ReplaceAllStringFunc(s, func(m string) string {
+		if m == "$${" {
+			return "${"
+		}
+		name := m[2 : len(m)-1]
+		v, ok := os.LookupEnv(name)
+		if !ok {
+			missing = name
+			return m
+		}
+		return v
+	})
+	if missing != "" {
+		return "", fmt.Errorf("config references ${%s}, which is not set in the environment", missing)
+	}
+	return expanded, nil
 }
 
 // applyShorthandFlags applies -B and -R, which win over any other setting
