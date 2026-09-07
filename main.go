@@ -208,6 +208,20 @@ Command completion is available at:
 	// parsing twice doubled every seed broker.
 	usageErrors(root)
 
+	// -X help and -X list are answered here, after cobra has parsed the flags
+	// so that --format applies. The registry group has a persistent pre-run
+	// of its own, and cobra runs only the nearest one unless told to walk
+	// them all.
+	cobra.EnableTraverseRunHooks = true
+	root.PersistentPreRun = func(*cobra.Command, []string) {
+		if cl.MaybeXHelp() {
+			os.Exit(0)
+		}
+	}
+	root.RegisterFlagCompletionFunc("config-opt", func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
+		return client.XCompletions(), cobra.ShellCompDirectiveNoFileComp | cobra.ShellCompDirectiveNoSpace
+	})
+
 	if wantsHelpJSON(os.Args[1:]) {
 		tree := buildCommandJSON(root, false)
 		enc := json.NewEncoder(os.Stdout)

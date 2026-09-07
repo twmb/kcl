@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/out"
 )
 
@@ -114,5 +115,21 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 	root.SetArgs([]string{"group"})
 	if err := root.Execute(); err != nil {
 		t.Errorf("bare group: %v", err)
+	}
+}
+
+func TestXCompletionRegistered(t *testing.T) {
+	root := &cobra.Command{Use: "kcl"}
+	root.PersistentFlags().StringArrayP("config-opt", "X", nil, "")
+	root.RegisterFlagCompletionFunc("config-opt", func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
+		return client.XCompletions(), cobra.ShellCompDirectiveNoFileComp | cobra.ShellCompDirectiveNoSpace
+	})
+	f, ok := root.GetFlagCompletionFunc("config-opt")
+	if !ok {
+		t.Fatal("no completion registered for -X")
+	}
+	got, _ := f(root, nil, "")
+	if len(got) == 0 || !strings.HasPrefix(got[0], "seed_brokers=\t") {
+		t.Errorf("completions = %v", got)
 	}
 }

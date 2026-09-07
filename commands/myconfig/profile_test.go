@@ -2,7 +2,6 @@ package myconfig
 
 import (
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -311,7 +310,6 @@ func TestCreateVisibleSetupHidden(t *testing.T) {
 	}{
 		{"create", false},
 		{"set", false},
-		{"keys", false},
 		{"setup", true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -643,36 +641,6 @@ ca_cert_path = "/ca.pem"
 	got.Profiles["prod"] = prod
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("set changed more than sasl.user:\n got %+v\nwant %+v", got, want)
-	}
-}
-
-func TestKeysCommandLists(t *testing.T) {
-	root := &cobra.Command{Use: "kcl", SilenceUsage: true, SilenceErrors: true}
-	cl := client.New(root)
-	root.AddCommand(Command(cl))
-	root.SetArgs([]string{"--format", "awk", "profile", "keys"})
-
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	old := os.Stdout
-	os.Stdout = w
-	execErr := root.Execute()
-	w.Close()
-	os.Stdout = old
-	outb, _ := io.ReadAll(r)
-	if execErr != nil {
-		t.Fatal(execErr)
-	}
-	got := string(outb)
-	for _, want := range []string{"sasl.user\tstring\t", "tls.insecure\tbool\t", "registry.tls\ttable\t", "broker_timeout\tduration\t", "seed_brokers\tlist\t"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("missing %q in:\n%s", want, got)
-		}
-	}
-	if strings.Contains(got, "timeout_ms") {
-		t.Error("the renamed timeout_ms key is listed")
 	}
 }
 

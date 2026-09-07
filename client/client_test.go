@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -595,7 +596,7 @@ func TestApplyCfgOptsUnsetAndBools(t *testing.T) {
 		{name: "registry tls removal keeps the registry", start: Cfg{SR: &CfgSR{URLs: []string{"http://sr"}, TLS: &CfgTLS{CACert: "/ca"}}}, opts: []string{"registry.tls="}, want: Cfg{SR: &CfgSR{URLs: []string{"http://sr"}}}},
 		{name: "registry tls key creates both tables", opts: []string{"registry.tls.insecure"}, want: Cfg{SR: &CfgSR{TLS: &CfgTLS{InsecureSkipVerify: true}}}},
 		{name: "bare non-boolean", opts: []string{"sasl.user"}, wantErr: "needs a value; sasl.user= unsets it"},
-		{name: "unknown key points at profile keys", opts: []string{"sasl.usr=me"}, wantErr: "kcl profile keys"},
+		{name: "unknown key points at profile keys", opts: []string{"sasl.usr=me"}, wantErr: "kcl -X help"},
 		{name: "legacy underscore form", opts: []string{"sasl_user=me"}, want: Cfg{SASL: &CfgSASL{User: "me"}}},
 		{name: "renamed timeout_ms still explains itself", opts: []string{"timeout_ms=5000"}, wantErr: "renamed to broker_timeout"},
 	} {
@@ -725,5 +726,73 @@ func TestLoadCfgExpandsFileAndFlags(t *testing.T) {
 	c.loadCfg()
 	if c.cfg.SASL == nil || c.cfg.SASL.Pass != "s3cret" || c.cfg.SASL.User != "alice" {
 		t.Errorf("sasl = %+v", c.cfg.SASL)
+	}
+}
+
+func TestXListAndHelpCoverEveryKey(t *testing.T) {
+	list := XList()
+	help := XHelp()
+	for _, k := range CfgKeys() {
+		line := k.Name + "=" + k.Example
+		if !strings.Contains(list, line+"\n") {
+			t.Errorf("-X list lacks %q", line)
+		}
+		if !strings.Contains(help, "\n"+line+"\n  ") {
+			t.Errorf("-X help lacks %q followed by an indented description", line)
+		}
+	}
+	if strings.Contains(list, "timeout_ms") || strings.Contains(help, "timeout_ms=") {
+		t.Error("the renamed timeout_ms is listed")
+	}
+	if !strings.Contains(list, "sasl=\n") {
+		t.Error("a table key should print as NAME= with nothing after")
+	}
+	for _, line := range strings.Split(help, "\n") {
+		if len(line) > 80 {
+			t.Errorf("help line over 80 columns: %q", line)
+		}
+	}
+	if got := wrap("a bb ccc dddd", 8, "  "); got != "  a bb\n  ccc\n  dddd\n" {
+		t.Errorf("wrap = %q", got)
+	}
+}
+
+func TestMaybeXHelp(t *testing.T) {
+	capture := func(f func() bool) (string, bool) {
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		old := os.Stdout
+		os.Stdout = w
+		ok := f()
+		w.Close()
+		os.Stdout = old
+		b, _ := io.ReadAll(r)
+		return string(b), ok
+	}
+	for _, test := range []struct {
+		name   string
+		flags  []string
+		format string
+		want   string // substring of stdout
+		wantOK bool
+	}{
+		{name: "nothing", flags: []string{"sasl.user=me"}, format: "text"},
+		{name: "help", flags: []string{"help"}, format: "text", want: "\nsasl.pass=${KAFKA_PASS}\n  Password.", wantOK: true},
+		{name: "list", flags: []string{"sasl.user=me", "list"}, format: "text", want: "sasl.user=alice\n", wantOK: true},
+		{name: "help as json", flags: []string{"help"}, format: "json", want: `"key": "tls.insecure"`, wantOK: true},
+		{name: "list as awk", flags: []string{"list"}, format: "awk", want: "tls.insecure\tbool\ttrue\t", wantOK: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := &Client{flagOverrides: test.flags, format: test.format}
+			got, ok := capture(c.MaybeXHelp)
+			if ok != test.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, test.wantOK)
+			}
+			if !strings.Contains(got, test.want) {
+				t.Errorf("stdout lacks %q:\n%s", test.want, got)
+			}
+		})
 	}
 }

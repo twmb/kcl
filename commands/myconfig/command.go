@@ -31,7 +31,6 @@ func Command(cl *client.Client) *cobra.Command {
 		createCommand(cl),
 		setupCommand(cl),
 		setCommand(cl),
-		keysCommand(cl),
 		dumpCommand(cl),
 		renameCommand(cl),
 		deleteCommand(cl),
@@ -56,7 +55,6 @@ func DeprecatedCommand(cl *client.Client) *cobra.Command {
 		createCommand(cl),
 		setupCommand(cl),
 		setCommand(cl),
-		keysCommand(cl),
 		dumpCommand(cl),
 		renameCommand(cl),
 		deleteCommand(cl),
@@ -169,8 +167,8 @@ EXAMPLES:
   kcl profile create sr -B localhost:9092 -R http://localhost:8081
 
 SEE ALSO:
+  kcl -X help          every key, with its meaning
   kcl profile use      switch the current profile
-  kcl profile list     list profiles
   kcl profile dump     show the configuration kcl is running with
 `,
 		Args: cobra.ExactArgs(1),
@@ -218,6 +216,7 @@ EXAMPLES:
   kcl -C prod profile set -X sasl.method=scram-sha-256 -X sasl.user=me -X sasl.pass=secret
 
 SEE ALSO:
+  kcl -X help          every key, with its meaning
   kcl profile create   create a profile from the same flags
   kcl profile dump     show the configuration kcl is running with
 `,
@@ -374,53 +373,6 @@ func createProfile(path, name string, cfg client.Cfg) (bool, error) {
 	return current, nil
 }
 
-func keysCommand(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
-		Use:   "keys",
-		Short: "List every config key with its meaning.",
-		Long: `List every config key with its meaning.
-
-These are the keys that -X, KCL_<KEY> environment variables (dots become
-underscores: KCL_SASL_USER), and the config file all share. A bool may be
-given bare, -X tls.insecure, and an empty value unsets any key, -X sasl.pass=.
-The table keys tls, sasl, registry, and registry.tls take only the empty
-value and remove the whole table. A value may reference an environment
-variable as ${NAME}; $${NAME} is a literal.
-
-TIMEOUTS
-
-  dial_timeout    caller side, per TCP dial attempt.
-  retry_timeout   client side; gates whether to START a retry, not a wall
-                  clock budget, so an in-flight attempt is not cancelled
-                  when it elapses.
-  broker_timeout  sent to the broker and enforced there, only on requests
-                  that carry a TimeoutMs field.
-
-  Keep dial_timeout <= broker_timeout <= retry_timeout. retry_timeout is
-  only consulted when an attempt errors, so a slow but successful reply
-  still succeeds and one retry can run to about twice broker_timeout in
-  total. If dial_timeout is at or above retry_timeout, one failed dial uses
-  the whole retry budget and nothing is retried.
-
-EXAMPLES:
-  kcl profile keys                         # table of keys
-  kcl profile keys --format json           # for scripts
-
-SEE ALSO:
-  kcl profile set      set keys in a profile
-  kcl profile dump     show the configuration kcl is running with
-`,
-		Args: cobra.NoArgs,
-		Run: func(*cobra.Command, []string) {
-			table := out.NewFormattedTable(cl.Format(), "profile.keys", 1, "keys", "KEY", "TYPE", "DESCRIPTION")
-			for _, k := range client.CfgKeys() {
-				table.Row(k.Name, k.Type, k.Desc)
-			}
-			table.Flush()
-		},
-	}
-}
-
 func dumpCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "dump",
@@ -521,8 +473,8 @@ PRIORITY (highest wins)
   4. Built-in defaults
 
 Only keys that are set take effect at each level; a key written as zero is
-zero. "kcl profile keys" lists every key, and "kcl profile dump" shows what
-kcl is running with.
+zero. "kcl -X help" describes every key and "kcl -X list" names them;
+"kcl profile dump" shows the result.
 
 EXAMPLES:
   kcl profile create prod -B k1:9092,k2:9092 -X sasl.method=scram-sha-256 -X sasl.user=me -X sasl.pass='${KAFKA_PASS}'
