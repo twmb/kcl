@@ -43,6 +43,17 @@ protocol's client ID (useful for ACL audit logs and broker-side metrics).
 Otherwise, download a release from the
 [releases](https://github.com/twmb/kcl/releases) page.
 
+A container image is also published for each release, useful as a
+short-lived Kubernetes or CI client:
+
+```bash
+kubectl run kafka-client --rm -it --restart=Never \
+  --image=ghcr.io/twmb/kcl:v0.19.0 \
+  -- --no-config-file -B kafka-headless:9092 topic list
+```
+
+(the image's entrypoint is already `kcl`, so args after `--` go straight to it)
+
 ## Configuration
 
 kcl is usable out of the box against `localhost:9092`; no config is required
