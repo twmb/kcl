@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -81,10 +82,15 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 		{"argument count", []string{"leaf"}, "accepts 1 arg(s)"},
 		{"unknown flag", []string{"leaf", "x", "--nope"}, "unknown flag"},
 		{"unknown command", []string{"nope"}, "unknown command"},
+		{"unknown subcommand of a group", []string{"group", "nope"}, `unknown command "nope" for "kcl group"`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root := &cobra.Command{Use: "kcl", SilenceUsage: true, SilenceErrors: true}
+			root.SetOut(io.Discard)
 			root.AddCommand(&cobra.Command{Use: "leaf", Args: cobra.ExactArgs(1), Run: func(*cobra.Command, []string) {}})
+			group := &cobra.Command{Use: "group"}
+			group.AddCommand(&cobra.Command{Use: "sub", Run: func(*cobra.Command, []string) {}})
+			root.AddCommand(group)
 			usageErrors(root)
 			root.SetArgs(test.args)
 			err := asUsageError(root.Execute())
@@ -96,5 +102,17 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 	}
 	if asUsageError(nil) != nil {
 		t.Error("nil should stay nil")
+	}
+
+	// A bare group still shows its help and succeeds.
+	root := &cobra.Command{Use: "kcl", SilenceUsage: true, SilenceErrors: true}
+	root.SetOut(io.Discard)
+	group := &cobra.Command{Use: "group"}
+	group.AddCommand(&cobra.Command{Use: "sub", Run: func(*cobra.Command, []string) {}})
+	root.AddCommand(group)
+	usageErrors(root)
+	root.SetArgs([]string{"group"})
+	if err := root.Execute(); err != nil {
+		t.Errorf("bare group: %v", err)
 	}
 }

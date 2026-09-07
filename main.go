@@ -223,9 +223,20 @@ Command completion is available at:
 
 // usageErrors wraps every command's argument validator and the flag error
 // handler so that cobra's own errors, a bad argument count or an unknown
-// flag, exit 2 like every other usage error.
+// flag, exit 2 like every other usage error. A group with no Run of its own
+// gets one that treats a stray argument as an unknown subcommand; cobra
+// itself only reports those at the root, and answered "kcl profile nope"
+// with the help text and exit 0.
 func usageErrors(root *cobra.Command) {
 	allCommands(root, func(cmd *cobra.Command) {
+		if cmd.HasSubCommands() && !cmd.Runnable() {
+			cmd.RunE = func(c *cobra.Command, args []string) error {
+				if len(args) > 0 {
+					return out.Errf(out.ExitUsage, "unknown command %q for %q", args[0], c.CommandPath())
+				}
+				return c.Help()
+			}
+		}
 		validate := cmd.Args
 		if validate == nil {
 			return
