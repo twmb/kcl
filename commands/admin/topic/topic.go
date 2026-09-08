@@ -360,43 +360,60 @@ without actually deleting them.
 func topicAddPartitionsCommand(cl *client.Client) *cobra.Command {
 	var topics []string
 	var force bool
+	var num, total int
+	var assigns []string
 
 	cmd := &cobra.Command{
-		Use:   "add-partitions -t TOPIC ASSIGNMENTS",
+		Use:   "add-partitions TOPIC",
 		Short: "Add partitions to a topic.",
 		Long: `Add partitions to a topic.
 
 Requires Kafka 1.0.0+.
 
-As a client, adding partitions to topics is done by requesting a total amount
-of partitions for a topic combined with an assignment of which brokers should
-own the replicas of each new partition.
-
-This CLI handles the total count of final partitions; you as a user just need
-to specify the where new partitions and their replicas should go.
-
-When adding partitions to multiple topics, all topics use the same assignment.
-
-The assignment format is
-
-  replica,replica : replica,replica
-  \             /   \             /
-   one partition     one partition
+-n adds that many partitions and lets the broker place their replicas.
+--total brings the topic to that many partitions: a topic already past it is
+an error, one already there is nothing to do, otherwise the difference is
+added. -a places the new partitions yourself, one -a per partition listing
+the brokers its replicas go on, comma separated, leader first; -a '1,2:3,1'
+in one value is the same as -a 1,2 -a 3,1. Each new partition must have as
+many replicas as the existing ones.
 `,
 
-		Example: `To add three partitions with two replicas each,
-add-partitions -t foo 1,2 : 3,1 : 2,3
+		Example: `add-partitions foo -n 3                  # three more, broker places replicas
+add-partitions foo --total 12            # up to twelve; nothing to do if already there
+add-partitions foo -a 1,2 -a 3,1 -a 2,3  # three more, on brokers 1+2, 3+1, 2+3`,
 
-To add three partitions with one replica each,
-add-partitions -t foo 1:2:3
-
-To add a single partition with three replicas to two topics,
-add-partitions -t bar -t baz 1, 2, 3`,
-
-		Args: cobra.MinimumNArgs(1),
+		Args: cobra.ArbitraryArgs,
 		RunE: func(_ *cobra.Command, args []string) error {
-			if len(topics) == 0 {
-				return out.Errf(out.ExitUsage, "missing topics to add partitions to")
+			// With -t this is the old form: the positionals are the
+			// assignments, "1,2 : 3,1". Without it the one positional is
+			// the topic and -n or -a says what to add.
+			var assignments []kmsg.CreatePartitionsRequestTopicAssignment
+			var err error
+			if len(topics) > 0 {
+				if assignments, err = parseAssignments(strings.Join(args, "")); err != nil {
+					return fmt.Errorf("parse assignments failure: %v", err)
+				}
+				if len(assignments) == 0 {
+					return out.Errf(out.ExitUsage, "no new partitions requested")
+				}
+			} else {
+				if len(args) != 1 {
+					return out.Errf(out.ExitUsage, "add-partitions takes one topic, then -n COUNT or -a BROKERS once per new partition")
+				}
+				topics = args
+				switch {
+				case num > 0 && total > 0:
+					return out.Errf(out.ExitUsage, "-n and --total are exclusive")
+				case num > 0 && len(assigns) > 0:
+					return out.Errf(out.ExitUsage, "-n and -a are exclusive: -n lets the broker place replicas, -a places them")
+				case len(assigns) > 0:
+					if assignments, err = parseAssignments(strings.Join(assigns, ":")); err != nil {
+						return out.Errf(out.ExitUsage, "invalid -a: %v", err)
+					}
+				case num == 0 && total == 0:
+					return out.Errf(out.ExitUsage, "nothing to add: pass -n COUNT, --total COUNT, or -a BROKERS once per new partition")
+				}
 			}
 
 			for _, topic := range topics {
@@ -406,14 +423,6 @@ add-partitions -t bar -t baz 1, 2, 3`,
 				if strings.HasPrefix(topic, "__") && force {
 					fmt.Fprintf(os.Stderr, "WARNING: modifying internal topic %q; this can cause system instability\n", topic)
 				}
-			}
-
-			assignments, err := parseAssignments(strings.Join(args, ""))
-			if err != nil {
-				return fmt.Errorf("parse assignments failure: %v", err)
-			}
-			if len(assignments) == 0 {
-				return out.Errf(out.ExitUsage, "no new partitions requested")
 			}
 
 			// Get the metadata so we can determine the final partition count.
@@ -436,21 +445,41 @@ add-partitions -t bar -t baz 1, 2, 3`,
 					return fmt.Errorf("metadata returned nil topic, unknown topic ID!")
 				}
 				currentPartitionCount := len(topic.Partitions)
-				if currentPartitionCount > 0 {
+				adding := num
+				if len(assignments) > 0 {
+					adding = len(assignments)
+				}
+				if total > 0 {
+					switch {
+					case currentPartitionCount > total:
+						return out.Errf(out.ExitError, "topic %s has %d partitions, more than --total %d", *topic.Topic, currentPartitionCount, total)
+					case currentPartitionCount == total:
+						fmt.Fprintf(os.Stderr, "topic %s already has %d partitions\n", *topic.Topic, total)
+						continue
+					}
+					if want := total - currentPartitionCount; len(assignments) > 0 && len(assignments) != want {
+						return out.Errf(out.ExitUsage, "--total %d needs %d new partitions but -a lists %d", total, want, len(assignments))
+					} else {
+						adding = want
+					}
+				}
+				if currentPartitionCount > 0 && len(assignments) > 0 {
 					currentReplicaCount := len(topic.Partitions[0].Replicas)
 					if currentReplicaCount != len(assignments[0].Replicas) {
-						fmt.Fprintf(os.Stderr, "ERR: requested topic %s has partitions with %d replicas; you cannot create a new partition with %d (must match)",
-							*topic.Topic, currentReplicaCount, len(assignments[0].Replicas))
+						return out.Errf(out.ExitUsage, "topic %s has %d replicas per partition; each -a must list %d brokers", *topic.Topic, currentReplicaCount, currentReplicaCount)
 					}
 				}
 
 				createReq.Topics = append(createReq.Topics, kmsg.CreatePartitionsRequestTopic{
 					Topic:      *topic.Topic,
-					Count:      int32(currentPartitionCount + len(assignments)),
+					Count:      int32(currentPartitionCount + adding),
 					Assignment: assignments,
 				})
 			}
 
+			if len(createReq.Topics) == 0 {
+				return nil
+			}
 			createResp, err := cl.Client().Request(context.Background(), &createReq)
 			if err != nil {
 				return fmt.Errorf("unable to create topic partitions: %v", err)
@@ -475,7 +504,11 @@ add-partitions -t bar -t baz 1, 2, 3`,
 		},
 	}
 
-	cmd.Flags().StringArrayVarP(&topics, "topic", "t", nil, "topic to add partitions to; repeatable")
+	cmd.Flags().IntVarP(&num, "num", "n", 0, "number of partitions to add; the broker places their replicas")
+	cmd.Flags().IntVar(&total, "total", 0, "partition count to bring the topic to; past it fails, at it does nothing")
+	cmd.Flags().StringArrayVarP(&assigns, "assignment", "a", nil, "brokers for one new partition, comma separated, leader first; repeat once per partition")
+	cmd.Flags().StringArrayVarP(&topics, "topic", "t", nil, "old form: topic to add partitions to, with the assignments as arguments")
+	cmd.Flags().MarkHidden("topic")
 	cmd.Flags().BoolVar(&force, "force", false, "allow modifying internal topics (those starting with \"__\")")
 
 	return cmd
