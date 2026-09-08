@@ -15,6 +15,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/flagutil"
 	"github.com/twmb/kcl/out"
 )
 
@@ -43,8 +44,10 @@ AWK mode defaults to partitions. JSON always includes all sections.
 
 Health filters show only partitions matching the condition.
 
-Topics can be referenced by name (positional args) or UUID (--topic-id,
-repeatable). UUIDs are 32 hex characters with optional dashes.
+An argument is a topic name; one shaped like a topic id that names no topic is
+looked up as an id instead. A name wins over an id, so --topic-id is how to
+mean the id when a topic is named after one. Ids are 32 hex characters with
+optional dashes.
 
 EXAMPLES:
   kcl topic describe foo                         # all sections
@@ -62,6 +65,10 @@ SEE ALSO:
 		RunE: func(_ *cobra.Command, topics []string) error {
 			if len(topics) == 0 && len(topicIDs) == 0 {
 				return out.Errf(out.ExitUsage, "at least one topic name or --topic-id is required")
+			}
+			topics, err := flagutil.ResolveTopics(context.Background(), cl.Client(), topics)
+			if err != nil {
+				return err
 			}
 			// Parse and validate topic IDs up front.
 			parsedIDs := make([][16]byte, 0, len(topicIDs))

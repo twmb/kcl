@@ -18,6 +18,7 @@ import (
 
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/commands/metadata"
+	"github.com/twmb/kcl/flagutil"
 	"github.com/twmb/kcl/kv"
 	"github.com/twmb/kcl/out"
 )
@@ -249,6 +250,12 @@ pattern will be deleted. Use --dry-run to see which topics would be deleted
 without actually deleting them.
 `,
 		RunE: func(_ *cobra.Command, topics []string) error {
+			if !useRegex {
+				var err error
+				if topics, err = flagutil.ResolveTopics(context.Background(), cl.Client(), topics); err != nil {
+					return err
+				}
+			}
 			if useRegex {
 				if ids {
 					return out.Errf(out.ExitUsage, "--regex and --ids cannot be used together")
@@ -401,7 +408,10 @@ add-partitions foo -a 1,2 -a 3,1 -a 2,3  # three more, on brokers 1+2, 3+1, 2+3`
 				if len(args) != 1 {
 					return out.Errf(out.ExitUsage, "add-partitions takes one topic, then -n COUNT or -a BROKERS once per new partition")
 				}
-				topics = args
+				var err error
+				if topics, err = flagutil.ResolveTopics(context.Background(), cl.Client(), args); err != nil {
+					return err
+				}
 				switch {
 				case num > 0 && total > 0:
 					return out.Errf(out.ExitUsage, "-n and --total are exclusive")
