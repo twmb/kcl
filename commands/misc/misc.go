@@ -380,7 +380,7 @@ func listOffsetsCommand(cl *client.Client) *cobra.Command {
 	var readCommitted bool
 
 	cmd := &cobra.Command{
-		Use:   "list-offsets",
+		Use:   "list-offsets TOPICS...",
 		Short: "List start, stable, and end offsets for partitions.",
 		Long: `List start, stable, and end offsets for partitions.
 

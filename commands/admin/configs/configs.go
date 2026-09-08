@@ -72,7 +72,7 @@ func (q *querier) parseEntity(args []string) error {
 	switch q.entity {
 	case entityTopic, entityClientMetrics, entityGroup:
 		if len(args) == 0 {
-			return out.Errf(out.ExitUsage, "missing entity name")
+			return out.Errf(out.ExitUsage, "a name is required for -t %s", q.rawEntity)
 		}
 	}
 	if len(args) > 0 {

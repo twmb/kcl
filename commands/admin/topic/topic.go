@@ -78,7 +78,7 @@ func topicCreateCommand(cl *client.Client) *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:     "create TOPICS",
+		Use:     "create TOPICS...",
 		Aliases: []string{"c"},
 		Short:   "Create topics.",
 		Long: `Create topics.
