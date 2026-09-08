@@ -17,6 +17,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/flagutil"
 	"github.com/twmb/kcl/offsetparse"
 	"github.com/twmb/kcl/out"
 )
@@ -57,7 +58,11 @@ SEE ALSO:
 `,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			topicName := args[0]
+			resolved, err := flagutil.ResolveTopics(context.Background(), cl.Client(), args)
+			if err != nil {
+				return err
+			}
+			topicName := resolved[0]
 
 			kclClient := cl.Client()
 			adm := kadm.NewClient(kclClient)
