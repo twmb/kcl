@@ -35,7 +35,9 @@ func seekCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "seek GROUP",
 		Short: "Reset consumer group offsets.",
-		Long: `Reset consumer group offsets (Kafka 0.11.0+).
+		Long: `Reset consumer group offsets.
+
+Requires Kafka 0.11.0+.
 
 Seek adjusts the committed offsets for a consumer group. The group must
 have no active members (state Empty or Dead).

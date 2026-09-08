@@ -42,7 +42,9 @@ func listCommand(cl *client.Client) *cobra.Command {
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List all share groups (Kafka 4.0+).",
-		Long: `List all share groups (KIP-932, Kafka 4.0+).
+		Long: `List all share groups (Kafka 4.0+).
+
+List all share groups (KIP-932, Kafka 4.0+).
 
 This is equivalent to "group list --type-filter share". It lists share groups
 by issuing a ListGroups request with a type filter of "share".
@@ -96,7 +98,9 @@ func describeCommand(cl *client.Client) *cobra.Command {
 		Use:     "describe GROUPS...",
 		Aliases: []string{"d"},
 		Short:   "Describe share groups with offsets and lag (Kafka 4.0+).",
-		Long: `Describe share groups (KIP-932, Kafka 4.0+).
+		Long: `Describe share groups with offsets and lag (Kafka 4.0+).
+
+Describe share groups (KIP-932, Kafka 4.0+).
 
 If no groups are provided, all share groups are listed and then described.
 The output includes group metadata, members, and per-partition start offsets
@@ -472,7 +476,9 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete GROUPS...",
 		Short: "Delete share groups (Kafka 4.0+).",
-		Long: `Delete share groups (KIP-932, Kafka 4.0+).
+		Long: `Delete share groups (Kafka 4.0+).
+
+Delete share groups (KIP-932, Kafka 4.0+).
 
 The groups must be empty (no active consumers) to be deleted.
 

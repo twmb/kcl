@@ -18,7 +18,7 @@ import (
 func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "acl",
-		Short: "Perform acl related actions",
+		Short: "Perform acl related actions.",
 		Long: `Perform acl related actions.
 
 ACLs are one of the most undocumented aspects of Kafka.
@@ -156,8 +156,10 @@ func describeCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls", "describe", "d"},
-		Short:   "List ACLs",
-		Long: `List ACLs on a filter basis (Kafka 0.11.0+).
+		Short:   "List ACLs.",
+		Long: `List ACLs.
+
+List ACLs on a filter basis (Kafka 0.11.0+).
 
 Listing ACLs works on a filter basis: anything matching the requested filter
 is returned. For resource names, principals, and hosts, using a wildcard
@@ -307,8 +309,10 @@ func createCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "create",
 		Aliases: []string{"c"},
-		Short:   "Create ACLs",
-		Long: `Create ACLs on a combinatorial basis (Kafka 0.11.0+).
+		Short:   "Create ACLs.",
+		Long: `Create ACLs.
+
+Create ACLs on a combinatorial basis (Kafka 0.11.0+).
 
 ACL creation is combinatorial: all principals x all hosts x all resources x
 all operations. Requires at least one principal, one resource, and one
@@ -541,7 +545,9 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete",
 		Short: "Delete ACLs.",
-		Long: `Delete ACLs on a filter basis (Kafka 0.11.0+).
+		Long: `Delete ACLs.
+
+Delete ACLs on a filter basis (Kafka 0.11.0+).
 
 Like describing, deleting ACLs works on a filter basis: anything matching the
 requested filter is described. Note that for resource names, principals, and

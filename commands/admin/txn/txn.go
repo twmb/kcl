@@ -35,7 +35,9 @@ func describeProducers(cl *client.Client) *cobra.Command {
 		Use:     "describe-producers",
 		Aliases: []string{"dp"},
 		Short:   "Describe active producers.",
-		Long: `Describe idempotent and transactional producers (Kafka 2.8.0+)
+		Long: `Describe active producers.
+
+Describe idempotent and transactional producers (Kafka 2.8.0+)
 
 From KIP-664, this command is sent to partition leaders to describe the state
 of active idempotent and transactional producers.
@@ -139,7 +141,9 @@ func listCommand(cl *client.Client) *cobra.Command {
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List active transactions (Kafka 3.0+).",
-		Long: `List active transactions across all brokers (Kafka 3.0+).
+		Long: `List active transactions (Kafka 3.0+).
+
+List active transactions across all brokers (Kafka 3.0+).
 
 This command lists all ongoing transactions. You can optionally filter by
 transaction state or producer ID.
@@ -181,7 +185,9 @@ func describeCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "describe TRANSACTIONAL_IDS...",
 		Short: "Describe transactions (Kafka 3.0+).",
-		Long: `Describe active transactions by transactional ID (Kafka 3.0+).
+		Long: `Describe transactions (Kafka 3.0+).
+
+Describe active transactions by transactional ID (Kafka 3.0+).
 
 This command describes the state of one or more transactions, including
 the producer ID, epoch, timeout, and the topics/partitions involved.

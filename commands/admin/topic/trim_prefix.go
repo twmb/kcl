@@ -32,7 +32,9 @@ func topicTrimPrefixCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "trim-prefix TOPIC",
 		Short: "Delete records before a given offset or timestamp.",
-		Long: `Delete records before a given offset or timestamp (Kafka 0.11.0+).
+		Long: `Delete records before a given offset or timestamp.
+
+Requires Kafka 0.11.0+.
 
 This is a user-friendly wrapper around DeleteRecords. It resolves symbolic
 offsets (timestamps, 'end', relative) via ListOffsets before issuing the

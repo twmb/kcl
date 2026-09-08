@@ -17,7 +17,9 @@ func offsetDeleteCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "offset-delete GROUP TOPICS...",
 		Short: "Delete share group offsets for topics (Kafka 4.0+).",
-		Long: `Delete share group offsets for topics (KIP-932, Kafka 4.0+).
+		Long: `Delete share group offsets for topics (Kafka 4.0+).
+
+Delete share group offsets for topics (KIP-932, Kafka 4.0+).
 
 The group must be empty (no active consumers). This deletes all offset state
 for the specified topics within the share group.

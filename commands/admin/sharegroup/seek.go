@@ -34,7 +34,9 @@ func seekCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "seek GROUP",
 		Short: "Reset share group start offsets.",
-		Long: `Reset share group start offsets (KIP-932, Kafka 4.0+).
+		Long: `Reset share group start offsets.
+
+Requires Kafka 4.0+ (KIP-932).
 
 Seek adjusts the start offsets for a share group. The group must be
 empty (no active consumers).

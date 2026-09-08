@@ -85,7 +85,9 @@ func compatTestCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "test SUBJECT",
 		Short: "Test whether a schema is compatible with a subject version.",
-		Long: `Test whether a candidate schema is compatible with an existing subject version.
+		Long: `Test whether a schema is compatible with a subject version.
+
+Test whether a candidate schema is compatible with an existing subject version.
 
 The candidate schema is read from -s/--schema or stdin. --version selects which
 existing version to check against ("latest" by default, or "all" to check

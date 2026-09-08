@@ -34,7 +34,7 @@ func apiVersionsRequest() *kmsg.ApiVersionsRequest {
 func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "misc",
-		Short: "Miscellaneous utilities (version probing, error code/text, offset listing)",
+		Short: "Miscellaneous utilities (version probing, error code/text, offset listing).",
 	}
 
 	cmd.AddCommand(errcodeCommand())
@@ -52,7 +52,7 @@ func Command(cl *client.Client) *cobra.Command {
 func errcodeCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "errcode CODE",
-		Short: "Print the name and description for an error code",
+		Short: "Print the name and description for an error code.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			code, err := strconv.Atoi(args[0])
@@ -74,7 +74,7 @@ func errtextCommand() *cobra.Command {
 	var list, verbose bool
 	cmd := &cobra.Command{
 		Use:   "errtext [ERROR_NAME]",
-		Short: "Print the name, code and description for an error name or all errors",
+		Short: "Print the name, code and description for an error name or all errors.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			var text string
@@ -123,8 +123,10 @@ func genAutocompleteCommand() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "gen-autocomplete",
-		Short: "Generates bash completion scripts",
-		Long: `To load completion run
+		Short: "Generates bash completion scripts.",
+		Long: `Generates bash completion scripts.
+
+To load completion run
 
 . <(kcl misc gen-autocomplete -kbash)
 
@@ -222,7 +224,7 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 func probeVersionCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "probe-version",
-		Short: "Probe and print the version of Kafka running (incompatible with --as-version)",
+		Short: "Probe and print the version of Kafka running (incompatible with --as-version).",
 		Args:  cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
 			probeVersion(cl)
@@ -353,7 +355,9 @@ func listOffsetsCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list-offsets",
 		Short: "List start, stable, and end offsets for partitions.",
-		Long: `List start, stable, and end offsets for topics or partitions (Kafka 0.10.0+).
+		Long: `List start, stable, and end offsets for partitions.
+
+List start, stable, and end offsets for topics or partitions (Kafka 0.10.0+).
 
 The input format is topic:#,#,# or just topic. If a topic is given without
 partitions, a metadata request is issued to figure out all partitions for the

@@ -15,7 +15,9 @@ func referencesCommand(cl *client.Client) *cobra.Command {
 		Use:     "references SUBJECT",
 		Aliases: []string{"refs", "referenced-by"},
 		Short:   "List schemas that reference a subject version.",
-		Long: `List the schemas that reference a given subject version.
+		Long: `List schemas that reference a subject version.
+
+List the schemas that reference a given subject version.
 
 This is the reverse of a schema's own references: it answers "who depends on
 this schema?", which is useful before deleting or evolving it.`,

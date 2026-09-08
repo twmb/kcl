@@ -43,7 +43,7 @@ func Command(cl *client.Client) *cobra.Command {
 func DeprecatedCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:        "myconfig",
-		Short:      "kcl configuration commands",
+		Short:      "kcl configuration commands.",
 		Deprecated: "use 'kcl profile' instead",
 		Hidden:     true,
 	}
@@ -68,7 +68,7 @@ func DeprecatedCommand(cl *client.Client) *cobra.Command {
 func useCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "use NAME",
-		Short: "Switch the active profile",
+		Short: "Switch the active profile.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			name := args[0]
@@ -100,7 +100,7 @@ func listCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
-		Short:   "List all profiles",
+		Short:   "List all profiles.",
 		Args:    cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
 			cfgPath := cl.CfgFilePath()
@@ -406,7 +406,7 @@ func dumpCommand(cl *client.Client) *cobra.Command {
 func renameCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "rename OLD NEW",
-		Short: "Rename a profile",
+		Short: "Rename a profile.",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
 			oldName, newName := args[0], args[1]
@@ -443,7 +443,7 @@ func renameCommand(cl *client.Client) *cobra.Command {
 func deleteCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "delete NAME",
-		Short: "Delete a profile",
+		Short: "Delete a profile.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			name := args[0]
@@ -528,7 +528,7 @@ func linkCommand(cl *client.Client) *cobra.Command {
 	dir := filepath.Dir(cl.DefaultCfgPath())
 	return &cobra.Command{
 		Use:        "link NAME",
-		Short:      "Link a config file (deprecated: use 'profile use')",
+		Short:      "Link a config file (deprecated: use 'profile use').",
 		Deprecated: "use 'kcl profile use' instead",
 		Hidden:     true,
 		Args:       cobra.ExactArgs(1),
@@ -582,7 +582,7 @@ func linkCommand(cl *client.Client) *cobra.Command {
 func unlinkCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:        "unlink",
-		Short:      "Remove config symlink (deprecated: use 'profile use')",
+		Short:      "Remove config symlink (deprecated: use 'profile use').",
 		Deprecated: "use 'kcl profile use' instead",
 		Hidden:     true,
 		Args:       cobra.ExactArgs(0),

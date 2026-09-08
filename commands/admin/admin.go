@@ -66,8 +66,10 @@ func ElectLeadersCommand(cl *client.Client) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "elect-leaders",
-		Short: "Trigger leader elections for partitions",
-		Long: `Trigger leader elections for topic partitions (Kafka 2.2.0+).
+		Short: "Trigger leader elections for partitions.",
+		Long: `Trigger leader elections for partitions.
+
+Trigger leader elections for topic partitions (Kafka 2.2.0+).
 
 This command allows for triggering leader elections on any topic and any
 partition, as well as on all topic partitions. To run on all, you must not

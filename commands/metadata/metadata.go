@@ -25,8 +25,10 @@ func Command(cl *client.Client) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "metadata [TOPICS]",
-		Short: "Issue a metadata command and dump the results",
-		Long: `Request metadata (0.8.0+).
+		Short: "Issue a metadata command and dump the results.",
+		Long: `Show cluster metadata.
+
+Request metadata (0.8.0+).
 
 Kafka's metadata contains a good deal of information about brokers, topics,
 and the cluster as a whole. This is the command to use to get general info

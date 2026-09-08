@@ -29,7 +29,9 @@ func alterPartitionAssignments(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "alter",
 		Short: "Alter partition assignments.",
-		Long: `Alter which brokers partitions are assigned to (Kafka 2.4.0+).
+		Long: `Alter partition assignments.
+
+Alter which brokers partitions are assigned to (Kafka 2.4.0+).
 
 The syntax for each topic is
 
@@ -104,7 +106,9 @@ func cancelPartitionReassignments(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "cancel",
 		Short: "Cancel in-progress partition reassignments.",
-		Long: `Cancel active partition reassignments (Kafka 2.4.0+).
+		Long: `Cancel in-progress partition reassignments.
+
+Cancel active partition reassignments (Kafka 2.4.0+).
 
 The syntax for each topic is
 
@@ -184,7 +188,9 @@ func listPartitionReassignments(cl *client.Client) *cobra.Command {
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List partition reassignments.",
-		Long: `List which partitions are currently being reassigned (Kafka 2.4.0+).
+		Long: `List partition reassignments.
+
+List which partitions are currently being reassigned (Kafka 2.4.0+).
 
 The syntax for each topic is
 

@@ -30,8 +30,10 @@ func describeCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "describe GROUPS...",
 		Aliases: []string{"d"},
-		Short:   "Describe consumer groups with lag",
-		Long: `Describe consumer groups with per-partition lag.
+		Short:   "Describe consumer groups with lag.",
+		Long: `Describe consumer groups with lag.
+
+Describe consumer groups with per-partition lag.
 
 By default, text format shows all sections (summary, lag, members). AWK
 format defaults to the lag section. JSON always includes all sections.

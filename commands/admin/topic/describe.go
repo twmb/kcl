@@ -33,8 +33,10 @@ func topicDescribeCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "describe TOPICS...",
 		Aliases: []string{"d"},
-		Short:   "Describe topics with partition detail",
-		Long: `Describe topics showing summary, partitions, and optionally configs.
+		Short:   "Describe topics with partition detail.",
+		Long: `Describe topics with partition detail.
+
+Describe topics showing summary, partitions, and optionally configs.
 
 By default in text mode, shows all sections. Use --section to select one.
 AWK mode defaults to partitions. JSON always includes all sections.

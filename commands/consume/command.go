@@ -12,7 +12,7 @@ func (c *consumption) command() *cobra.Command {
 	var topicFlags []string
 	cmd := &cobra.Command{
 		Use:   "consume [TOPICS...]",
-		Short: "Consume topic records",
+		Short: "Consume topic records.",
 		Long:  help,
 		RunE: func(_ *cobra.Command, args []string) error {
 			topics := append(args, topicFlags...)
@@ -52,7 +52,9 @@ func (c *consumption) command() *cobra.Command {
 	return cmd
 }
 
-const help = `Consume topic records and print them.
+const help = `Consume topic records.
+
+Consume topic records and print them.
 
 This function consumes Kafka topics and prints the records with a configurable
 format. The output format takes similar arguments as kafkacat, with the default
@@ -202,7 +204,7 @@ times. If the parser needs more data than available, or if more input remains
 after '$', an error message will be appended.
 
 
-EXAMPLES
+EXAMPLES:
 
 Default (value only, newline-delimited):
   -f '%v\n'

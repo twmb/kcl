@@ -31,7 +31,9 @@ func Command(cl *client.Client) *cobra.Command {
 		Use:     "registry",
 		Aliases: []string{"sr"},
 		Short:   "Schema Registry administration (schemas, subjects, compatibility, mode).",
-		Long: `Schema Registry administration.
+		Long: `Schema Registry administration (schemas, subjects, compatibility, mode).
+
+Schema Registry administration.
 
 The Schema Registry is a separate HTTP service from the Kafka brokers. Point
 kcl at it with any of:
