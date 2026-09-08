@@ -61,14 +61,14 @@ By default, seeking will only commit offsets for topics already present
 in the group's committed offsets. Use --allow-new-topics to also commit
 offsets for topics not currently in the group.
 
---topics accepts plain names or topic:partitions pairs:
+-t accepts plain names or topic:partitions pairs:
   foo              all partitions of foo
   foo:0,2          only partitions 0 and 2 of foo
 
 EXAMPLES:
   kcl group seek mygroup --to start
-  kcl group seek mygroup --to end --topics foo,bar
-  kcl group seek mygroup --to 100 --topics foo:0,1,2
+  kcl group seek mygroup --to end -t foo,bar
+  kcl group seek mygroup --to 100 -t foo:0,1,2
   kcl group seek mygroup --to @-1h
   kcl group seek mygroup --to @2024-01-15
   kcl group seek mygroup --to +0 --yes
@@ -220,7 +220,7 @@ SEE ALSO:
 					return out.Errf(out.ExitUsage, "--to does not accept range offsets; use a single target value")
 				}
 
-				// Determine target topics: either from --topics flag or from existing commits.
+				// Determine target topics: either from -t flag or from existing commits.
 				var targetTopics []string
 				if len(topicNames) > 0 {
 					targetTopics = topicNames
@@ -234,7 +234,7 @@ SEE ALSO:
 					})
 				}
 				if len(targetTopics) == 0 {
-					return fmt.Errorf("no topics to seek; the group has no committed offsets and --topics was not specified")
+					return fmt.Errorf("no topics to seek; the group has no committed offsets and -t was not specified")
 				}
 
 				keepListed := func(lo kadm.ListedOffset) bool {
@@ -443,8 +443,10 @@ SEE ALSO:
 	cmd.Flags().StringVar(&to, "to", "", "target offset (start, end, +N, -N, N, @timestamp)")
 	cmd.Flags().StringVar(&toGroup, "to-group", "", "seek to another group's committed offsets (mutually exclusive with --to and --to-file)")
 	cmd.Flags().StringVar(&toFile, "to-file", "", "seek to offsets from a JSON file (mutually exclusive with --to and --to-group)")
-	cmd.Flags().StringArrayVar(&topics, "topics", nil, "filter to specific topics; repeatable or comma-separated, entries may be topic:p1,p2")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview offset changes without applying")
+	cmd.Flags().StringArrayVarP(&topics, "topic", "t", nil, "filter to specific topics; repeatable or comma-separated, entries may be topic:p1,p2")
+	cmd.Flags().StringArrayVar(&topics, "topics", nil, "old name of --topic")
+	cmd.Flags().MarkHidden("topics")
+	cmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "preview offset changes without applying")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "apply changes without interactive confirmation")
 	cmd.Flags().BoolVar(&allowNewTopics, "allow-new-topics", false, "allow committing offsets for topics not in the group's current commits")
 

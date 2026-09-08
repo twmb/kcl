@@ -505,7 +505,7 @@ SEE ALSO:
 	cmd.Flags().BoolVar(&cluster, "cluster", false, "cluster resource")
 	cmd.Flags().StringArrayVar(&operations, "operation", nil, "operation to allow or deny (repeatable)")
 	cmd.Flags().StringVar(&pattern, "pattern", "literal", "resource pattern type: literal or prefixed (Kafka 2.0.0+)")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview ACLs that would be created without creating them")
+	cmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "preview ACLs that would be created without creating them")
 
 	// Deprecated flags — hidden, still work.
 	cmd.Flags().StringArrayVar(&oldTypes, "type", nil, "")
@@ -766,7 +766,7 @@ For more detailed information about ACLs, read kcl acl --help.
 		"operation":  operationValues,
 		"permission": permissionValues,
 	})
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print ACLs that would be deleted without actually deleting them")
+	cmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "print ACLs that would be deleted without actually deleting them")
 	cmd.Flags().BoolVarP(&noConfirm, "yes", "y", false, "skip confirmation prompt before deleting")
 
 	// Ergonomic resource-specific flags.

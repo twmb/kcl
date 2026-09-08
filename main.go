@@ -104,7 +104,8 @@ func isPseudoVersion(v string) bool {
 	return false
 }
 
-func main() {
+// buildRoot builds the whole command tree with the client it shares.
+func buildRoot() (*cobra.Command, *client.Client) {
 	v := resolveVersion()
 	client.SetVersion(v)
 	if version == "" && v == "dev" {
@@ -221,6 +222,12 @@ Command completion is available at:
 	root.RegisterFlagCompletionFunc("config-opt", func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
 		return client.XCompletions(), cobra.ShellCompDirectiveNoFileComp | cobra.ShellCompDirectiveNoSpace
 	})
+
+	return root, cl
+}
+
+func main() {
+	root, cl := buildRoot()
 
 	if wantsHelpJSON(os.Args[1:]) {
 		tree := buildCommandJSON(root, false)

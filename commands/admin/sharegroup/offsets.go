@@ -14,8 +14,9 @@ import (
 )
 
 func offsetDeleteCommand(cl *client.Client) *cobra.Command {
+	var topicFlags []string
 	cmd := &cobra.Command{
-		Use:   "offset-delete GROUP TOPICS...",
+		Use:   "offset-delete GROUP",
 		Short: "Delete share group offsets for topics (Kafka 4.0+).",
 		Long: `Delete share group offsets for topics (Kafka 4.0+).
 
@@ -24,11 +25,16 @@ Delete share group offsets for topics (KIP-932, Kafka 4.0+).
 The group must be empty (no active consumers). This deletes all offset state
 for the specified topics within the share group.
 `,
-		Example: "offset-delete mygroup foo bar",
-		Args:    cobra.MinimumNArgs(2),
+		Example: "offset-delete mygroup -t foo -t bar",
+		Args:    cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			group := args[0]
-			topics := args[1:]
+			// Positional topics after the group are the old form, kept
+			// working but out of the help.
+			topics := append(topicFlags, args[1:]...)
+			if len(topics) == 0 {
+				return out.Errf(out.ExitUsage, "at least one topic is required (-t)")
+			}
 
 			req := kmsg.NewPtrDeleteShareGroupOffsetsRequest()
 			req.GroupID = group
@@ -67,5 +73,6 @@ for the specified topics within the share group.
 			return nil
 		},
 	}
+	cmd.Flags().StringArrayVarP(&topicFlags, "topic", "t", nil, "topic to delete offsets for; repeatable")
 	return cmd
 }

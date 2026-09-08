@@ -157,8 +157,8 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print groups that would be deleted without actually deleting them")
-	cmd.Flags().BoolVar(&regex, "regex", false, "treat group arguments as regular expressions")
+	cmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "print groups that would be deleted without actually deleting them")
+	cmd.Flags().BoolVarP(&regex, "regex", "r", false, "treat group arguments as regular expressions")
 	return cmd
 }
 

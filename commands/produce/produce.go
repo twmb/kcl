@@ -398,7 +398,7 @@ Examples:
 	cmd.Flags().BoolVar(&allowAutoTopicCreate, "allow-auto-topic-creation", false, "allow auto-creation of topics that don't exist")
 	cmd.Flags().StringArrayVarP(&headers, "header", "H", nil, "header in key=value format to attach to each record (repeatable)")
 
-	cmd.Flags().StringVar(&valueSchemaSpec, "schema", "", "Schema Registry encode the value; spec is topic[@ver] | subject[@ver] | subject:NAME[@ver] | id:N, with optional #message (see help)")
+	cmd.Flags().StringVarP(&valueSchemaSpec, "schema", "s", "", "Schema Registry encode the value; spec is topic[@ver] | subject[@ver] | subject:NAME[@ver] | id:N, with optional #message (see help)")
 	cmd.Flags().StringVar(&keySchemaSpec, "key-schema", "", "Schema Registry encode the key; same spec form as --schema")
 
 	return cmd

@@ -293,7 +293,7 @@ Both --set and --del can be specified many times.
 	}
 
 	cmd.Flags().StringArrayVar(&dels, "del", nil, "user and mechanism pairing to delete, repeatable")
-	cmd.Flags().StringArrayVar(&sets, "set", nil, "user and mechanism pairing to insert or update, repeatable")
+	cmd.Flags().StringArrayVarP(&sets, "set", "s", nil, "user and mechanism pairing to insert or update, repeatable")
 
 	return cmd
 }

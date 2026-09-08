@@ -55,16 +55,16 @@ because share groups have start offsets, not committed offsets.
 The --to-file flag reads target offsets from a JSON file with format:
   [{"topic": "foo", "partition": 0, "offset": 100}, ...]
 
---topics accepts plain names or topic:partitions pairs (matching the
+-t accepts plain names or topic:partitions pairs (matching the
 kafka-share-groups.sh --topic syntax):
   foo              all partitions of foo
   foo:0,2          only partitions 0 and 2 of foo
 
 EXAMPLES:
-  kcl share-group seek mygroup --to start --topics foo,bar
-  kcl share-group seek mygroup --to end --topics foo:0,1,2
-  kcl share-group seek mygroup --to @-1h --topics foo,bar
-  kcl share-group seek mygroup --to 100 --topics foo --dry-run
+  kcl share-group seek mygroup --to start -t foo,bar
+  kcl share-group seek mygroup --to end -t foo:0,1,2
+  kcl share-group seek mygroup --to @-1h -t foo,bar
+  kcl share-group seek mygroup --to 100 -t foo --dry-run
   kcl share-group seek mygroup --to-file offsets.json
 `,
 		Args: cobra.ExactArgs(1),
@@ -156,7 +156,7 @@ EXAMPLES:
 				}
 
 				if len(topicNames) == 0 {
-					return out.Errf(out.ExitUsage, "--topics is required when using --to")
+					return out.Errf(out.ExitUsage, "-t is required when using --to")
 				}
 
 				keepListed := func(lo kadm.ListedOffset) bool {
@@ -305,8 +305,10 @@ EXAMPLES:
 
 	cmd.Flags().StringVar(&to, "to", "", "target offset (start, end, N, @timestamp; mutually exclusive with --to-file)")
 	cmd.Flags().StringVar(&toFile, "to-file", "", "JSON file with per-partition offsets (mutually exclusive with --to)")
-	cmd.Flags().StringArrayVar(&topics, "topics", nil, "topics to seek; repeatable or comma-separated, entries may be topic:p1,p2 (required with --to; optional filter with --to-file)")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview offset changes without applying")
+	cmd.Flags().StringArrayVarP(&topics, "topic", "t", nil, "topics to seek; repeatable or comma-separated, entries may be topic:p1,p2 (required with --to; optional filter with --to-file)")
+	cmd.Flags().StringArrayVar(&topics, "topics", nil, "old name of --topic")
+	cmd.Flags().MarkHidden("topics")
+	cmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "preview offset changes without applying")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "apply changes without interactive confirmation")
 
 	return cmd

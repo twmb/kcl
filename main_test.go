@@ -181,3 +181,62 @@ func TestCommandName(t *testing.T) {
 		}
 	}
 }
+
+// TestTreeShorthandsAndUsage builds the whole tree, which panics on a
+// shorthand collision, and pins the letters and usage lines that were made
+// consistent across commands.
+func TestTreeShorthandsAndUsage(t *testing.T) {
+	root, _ := buildRoot()
+	byPath := map[string]*cobra.Command{}
+	allCommands(root, func(c *cobra.Command) { byPath[c.CommandPath()] = c })
+
+	want := map[string]map[string]string{
+		"kcl acl create":                {"dry-run": "d"},
+		"kcl acl delete":                {"dry-run": "d"},
+		"kcl cluster elect-leaders":     {"dry-run": "d"},
+		"kcl cluster features update":   {"dry-run": "d"},
+		"kcl group delete":              {"dry-run": "d", "regex": "r"},
+		"kcl group describe":            {"regex": "r"},
+		"kcl group seek":                {"dry-run": "d", "topic": "t"},
+		"kcl group offset-delete":       {"topic": "t"},
+		"kcl quota alter":               {"dry-run": "d"},
+		"kcl share-group delete":        {"dry-run": "d", "regex": "r"},
+		"kcl share-group describe":      {"regex": "r"},
+		"kcl share-group seek":          {"dry-run": "d", "topic": "t"},
+		"kcl share-group offset-delete": {"topic": "t"},
+		"kcl topic delete":              {"dry-run": "d", "regex": "r"},
+		"kcl topic list":                {"regex": "r"},
+		"kcl topic trim-prefix":         {"offset": "o", "partitions": "p"},
+		"kcl topic add-partitions":      {"num": "n", "assignment": "a"},
+		"kcl user alter":                {"set": "s"},
+		"kcl produce":                   {"schema": "s"},
+	}
+	for path, flags := range want {
+		cmd := byPath[path]
+		if cmd == nil {
+			t.Errorf("no command %q", path)
+			continue
+		}
+		for name, sh := range flags {
+			f := cmd.Flags().Lookup(name)
+			if f == nil || f.Shorthand != sh {
+				t.Errorf("%s --%s: shorthand = %v, want -%s", path, name, f, sh)
+			}
+		}
+	}
+	for path, old := range map[string]string{"kcl group seek": "topics", "kcl share-group seek": "topics", "kcl topic add-partitions": "topic"} {
+		if f := byPath[path].Flags().Lookup(old); f == nil || !f.Hidden {
+			t.Errorf("%s --%s should still exist, hidden", path, old)
+		}
+	}
+	for path, use := range map[string]string{
+		"kcl topic create":              "create TOPICS...",
+		"kcl misc list-offsets":         "list-offsets TOPICS...",
+		"kcl topic add-partitions":      "add-partitions TOPIC",
+		"kcl share-group offset-delete": "offset-delete GROUP",
+	} {
+		if got := byPath[path].Use; got != use {
+			t.Errorf("%s Use = %q, want %q", path, got, use)
+		}
+	}
+}
