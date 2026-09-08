@@ -36,7 +36,9 @@ func describeClientQuotas(cl *client.Client) *cobra.Command {
 		Use:     "describe",
 		Aliases: []string{"d"},
 		Short:   "Describe client quotas.",
-		Long: `Describe client quotas (Kafka 2.6.0+)
+		Long: `Describe client quotas.
+
+Requires Kafka 2.6.0+.
 
 As mentioned in KIP-546, "by default, quotas are defined in terms of a user and
 client ID, where the user acts as an opaque principal name, and the client ID
@@ -158,7 +160,9 @@ func alterClientQuotas(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "alter",
 		Short: "Alter client quotas.",
-		Long: `Alter client quotas (Kafka 2.6.0+)
+		Long: `Alter client quotas.
+
+Requires Kafka 2.6.0+.
 
 This command alters client quotas; to see a bit more of a description on
 quotas, see the help text for client-quotas or read KIP-546.

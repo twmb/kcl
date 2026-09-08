@@ -15,7 +15,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/twmb/franz-go/pkg/sr"
 
 	"github.com/twmb/kcl/client"
@@ -69,6 +71,27 @@ type consumption struct {
 // Command returns a consume command.
 func Command(cl *client.Client) *cobra.Command {
 	return (&consumption{cl: cl}).command()
+}
+
+// checkTopicsExist errors if any of topics is unknown to the cluster. The
+// metadata request does not allow auto creation, so asking does not create.
+func checkTopicsExist(ctx context.Context, cl *kgo.Client, topics []string) error {
+	req := kmsg.NewPtrMetadataRequest()
+	for _, topic := range topics {
+		rt := kmsg.NewMetadataRequestTopic()
+		rt.Topic = kmsg.StringPtr(topic)
+		req.Topics = append(req.Topics, rt)
+	}
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		return fmt.Errorf("unable to check that topics exist: %v", err)
+	}
+	for _, t := range resp.Topics {
+		if err := kerr.ErrorForCode(t.ErrorCode); err != nil && t.Topic != nil {
+			return out.Errf(out.ExitError, "unable to consume topic %q: %v", *t.Topic, err)
+		}
+	}
+	return nil
 }
 
 func (c *consumption) run(topics []string) error {
@@ -218,6 +241,15 @@ func (c *consumption) run(topics []string) error {
 			cancel()
 		}
 	}()
+
+	// A literal topic that does not exist is a typo far more often than a
+	// topic about to be created, so we fail rather than wait; --regex is
+	// the way to wait for topics to appear.
+	if !c.regex {
+		if err := checkTopicsExist(ctx, cl, topics); err != nil {
+			return err
+		}
+	}
 
 	// Resolve timestamp-based start offsets via ListOffsetsAfterMilli.
 	if c.startTimestampMillis >= 0 {

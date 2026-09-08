@@ -42,7 +42,9 @@ func listCommand(cl *client.Client) *cobra.Command {
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List all share groups (Kafka 4.0+).",
-		Long: `List all share groups (KIP-932, Kafka 4.0+).
+		Long: `List all share groups (Kafka 4.0+).
+
+List all share groups (KIP-932, Kafka 4.0+).
 
 This is equivalent to "group list --type-filter share". It lists share groups
 by issuing a ListGroups request with a type filter of "share".
@@ -96,7 +98,9 @@ func describeCommand(cl *client.Client) *cobra.Command {
 		Use:     "describe GROUPS...",
 		Aliases: []string{"d"},
 		Short:   "Describe share groups with offsets and lag (Kafka 4.0+).",
-		Long: `Describe share groups (KIP-932, Kafka 4.0+).
+		Long: `Describe share groups with offsets and lag (Kafka 4.0+).
+
+Describe share groups (KIP-932, Kafka 4.0+).
 
 If no groups are provided, all share groups are listed and then described.
 The output includes group metadata, members, and per-partition start offsets
@@ -110,6 +114,9 @@ Use --section to show only a specific section of the output:
 Defaults: text shows all sections, awk shows offsets.
 `,
 		RunE: func(_ *cobra.Command, groups []string) error {
+			// A group the broker could not describe is printed with its error
+			// and is a failure, as a missing topic is for topic describe.
+			anyErr := false
 			if section != "" {
 				switch client.Strnorm(section) {
 				case "summary":
@@ -337,6 +344,9 @@ Defaults: text shows all sections, awk shows offsets.
 					resp := shard.Resp.(*kmsg.ShareGroupDescribeResponse)
 					for _, group := range resp.Groups {
 						groupErr := kerr.ErrorForCode(group.ErrorCode)
+						if groupErr != nil {
+							anyErr = true
+						}
 						if showSummary {
 							ls := lagByGroup[group.GroupID]
 							printShareGroupSummary(shard.Meta.NodeID, group, ls.totalLag, ls.partCount, ls.nonZeroLag)
@@ -376,6 +386,9 @@ Defaults: text shows all sections, awk shows offsets.
 						fmt.Println()
 					}
 				}
+			}
+			if anyErr {
+				return out.ErrSilent
 			}
 			return nil
 		},
@@ -472,7 +485,9 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete GROUPS...",
 		Short: "Delete share groups (Kafka 4.0+).",
-		Long: `Delete share groups (KIP-932, Kafka 4.0+).
+		Long: `Delete share groups (Kafka 4.0+).
+
+Delete share groups (KIP-932, Kafka 4.0+).
 
 The groups must be empty (no active consumers) to be deleted.
 

@@ -38,7 +38,9 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "produce [TOPIC]",
 		Short: "Produce records.",
-		Long: `Produce records, optionally to a specific topic, from stdin.
+		Long: `Produce records.
+
+Produce records, optionally to a specific topic, from stdin.
 
 By default, producing reads newline delimited, unkeyed records from stdin.
 The input format (-f) can be specified with delimiters or with sized numbers,
@@ -135,7 +137,7 @@ As well, these text options can be parsed with regular expressions:
   %k{re[\d*]}%v{re[\s+]}
 
 
-EXAMPLES
+EXAMPLES:
 
 To read a newline delimited file, each line a record (no keys):
   -f '%v\n'

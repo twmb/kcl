@@ -230,9 +230,19 @@ Command completion is available at:
 		os.Exit(0)
 	}
 
-	if err := root.Execute(); err != nil {
-		out.HandleError(asUsageError(err), cl.Format())
+	if cmd, err := root.ExecuteC(); err != nil {
+		out.HandleError(asUsageError(err), cl.Format(), commandName(cmd))
 	}
+}
+
+// commandName is the _command a document from cmd carries: the command path
+// under kcl with dots, "topic.list", or "" at the root.
+func commandName(cmd *cobra.Command) string {
+	if cmd == nil {
+		return ""
+	}
+	path := strings.TrimSpace(strings.TrimPrefix(cmd.CommandPath(), "kcl"))
+	return strings.ReplaceAll(path, " ", ".")
 }
 
 // usageErrors wraps every command's argument validator and the flag error

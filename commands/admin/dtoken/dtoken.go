@@ -20,8 +20,10 @@ import (
 func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "dtoken",
-		Short: "Delegation token commands",
-		Long: `Delegation tokens allow for (ideally) a quicker and easier method of enabling
+		Short: "Delegation token commands.",
+		Long: `Delegation token commands.
+
+Delegation tokens allow for (ideally) a quicker and easier method of enabling
 authorization for a wide array of clients. Rather than having to manage many
 accounts external to Kafka, you only need to manage a few accounts and then use
 those accounts to create delegation tokens per client.
@@ -61,8 +63,10 @@ func createTokenCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "create",
 		Aliases: []string{"c"},
-		Short:   "Create a delegation token",
-		Long: `Create a delegation token (Kafka 1.1.0+).
+		Short:   "Create a delegation token.",
+		Long: `Create a delegation token.
+
+Requires Kafka 1.1.0+.
 
 A delegation token inherits all ACLs from the creator. Without any manual
 extra renewers, only the creator can renew.
@@ -123,7 +127,7 @@ func renewTokenCommand(cl *client.Client) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:     "renew",
-		Short:   "Renew a delegation token (Kafka 1.1.0+)",
+		Short:   "Renew a delegation token (Kafka 1.1.0+).",
 		Example: "renew [base64 hmac here]",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
@@ -163,7 +167,7 @@ func expireTokenCommand(cl *client.Client) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:     "expire",
-		Short:   "Change a delegation token expiry time (Kafka 1.1.0+)",
+		Short:   "Change a delegation token expiry time (Kafka 1.1.0+).",
 		Example: "expire [base64 hmac here]",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
@@ -204,7 +208,7 @@ func describeTokensCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "describe",
 		Aliases: []string{"d"},
-		Short:   "Describe delegation tokens (Kafka 1.1.0+)",
+		Short:   "Describe delegation tokens (Kafka 1.1.0+).",
 		Example: ` describe // to display all tokens
 
 describe -o User:admin // to display tokens owned by the admin user`,

@@ -33,8 +33,10 @@ func topicDescribeCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "describe TOPICS...",
 		Aliases: []string{"d"},
-		Short:   "Describe topics with partition detail",
-		Long: `Describe topics showing summary, partitions, and optionally configs.
+		Short:   "Describe topics with partition detail.",
+		Long: `Describe topics with partition detail.
+
+Describe topics showing summary, partitions, and optionally configs.
 
 By default in text mode, shows all sections. Use --section to select one.
 AWK mode defaults to partitions. JSON always includes all sections.
@@ -545,9 +547,12 @@ func fetchTopicConfigs(ctx context.Context, cl kmsg.Requestor, topics []string) 
 	result := make(map[string][]kmsg.DescribeConfigsResponseResourceConfig)
 	for _, r := range resp.Resources {
 		if err := kerr.ErrorForCode(r.ErrorCode); err != nil {
-			// Route per-resource errors to stderr so they don't
-			// contaminate JSON/awk output on stdout.
-			fmt.Fprintf(os.Stderr, "config error for %s: %v\n", r.ResourceName, err)
+			// A missing topic was already reported from the metadata
+			// response. Route other per-resource errors to stderr so they
+			// don't contaminate JSON/awk output on stdout.
+			if err != kerr.UnknownTopicOrPartition {
+				fmt.Fprintf(os.Stderr, "config error for %s: %v\n", r.ResourceName, err)
+			}
 			continue
 		}
 		// Sort configs: non-default first, then alphabetical.

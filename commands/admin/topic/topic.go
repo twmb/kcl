@@ -80,8 +80,10 @@ func topicCreateCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "create TOPICS",
 		Aliases: []string{"c"},
-		Short:   "Create topics",
-		Long: `Create topics (Kafka 0.10.1+).
+		Short:   "Create topics.",
+		Long: `Create topics.
+
+Requires Kafka 0.10.1+.
 
 All topics created with this command will have the same number of partitions,
 replication factor, and key/value configs.
@@ -188,7 +190,7 @@ func topicListCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
-		Short:   "List all topics",
+		Short:   "List all topics.",
 		Long: `List all topics.
 
 EXAMPLES:
@@ -361,8 +363,10 @@ func topicAddPartitionsCommand(cl *client.Client) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "add-partitions -t TOPIC ASSIGNMENTS",
-		Short: "Add partitions to a topic",
-		Long: `Add partitions to a topic (Kafka 1.0.0+).
+		Short: "Add partitions to a topic.",
+		Long: `Add partitions to a topic.
+
+Requires Kafka 1.0.0+.
 
 As a client, adding partitions to topics is done by requesting a total amount
 of partitions for a topic combined with an assignment of which brokers should

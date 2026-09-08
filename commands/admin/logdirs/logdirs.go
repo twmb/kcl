@@ -55,7 +55,9 @@ func describeCommand(cl *client.Client) *cobra.Command {
 		Use:     "describe",
 		Aliases: []string{"d"},
 		Short:   "Describe log directories for topic partitions.",
-		Long: `Describe log directories for topic partitions (Kafka 1.0.0+).
+		Long: `Describe log directories for topic partitions.
+
+Requires Kafka 1.0.0+.
 
 Log directories are partition specific. The size of a directory is the absolute
 size of log segments of a partition, in bytes.
@@ -272,8 +274,10 @@ func alterReplicasCommand(cl *client.Client) *cobra.Command {
 	var broker int32
 	cmd := &cobra.Command{
 		Use:   "alter",
-		Short: "Move topic replicas to a destination directory",
-		Long: `Move topic partitions to specified directories (Kafka 1.0.0+).
+		Short: "Move topic replicas to a destination directory.",
+		Long: `Move topic replicas to a destination directory.
+
+Move topic partitions to specified directories (Kafka 1.0.0+).
 
 Introduced in Kafka 1.0.0, this command allows for moving replica log
 directories. See KIP-113 for the motivation.
@@ -287,6 +291,7 @@ which allows you to alter replicas.
 
 		Example: `alter foo:1,2,3=/dir bar:6=/dir2 baz:9=/dir`,
 
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, topics []string) error {
 			dests := make(map[string]map[string][]int32)
 			for _, topic := range topics {

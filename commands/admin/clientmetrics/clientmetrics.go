@@ -144,7 +144,9 @@ func alterCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "alter NAME",
 		Short: "Create or update a client metrics subscription.",
-		Long: `Create or update a client metrics subscription (KIP-714).
+		Long: `Create or update a client metrics subscription.
+
+See KIP-714.
 
 Common config keys:
   interval.ms            push interval in milliseconds

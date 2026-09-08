@@ -168,3 +168,16 @@ func TestXCompletionRegistered(t *testing.T) {
 		t.Errorf("completions = %v", got)
 	}
 }
+
+func TestCommandName(t *testing.T) {
+	root := &cobra.Command{Use: "kcl"}
+	topic := &cobra.Command{Use: "topic"}
+	list := &cobra.Command{Use: "list", Run: func(*cobra.Command, []string) {}}
+	topic.AddCommand(list)
+	root.AddCommand(topic)
+	for cmd, want := range map[*cobra.Command]string{root: "", topic: "topic", list: "topic.list", nil: ""} {
+		if got := commandName(cmd); got != want {
+			t.Errorf("commandName = %q, want %q", got, want)
+		}
+	}
+}

@@ -121,7 +121,9 @@ func schemaGetCommand(cl *client.Client) *cobra.Command {
 		Use:     "get",
 		Aliases: []string{"describe", "fetch"},
 		Short:   "Fetch a schema by id, or by subject and version.",
-		Long: `Fetch a schema by global id, or by subject and version.
+		Long: `Fetch a schema by id, or by subject and version.
+
+Fetch a schema by global id, or by subject and version.
 
 Exactly one of --id or --subject must be given. With --subject, --version
 defaults to "latest"; pass a specific version number to fetch an older one.
@@ -213,7 +215,9 @@ func schemaListCommand(cl *client.Client) *cobra.Command {
 		Use:     "list [SUBJECT]",
 		Aliases: []string{"ls"},
 		Short:   "List schemas across all subjects, or all versions of one subject.",
-		Long: `List registered schemas.
+		Long: `List schemas across all subjects, or all versions of one subject.
+
+List registered schemas.
 
 With no argument, lists every schema across all subjects. With a SUBJECT, lists
 that subject's schema versions. Each row shows the subject, version, id, and

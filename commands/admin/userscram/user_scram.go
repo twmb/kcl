@@ -64,8 +64,11 @@ func describeUserSCRAM(cl *client.Client) *cobra.Command {
 		Use:     "describe",
 		Aliases: []string{"d"},
 		Short:   "Describe user scram credentials.",
-		Long:    `Describe user scram credentials (Kafka 2.7.0+)`,
-		Args:    cobra.ExactArgs(0),
+		Long: `List user SCRAM credentials.
+
+Requires Kafka 2.7.0+.
+`,
+		Args: cobra.ExactArgs(0),
 
 		RunE: func(_ *cobra.Command, _ []string) error {
 			var req kmsg.DescribeUserSCRAMCredentialsRequest
@@ -121,7 +124,9 @@ func alterUserSCRAM(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "alter",
 		Short: "Alter user scram credentials.",
-		Long: `Alter user scram credentials (Kafka 2.7.0+)
+		Long: `Alter user scram credentials.
+
+Requires Kafka 2.7.0+.
 
 Both deleting and setting have the same input format, with setting requiring
 more keys.

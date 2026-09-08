@@ -34,7 +34,7 @@ func apiVersionsRequest() *kmsg.ApiVersionsRequest {
 func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "misc",
-		Short: "Miscellaneous utilities (version probing, error code/text, offset listing)",
+		Short: "Miscellaneous utilities (version probing, error code/text, offset listing).",
 	}
 
 	cmd.AddCommand(errcodeCommand())
@@ -49,22 +49,36 @@ func Command(cl *client.Client) *cobra.Command {
 	return cmd
 }
 
+// printKerr prints one Kafka error in the requested format; text is the
+// text form, which differs between errcode and errtext.
+func printKerr(format, command string, code int16, name, description, text string) {
+	switch format {
+	case out.FormatJSON:
+		out.MarshalJSON(command, 1, map[string]any{"code": code, "name": name, "description": description})
+	case out.FormatAWK:
+		fmt.Printf("%s\t%d\t%s\n", name, code, description)
+	default:
+		fmt.Print(text)
+	}
+}
+
 func errcodeCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "errcode CODE",
-		Short: "Print the name and description for an error code",
+		Short: "Print the name and description for an error code.",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			code, err := strconv.Atoi(args[0])
 			if err != nil {
 				return fmt.Errorf("unable to parse error code: %v", err)
 			}
+			format, _ := cmd.Flags().GetString("format")
 			if code == 0 {
-				fmt.Println("NONE")
+				printKerr(format, "misc.errcode", 0, "NONE", "", "NONE\n")
 				return nil
 			}
 			kerr := kerr.ErrorForCode(int16(code)).(*kerr.Error)
-			fmt.Printf("%s\n%s\n", kerr.Message, kerr.Description)
+			printKerr(format, "misc.errcode", kerr.Code, kerr.Message, kerr.Description, fmt.Sprintf("%s\n%s\n", kerr.Message, kerr.Description))
 			return nil
 		},
 	}
@@ -74,9 +88,10 @@ func errtextCommand() *cobra.Command {
 	var list, verbose bool
 	cmd := &cobra.Command{
 		Use:   "errtext [ERROR_NAME]",
-		Short: "Print the name, code and description for an error name or all errors",
+		Short: "Print the name, code and description for an error name or all errors.",
 		Args:  cobra.MaximumNArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
+			format, _ := cmd.Flags().GetString("format")
 			var text string
 			if list {
 				if len(args) != 0 {
@@ -90,12 +105,21 @@ func errtextCommand() *cobra.Command {
 				}
 			}
 
+			var table *out.FormattedTable
+			if list && format != out.FormatText {
+				table = out.NewFormattedTable(format, "misc.errtext", 1, "errors", "NAME", "CODE", "DESCRIPTION")
+				defer table.Flush()
+			}
 			var err error
 			for code := int16(1); err != kerr.UnknownServerError; code++ {
 				err = kerr.ErrorForCode(code)
 				kerr := err.(*kerr.Error)
 				if list {
-					fmt.Printf("%s (%d)\n%s\n\n", kerr.Message, kerr.Code, kerr.Description)
+					if table != nil {
+						table.Row(kerr.Message, kerr.Code, kerr.Description)
+					} else {
+						fmt.Printf("%s (%d)\n%s\n\n", kerr.Message, kerr.Code, kerr.Description)
+					}
 					continue
 				}
 
@@ -103,7 +127,7 @@ func errtextCommand() *cobra.Command {
 					fmt.Fprintf(os.Stderr, "trying %s...\n", kerr.Message)
 				}
 				if client.Strnorm(kerr.Message) == text {
-					fmt.Printf("%s (%d)\n%s\n", kerr.Message, kerr.Code, kerr.Description)
+					printKerr(format, "misc.errtext", kerr.Code, kerr.Message, kerr.Description, fmt.Sprintf("%s (%d)\n%s\n", kerr.Message, kerr.Code, kerr.Description))
 					return nil
 				}
 			}
@@ -123,8 +147,10 @@ func genAutocompleteCommand() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "gen-autocomplete",
-		Short: "Generates bash completion scripts",
-		Long: `To load completion run
+		Short: "Generates bash completion scripts.",
+		Long: `Generates bash completion scripts.
+
+To load completion run
 
 . <(kcl misc gen-autocomplete -kbash)
 
@@ -222,7 +248,7 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 func probeVersionCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "probe-version",
-		Short: "Probe and print the version of Kafka running (incompatible with --as-version)",
+		Short: "Probe and print the version of Kafka running (incompatible with --as-version).",
 		Args:  cobra.ExactArgs(0),
 		Run: func(_ *cobra.Command, _ []string) {
 			probeVersion(cl)
@@ -285,6 +311,9 @@ The wire version used is:
 `,
 		Args: cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
+			if key < 0 {
+				return out.Errf(out.ExitUsage, "--key is required")
+			}
 			req := kmsg.RequestForKey(key)
 			if req == nil {
 				return out.Errf(out.ExitUsage, "request key %d unknown", key)
@@ -353,7 +382,9 @@ func listOffsetsCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list-offsets",
 		Short: "List start, stable, and end offsets for partitions.",
-		Long: `List start, stable, and end offsets for topics or partitions (Kafka 0.10.0+).
+		Long: `List start, stable, and end offsets for partitions.
+
+List start, stable, and end offsets for topics or partitions (Kafka 0.10.0+).
 
 The input format is topic:#,#,# or just topic. If a topic is given without
 partitions, a metadata request is issued to figure out all partitions for the

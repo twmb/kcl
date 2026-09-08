@@ -100,7 +100,9 @@ func alterCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "alter [ENTITY]",
 		Short: "Alter configs (topic, broker, broker logger, client-metrics, group).",
-		Long: `Alter configurations (0.11.0+).
+		Long: `Alter configs (topic, broker, broker logger, client-metrics, group).
+
+Alter configurations (0.11.0+).
 
 Kafka has two modes of altering configurations: wholesale altering, and
 incremental altering. The original altering method requires specifying all
@@ -443,7 +445,9 @@ func describeCommand(cl *client.Client) *cobra.Command {
 		Use:     "describe [ENTITY]",
 		Aliases: []string{"d"},
 		Short:   "Describe configs (topic, broker, broker logger, client-metrics, group).",
-		Long: `Describe configurations (Kafka 0.11.0+).
+		Long: `Describe configs (topic, broker, broker logger, client-metrics, group).
+
+Describe configurations (Kafka 0.11.0+).
 
 This command prints all key/value config values for a given entity. Read only
 keys are suffixed with *.

@@ -1,6 +1,7 @@
 package myconfig
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -721,5 +722,61 @@ func TestCurrentHonorsProfileFlag(t *testing.T) {
 				t.Errorf("stdout = %q, want %q", outb, test.want)
 			}
 		})
+	}
+}
+
+func TestProfileFormats(t *testing.T) {
+	const profiles = "current_profile = \"prod\"\n[profiles.prod]\nseed_brokers = [\"p:9092\", \"q:9092\"]\ndial_timeout = \"2s\"\n[profiles.prod.sasl]\nmethod = \"plain\"\n[profiles.dev]\nseed_brokers = [\"d:9092\"]\n"
+	for _, test := range []struct {
+		name string
+		args []string
+		want string
+		json bool
+	}{
+		{name: "list json", args: []string{"--format", "json", "profile", "list"}, want: `"name": "prod"`, json: true},
+		{name: "list awk", args: []string{"--format", "awk", "profile", "list"}, want: "dev\tfalse\nprod\ttrue\n"},
+		{name: "current json", args: []string{"--format", "json", "profile", "current"}, want: `"profile": "prod"`, json: true},
+		{name: "current awk with -C", args: []string{"--format", "awk", "-C", "dev", "profile", "current"}, want: "dev\n"},
+		{name: "dump text is toml", args: []string{"profile", "dump"}, want: "seed_brokers = [\"p:9092\", \"q:9092\"]"},
+		{name: "dump json", args: []string{"--format", "json", "profile", "dump"}, want: `"method": "plain"`, json: true},
+		{name: "dump awk", args: []string{"--format", "awk", "profile", "dump"}, want: "sasl.method\tplain\nseed_brokers\tp:9092,q:9092\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(profiles), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			root := &cobra.Command{Use: "kcl", SilenceUsage: true, SilenceErrors: true}
+			cl := client.New(root)
+			root.AddCommand(Command(cl))
+			root.SetArgs(append([]string{"--config-path", path}, test.args...))
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			old := os.Stdout
+			os.Stdout = w
+			execErr := root.Execute()
+			w.Close()
+			os.Stdout = old
+			outb, _ := io.ReadAll(r)
+			if execErr != nil {
+				t.Fatal(execErr)
+			}
+			if !strings.Contains(string(outb), test.want) {
+				t.Errorf("stdout lacks %q:\n%s", test.want, outb)
+			}
+			if test.json && !json.Valid(outb) {
+				t.Errorf("not JSON:\n%s", outb)
+			}
+		})
+	}
+}
+
+func TestFlattenCfg(t *testing.T) {
+	got := flattenCfg("", map[string]any{"b": map[string]any{"y": "1", "x": []any{"p", "q"}}, "a": int64(2)})
+	want := [][2]string{{"a", "2"}, {"b.x", "p,q"}, {"b.y", "1"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("flattenCfg = %v, want %v", got, want)
 	}
 }

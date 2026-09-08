@@ -4,7 +4,9 @@ package admin
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 
 	"github.com/spf13/cobra"
 
@@ -66,8 +68,10 @@ func ElectLeadersCommand(cl *client.Client) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "elect-leaders",
-		Short: "Trigger leader elections for partitions",
-		Long: `Trigger leader elections for topic partitions (Kafka 2.2.0+).
+		Short: "Trigger leader elections for partitions.",
+		Long: `Trigger leader elections for partitions.
+
+Trigger leader elections for topic partitions (Kafka 2.2.0+).
 
 This command allows for triggering leader elections on any topic and any
 partition, as well as on all topic partitions. To run on all, you must not
@@ -85,10 +89,16 @@ Use --dry-run to preview without applying.
 				return fmt.Errorf("unable to parse topic partitions: %v", err)
 			}
 			if dryRun {
-				fmt.Fprintln(os.Stderr, "Dry run: would elect leaders for the following partitions:")
-				for topic, parts := range tps {
-					fmt.Fprintf(os.Stderr, "  %s: %v\n", topic, parts)
+				if cl.Format() == out.FormatText {
+					fmt.Fprintln(os.Stderr, "Dry run: would elect leaders for the following partitions:")
 				}
+				table := out.NewFormattedTable(cl.Format(), "cluster.elect-leaders", 1, "partitions", "TOPIC", "PARTITION")
+				for _, topic := range slices.Sorted(maps.Keys(tps)) {
+					for _, p := range tps[topic] {
+						table.Row(topic, p)
+					}
+				}
+				table.Flush()
 				return nil
 			}
 

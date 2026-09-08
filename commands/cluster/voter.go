@@ -27,7 +27,9 @@ func addControllerCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add-controller",
 		Short: "Add a voter to the KRaft quorum (KIP-853).",
-		Long: `Add a voter (controller) to the KRaft quorum (KIP-853, Kafka 4.0+).
+		Long: `Add a voter to the KRaft quorum (KIP-853).
+
+Add a voter (controller) to the KRaft quorum (KIP-853, Kafka 4.0+).
 
 Only one controller can be added at a time. The new controller must be
 running and reachable via the specified listeners.
@@ -107,7 +109,9 @@ func removeControllerCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "remove-controller",
 		Short: "Remove a voter from the KRaft quorum (KIP-853).",
-		Long: `Remove a voter (controller) from the KRaft quorum (KIP-853, Kafka 4.0+).
+		Long: `Remove a voter from the KRaft quorum (KIP-853).
+
+Remove a voter (controller) from the KRaft quorum (KIP-853, Kafka 4.0+).
 
 Only one controller can be removed at a time.
 
