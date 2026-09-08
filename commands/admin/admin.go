@@ -155,7 +155,7 @@ Use --dry-run to preview without applying.
 
 	cmd.Flags().BoolVar(&allPartitions, "all-partitions", false, "trigger leader election on all topics for all partitions")
 	cmd.Flags().BoolVar(&unclean, "unclean", false, "allow unclean leader election (Kafka 2.4.0+)")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview which partitions would have leaders elected without applying")
+	cmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "preview which partitions would have leaders elected without applying")
 
 	return cmd
 }

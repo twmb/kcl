@@ -157,7 +157,7 @@ Use --dry-run to preview without applying.
 		},
 	}
 
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "validate the request without applying changes")
+	cmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "validate the request without applying changes")
 	cmd.Flags().StringVar(&upgradeType, "upgrade-type", "upgrade", "upgrade | safe-downgrade | unsafe-downgrade")
 	return cmd
 }

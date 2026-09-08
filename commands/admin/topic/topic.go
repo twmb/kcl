@@ -231,7 +231,7 @@ EXAMPLES:
 	}
 	cmd.Flags().BoolVarP(&detailed, "detailed", "d", false, "include detailed information about all topic partitions")
 	cmd.Flags().BoolVarP(&showInternal, "internal", "i", false, "include internal topics")
-	cmd.Flags().StringVar(&regexFilter, "regex", "", "filter topics by regex pattern")
+	cmd.Flags().StringVarP(&regexFilter, "regex", "r", "", "filter topics by regex pattern")
 	return cmd
 }
 
@@ -352,8 +352,8 @@ without actually deleting them.
 		},
 	}
 	cmd.Flags().BoolVar(&ids, "ids", false, "whether the input topics should be parsed as topic IDs")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print topics that would be deleted without actually deleting them")
-	cmd.Flags().BoolVar(&useRegex, "regex", false, "treat topic arguments as regex patterns; match against all existing topics")
+	cmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "print topics that would be deleted without actually deleting them")
+	cmd.Flags().BoolVarP(&useRegex, "regex", "r", false, "treat topic arguments as regex patterns; match against all existing topics")
 	return cmd
 }
 

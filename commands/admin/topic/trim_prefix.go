@@ -209,8 +209,8 @@ SEE ALSO:
 		},
 	}
 
-	cmd.Flags().StringVar(&offsetFlag, "offset", "", "offset or timestamp to trim before (N, end, @timestamp)")
-	cmd.Flags().Int32SliceVar(&partitions, "partitions", nil, "limit to specific partitions (default: all)")
+	cmd.Flags().StringVarP(&offsetFlag, "offset", "o", "", "offset or timestamp to trim before (N, end, @timestamp)")
+	cmd.Flags().Int32SliceVarP(&partitions, "partitions", "p", nil, "limit to specific partitions (default: all)")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip confirmation prompt")
 	cmd.Flags().StringVar(&fromFile, "from-file", "", "JSON file of [{topic, partition, offset}, ...] to trim")
 

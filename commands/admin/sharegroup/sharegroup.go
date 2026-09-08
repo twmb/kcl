@@ -394,7 +394,7 @@ Defaults: text shows all sections, awk shows offsets.
 		},
 	}
 	cmd.Flags().StringVar(&section, "section", "", "output section (summary, members, offsets; default: all for text, offsets for awk)")
-	cmd.Flags().BoolVar(&regex, "regex", false, "treat group arguments as regular expressions")
+	cmd.Flags().BoolVarP(&regex, "regex", "r", false, "treat group arguments as regular expressions")
 	return cmd
 }
 
@@ -545,8 +545,8 @@ without actually deleting them.
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print groups that would be deleted without actually deleting them")
-	cmd.Flags().BoolVar(&useRegex, "regex", false, "treat group arguments as regex patterns; match against all existing share groups")
+	cmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "print groups that would be deleted without actually deleting them")
+	cmd.Flags().BoolVarP(&useRegex, "regex", "r", false, "treat group arguments as regex patterns; match against all existing share groups")
 	return cmd
 }
 

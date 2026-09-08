@@ -281,7 +281,7 @@ matches, this runs an alter on anything that matches.
 	cmd.Flags().StringArrayVar(&defaults, "default", nil, "type for default matching, where type is user, client-id, or ip; repeatable")
 	cmd.Flags().StringArrayVar(&adds, "add", nil, "key=value quota to add, where the value is a float64; repeatable")
 	cmd.Flags().StringArrayVar(&deletes, "delete", nil, "key quota to delete; repeatable")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "validate the request without applying changes")
+	cmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "validate the request without applying changes")
 
 	return cmd
 }

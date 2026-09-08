@@ -113,7 +113,7 @@ SEE ALSO:
 	cmd.Flags().BoolVar(&readCommitted, "committed", false, "use committed (read_committed) offsets for lag computation instead of latest")
 	cmd.Flags().BoolVar(&useConsumerDescribe, "consumer-protocol", false, "use ConsumerGroupDescribe API for new consumer group protocol (KIP-848, Kafka 4.0+)")
 	cmd.Flags().StringVar(&section, "section", "", "output section (summary, lag, members; default: all for text, lag for awk)")
-	cmd.Flags().BoolVar(&regex, "regex", false, "treat group arguments as regular expressions")
+	cmd.Flags().BoolVarP(&regex, "regex", "r", false, "treat group arguments as regular expressions")
 
 	return cmd
 }
