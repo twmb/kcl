@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -185,13 +184,35 @@ type Client struct {
 	expandErr        error // a bad ${NAME} reference, reported when a client is built
 }
 
+// dieFormat is the format to report a client error in. An unset or invalid
+// --format reports as text, since there is no format to report it in.
+func (c *Client) dieFormat() string {
+	switch c.format {
+	case out.FormatText, out.FormatJSON, out.FormatAWK:
+		return c.Format()
+	}
+	return out.FormatText
+}
+
+// die reports a configuration or client failure in the output format and
+// exits with code. These happen while the client loads, before any command
+// runs, so they carry no _command.
+func (c *Client) die(code int, msg string, args ...any) {
+	c.dieErr(out.Errf(code, msg, args...))
+}
+
+// dieErr reports err, exiting with the code err carries, or 1.
+func (c *Client) dieErr(err error) {
+	out.HandleError(err, c.dieFormat(), "")
+}
+
 // Format returns the output format: "text", "json", or "awk".
 // If --dump-json is set and --format is not explicitly set, returns "json".
 func (c *Client) Format() string {
 	switch c.format {
 	case "text", "json", "awk":
 	default:
-		out.Die("invalid --format %q: must be text, json, or awk", c.format)
+		out.HandleError(out.Errf(out.ExitUsage, "invalid --format %q: must be text, json, or awk", c.format), out.FormatText, "")
 	}
 	if c.format != "text" {
 		return c.format
@@ -362,7 +383,9 @@ func (c *Client) RemakeWithOpts(opts ...kgo.Opt) *kgo.Client {
 	var err error
 	c.client.Close()
 	c.client, err = kgo.NewClient(append(c.opts, opts...)...)
-	out.MaybeDie(err, "unable to load client: %v", err)
+	if err != nil {
+		c.die(out.ExitUsage, "unable to load client: %v", err)
+	}
 	return c.client
 }
 
@@ -371,7 +394,9 @@ func (c *Client) loadClientOnce() {
 		c.fillOpts()
 		var err error
 		c.client, err = kgo.NewClient(c.opts...)
-		out.MaybeDie(err, "unable to load client: %v", err)
+		if err != nil {
+			c.die(out.ExitUsage, "unable to load client: %v", err)
+		}
 	})
 }
 
@@ -380,7 +405,9 @@ func (c *Client) loadTxnSessOnce() {
 		c.fillOpts()
 		var err error
 		c.txnSess, err = kgo.NewGroupTransactSession(c.opts...)
-		out.MaybeDie(err, "unable to load group transact session: %v", err)
+		if err != nil {
+			c.die(out.ExitUsage, "unable to load group transact session: %v", err)
+		}
 	})
 }
 
@@ -402,7 +429,7 @@ func (c *Client) loadCfg() {
 func (c *Client) loadCfgForClient() {
 	c.loadCfg()
 	if c.expandErr != nil {
-		out.Die("%s", c.expandErr)
+		c.dieErr(c.expandErr)
 	}
 }
 
@@ -412,12 +439,12 @@ func (c *Client) fillOpts() {
 	c.parseLogLevel()       // adds basic logger if necessary
 
 	if err := c.maybeAddSASL(); err != nil {
-		out.Die("sasl error: %v", err)
+		c.dieErr(fmt.Errorf("sasl error: %w", err))
 	}
 
 	tlscfg, err := c.loadTLS()
 	if err != nil {
-		out.Die("%s", err)
+		c.dieErr(err)
 	} else if tlscfg != nil {
 		dialer := &net.Dialer{Timeout: 10 * time.Second}
 		c.AddOpt(kgo.Dialer(func(_ context.Context, _, host string) (net.Conn, error) {
@@ -459,7 +486,7 @@ func (c *Client) parseCfgFile() {
 		return
 	}
 	if err != nil {
-		out.Die("unable to decode config file %q: %v", c.cfgPath, err)
+		c.die(out.ExitUsage, "unable to decode config file %q: %v", c.cfgPath, err)
 	}
 
 	c.cfgFile = CfgFile{CurrentProfile: raw.CurrentProfile, Cfg: raw.Cfg}
@@ -469,7 +496,7 @@ func (c *Client) parseCfgFile() {
 	for name, prim := range raw.Profiles {
 		var p Cfg
 		if err := md.PrimitiveDecode(prim, &p); err != nil {
-			out.Die("unable to decode profile %q in %s: %v", name, c.cfgPath, err)
+			c.die(out.ExitUsage, "unable to decode profile %q in %s: %v", name, c.cfgPath, err)
 		}
 		c.cfgFile.Profiles[name] = p
 	}
@@ -490,14 +517,14 @@ func (c *Client) parseCfgFile() {
 			name = c.profileName
 		}
 		if name == "" {
-			out.Die("config has profiles but no current_profile set; use --profile or set current_profile in config")
+			c.die(out.ExitUsage, "config has profiles but no current_profile set; use --profile or set current_profile in config")
 		}
 		prim, ok := raw.Profiles[name]
 		if !ok {
-			out.Die("profile %q not found in config file", name)
+			c.die(out.ExitUsage, "profile %q not found in config file", name)
 		}
 		if err := md.PrimitiveDecode(prim, &c.cfg); err != nil {
-			out.Die("unable to decode profile %q in %s: %v", name, c.cfgPath, err)
+			c.die(out.ExitUsage, "unable to decode profile %q in %s: %v", name, c.cfgPath, err)
 		}
 		return
 	}
@@ -505,7 +532,7 @@ func (c *Client) parseCfgFile() {
 	// No profiles: the flat layout. Decoding the file straight into c.cfg
 	// lays its keys over the defaults the same way.
 	if _, err := toml.DecodeFile(c.cfgPath, &c.cfg); err != nil {
-		out.Die("unable to decode config file %q: %v", c.cfgPath, err)
+		c.die(out.ExitUsage, "unable to decode config file %q: %v", c.cfgPath, err)
 	}
 }
 
@@ -873,22 +900,22 @@ var cfgSetters = func() map[string]CfgKey {
 
 // ApplyCfgOpts applies -X style options to cfg in order. Each is KEY=VALUE,
 // an empty VALUE unsets the key, and a boolean key may be given bare. The
-// first bad option stops it with an error.
+// first bad option stops it with a usage error.
 func ApplyCfgOpts(cfg *Cfg, opts []string) error {
 	for _, opt := range opts {
 		k, v, hasEq := strings.Cut(opt, "=")
 		key, exists := cfgSetters[normCfgKey(k)]
 		if !exists {
-			return fmt.Errorf("unknown opt key %q; see kcl -X help", k)
+			return out.Errf(out.ExitUsage, "unknown opt key %q; see kcl -X help", k)
 		}
 		if !hasEq {
 			if key.Type != "bool" {
-				return fmt.Errorf("%s needs a value; %s= unsets it", k, k)
+				return out.Errf(out.ExitUsage, "%s needs a value; %s= unsets it", k, k)
 			}
 			v = "true"
 		}
 		if err := key.set(cfg, v); err != nil {
-			return err
+			return out.Errf(out.ExitUsage, "%v", err)
 		}
 	}
 	return nil
@@ -954,7 +981,7 @@ func expandRefs(s string) (string, error) {
 		return v
 	})
 	if missing != "" {
-		return "", fmt.Errorf("config references ${%s}, which is not set in the environment", missing)
+		return "", out.Errf(out.ExitUsage, "config references ${%s}, which is not set in the environment", missing)
 	}
 	return expanded, nil
 }
@@ -986,10 +1013,10 @@ func (c *Client) processOverrides() {
 		}
 	}
 	if err := ApplyCfgOpts(&c.cfg, envOverrides); err != nil {
-		out.Die("%s", err)
+		c.dieErr(err)
 	}
 	if err := ApplyCfgOpts(&c.cfg, c.flagOverrides); err != nil {
-		out.Die("%s", err)
+		c.dieErr(err)
 	}
 	c.applyShorthandFlags(&c.cfg)
 }
@@ -1034,7 +1061,7 @@ func (c *Client) maybeAddMaxVersions() {
 	if c.asVersion != "" {
 		versions := kversion.FromString(c.asVersion)
 		if versions == nil {
-			out.Die("unknown Kafka version %s", c.asVersion)
+			c.die(out.ExitUsage, "unknown Kafka version %s", c.asVersion)
 		}
 		c.AddOpt(kgo.MaxVersions(versions))
 	}
@@ -1073,7 +1100,9 @@ func (c *Client) maybeAddSASL() error {
 		}.AsSha512Mechanism()))
 	case "awsmskiam":
 		awscfg, err := config.LoadDefaultConfig(context.Background())
-		out.MaybeDie(err, "unable to create aws session: %v", err)
+		if err != nil {
+			c.die(out.ExitError, "unable to create aws session: %v", err)
+		}
 
 		c.AddOpt(kgo.SASL(aws.ManagedStreamingIAM(func(ctx context.Context) (aws.Auth, error) {
 			creds, err := awscfg.Credentials.Retrieve(ctx)
@@ -1088,7 +1117,7 @@ func (c *Client) maybeAddSASL() error {
 		})))
 
 	default:
-		return fmt.Errorf("unrecognized / unhandled sasl method %q", c.cfg.SASL.Method)
+		return out.Errf(out.ExitUsage, "unrecognized / unhandled sasl method %q", c.cfg.SASL.Method)
 	}
 	return nil
 }
@@ -1118,7 +1147,7 @@ func buildTLS(cfg *CfgTLS) (*tls.Config, error) {
 	case "v1.0", "1.0":
 		tc.MinVersion = tls.VersionTLS10
 	default:
-		return nil, fmt.Errorf("unrecognized tls min version %s", cfg.MinVersion)
+		return nil, out.Errf(out.ExitUsage, "unrecognized tls min version %s", cfg.MinVersion)
 	}
 
 	if suites := cfg.CipherSuites; len(suites) > 0 {
@@ -1131,7 +1160,7 @@ func buildTLS(cfg *CfgTLS) (*tls.Config, error) {
 		for _, suite := range cfg.CipherSuites {
 			id, exists := potentials[Strnorm(suite)]
 			if !exists {
-				return nil, fmt.Errorf("unknown cipher suite %s", suite)
+				return nil, out.Errf(out.ExitUsage, "unknown cipher suite %s", suite)
 			}
 			tc.CipherSuites = append(tc.CipherSuites, id)
 		}
@@ -1147,7 +1176,7 @@ func buildTLS(cfg *CfgTLS) (*tls.Config, error) {
 		for _, curve := range cfg.CurvePreferences {
 			id, exists := potentials[Strnorm(curve)]
 			if !exists {
-				return nil, fmt.Errorf("unknown curve preference %s", curve)
+				return nil, out.Errf(out.ExitUsage, "unknown curve preference %s", curve)
 			}
 			tc.CurvePreferences = append(tc.CurvePreferences, id)
 		}
@@ -1156,7 +1185,7 @@ func buildTLS(cfg *CfgTLS) (*tls.Config, error) {
 	if cfg.CACert != "" {
 		ca, err := os.ReadFile(cfg.CACert)
 		if err != nil {
-			return nil, fmt.Errorf("unable to read CA file %q: %v",
+			return nil, out.Errf(out.ExitUsage, "unable to read CA file %q: %v",
 				cfg.CACert, err)
 		}
 
@@ -1169,23 +1198,23 @@ func buildTLS(cfg *CfgTLS) (*tls.Config, error) {
 
 		if cfg.ClientCertPath == "" ||
 			cfg.ClientKeyPath == "" {
-			return nil, errors.New("both client and key cert paths must be specified, but saw only one")
+			return nil, out.Errf(out.ExitUsage, "both client and key cert paths must be specified, but saw only one")
 		}
 
 		cert, err := os.ReadFile(cfg.ClientCertPath)
 		if err != nil {
-			return nil, fmt.Errorf("unable to read client cert file %q: %v",
+			return nil, out.Errf(out.ExitUsage, "unable to read client cert file %q: %v",
 				cfg.ClientCertPath, err)
 		}
 		key, err := os.ReadFile(cfg.ClientKeyPath)
 		if err != nil {
-			return nil, fmt.Errorf("unable to read client key file %q: %v",
+			return nil, out.Errf(out.ExitUsage, "unable to read client key file %q: %v",
 				cfg.ClientKeyPath, err)
 		}
 
 		pair, err := tls.X509KeyPair(cert, key)
 		if err != nil {
-			return nil, fmt.Errorf("unable to create key pair: %v", err)
+			return nil, out.Errf(out.ExitUsage, "unable to create key pair: %v", err)
 		}
 
 		tc.Certificates = append(tc.Certificates, pair)
@@ -1199,7 +1228,7 @@ func (c *Client) parseLogLevel() {
 	var level kgo.LogLevel
 	switch ll := strings.ToLower(c.logLevel); ll {
 	default:
-		out.Die("unknown log level %q", ll)
+		c.die(out.ExitUsage, "unknown log level %q", ll)
 	case "none":
 		return // no opt added
 	case "error":
@@ -1219,7 +1248,9 @@ func (c *Client) parseLogLevel() {
 		of = os.Stderr
 	default:
 		f, err := os.OpenFile(c.logFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
-		out.MaybeDie(err, "unable to open log-file %q: %v", c.logFile, err)
+		if err != nil {
+			c.die(out.ExitUsage, "unable to open log-file %q: %v", c.logFile, err)
+		}
 		of = f
 	}
 	c.opts = append(c.opts, kgo.WithLogger(kgo.BasicLogger(of, level, nil)))

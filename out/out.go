@@ -56,28 +56,40 @@ var ErrSilent = &ExitCodeError{Code: ExitError, Err: errors.New("")}
 // ExitCodeError if present, otherwise defaults to 1. ErrSilent exits
 // non-zero without printing anything.
 func HandleError(err error, format, command string) {
-	code := ExitError
-	var ce *ExitCodeError
-	if errors.As(err, &ce) {
-		code = ce.Code
-	}
+	code := ExitCode(err)
 	if err == ErrSilent {
 		os.Exit(code)
 	}
 	if format == FormatJSON {
-		doc := map[string]any{
-			"error": err.Error(),
-			"code":  code,
-		}
-		if command != "" {
-			doc["_command"] = command
-			doc["_version"] = 1
-		}
-		writeJSON(doc)
+		writeJSON(ErrorDoc(err, command))
 	} else {
 		fmt.Fprintln(os.Stderr, err)
 	}
 	os.Exit(code)
+}
+
+// ExitCode is the code err exits with: its own if it carries one, else
+// ExitError.
+func ExitCode(err error) int {
+	var ce *ExitCodeError
+	if errors.As(err, &ce) {
+		return ce.Code
+	}
+	return ExitError
+}
+
+// ErrorDoc is the JSON document for err. It carries _command and _version
+// like a success document when command is not empty.
+func ErrorDoc(err error, command string) map[string]any {
+	doc := map[string]any{
+		"error": err.Error(),
+		"code":  ExitCode(err),
+	}
+	if command != "" {
+		doc["_command"] = command
+		doc["_version"] = 1
+	}
+	return doc
 }
 
 // MaybeDie, if err is non-nil, prints the message and exits with 1.

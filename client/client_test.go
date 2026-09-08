@@ -861,3 +861,26 @@ func TestDiskCfgNeedsNoSecrets(t *testing.T) {
 		t.Errorf("registry client err = %v", err)
 	}
 }
+
+func TestDieFormat(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		format string
+		asJSON bool
+		want   string
+	}{
+		{name: "unset reports as text", want: "text"},
+		{name: "text", format: "text", want: "text"},
+		{name: "json", format: "json", want: "json"},
+		{name: "awk", format: "awk", want: "awk"},
+		{name: "dump-json", format: "text", asJSON: true, want: "json"},
+		{name: "invalid reports as text", format: "nope", want: "text"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := &Client{format: test.format, asJSON: test.asJSON}
+			if got := c.dieFormat(); got != test.want {
+				t.Errorf("dieFormat = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
