@@ -118,28 +118,37 @@ func schemaGetCommand(cl *client.Client) *cobra.Command {
 		meta       bool
 	)
 	cmd := &cobra.Command{
-		Use:     "get",
+		Use:     "get [SUBJECT]",
 		Aliases: []string{"describe", "fetch"},
-		Short:   "Fetch a schema by id, or by subject and version.",
-		Long: `Fetch a schema by id, or by subject and version.
+		Short:   "Fetch a schema by subject and version, or by id.",
+		Long: `Fetch a schema by subject and version, or by id.
 
-Fetch a schema by global id, or by subject and version.
-
-Exactly one of --id or --subject must be given. With --subject, --version
-defaults to "latest"; pass a specific version number to fetch an older one.
+Give the subject, or --id for a global schema id. With a subject, --version
+defaults to "latest"; pass a version number to fetch an older one.
 
 By default only the schema text is printed (so it can be piped). Use --meta to
 also print the subject/version/id/type to stderr. In JSON output format the
 full structured schema (including references) is always printed.
 
+EXAMPLES:
+  kcl registry schema get mytopic-value
+  kcl registry schema get mytopic-value -v 2 --meta
   kcl registry schema get --id 5
-  kcl registry schema get -S mytopic-value
-  kcl registry schema get -S mytopic-value -v 2 --meta
+
+SEE ALSO:
+  kcl registry schema list   list schemas, by subject or across all
+  kcl registry versions      list the versions of a subject
 `,
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			if len(args) == 1 {
+				if subject != "" {
+					return out.Errf(out.ExitUsage, "subject given both as an argument and with --subject")
+				}
+				subject = args[0]
+			}
 			if (id > 0) == (subject != "") {
-				return out.Errf(out.ExitUsage, "exactly one of --id or --subject must be specified")
+				return out.Errf(out.ExitUsage, "exactly one of a subject or --id must be given")
 			}
 
 			scl, err := srClient(cl)
@@ -203,8 +212,9 @@ full structured schema (including references) is always printed.
 		},
 	}
 	cmd.Flags().IntVarP(&id, "id", "i", 0, "global schema id to fetch")
-	cmd.Flags().StringVarP(&subject, "subject", "S", "", "subject to fetch a schema from")
-	cmd.Flags().StringVarP(&versionStr, "version", "v", "latest", "version to fetch with --subject (number or 'latest')")
+	cmd.Flags().StringVarP(&subject, "subject", "S", "", "old name for the subject argument")
+	cmd.Flags().MarkHidden("subject")
+	cmd.Flags().StringVarP(&versionStr, "version", "v", "latest", "version to fetch with a subject (number or 'latest')")
 	cmd.Flags().BoolVarP(&meta, "meta", "m", false, "print subject/version/id/type metadata to stderr in text mode")
 	return cmd
 }
