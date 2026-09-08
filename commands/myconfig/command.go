@@ -2,10 +2,13 @@
 package myconfig
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -110,6 +113,14 @@ func listCommand(cl *client.Client) *cobra.Command {
 				return fmt.Errorf("unable to read config: %v", err)
 			}
 
+			if cl.Format() != out.FormatText {
+				table := out.NewFormattedTable(cl.Format(), "profile.list", 1, "profiles", "NAME", "CURRENT")
+				for _, n := range profileNames(cfgFile) {
+					table.Row(n, n == cfgFile.CurrentProfile)
+				}
+				table.Flush()
+				return nil
+			}
 			if len(cfgFile.Profiles) == 0 {
 				fmt.Fprintln(os.Stderr, "No profiles configured. Config uses flat format.")
 				return nil
@@ -148,10 +159,17 @@ func currentCommand(cl *client.Client) *cobra.Command {
 			} else {
 				name = cfgFile.CurrentProfile
 			}
-			if name == "" {
-				fmt.Fprintln(os.Stderr, "(no profile set)")
-			} else {
+			switch cl.Format() {
+			case out.FormatJSON:
+				out.MarshalJSON("profile.current", 1, map[string]any{"profile": name})
+			case out.FormatAWK:
 				fmt.Println(name)
+			default:
+				if name == "" {
+					fmt.Fprintln(os.Stderr, "(no profile set)")
+				} else {
+					fmt.Println(name)
+				}
 			}
 			return nil
 		},
@@ -299,6 +317,44 @@ func setProfile(path, name string, apply func(*client.Cfg) error) (string, error
 	return fmt.Sprintf("profile %q", name), nil
 }
 
+// cfgMap renders cfg as nested maps keyed by the TOML names, for JSON.
+func cfgMap(cfg client.Cfg) (map[string]any, error) {
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(cfg); err != nil {
+		return nil, fmt.Errorf("unable to encode config: %v", err)
+	}
+	m := make(map[string]any)
+	if _, err := toml.Decode(buf.String(), &m); err != nil {
+		return nil, fmt.Errorf("unable to decode config: %v", err)
+	}
+	return m, nil
+}
+
+// flattenCfg turns nested maps into sorted dotted key and value pairs, lists
+// joined with commas, for the awk format.
+func flattenCfg(prefix string, m map[string]any) [][2]string {
+	var out [][2]string
+	for _, k := range slices.Sorted(maps.Keys(m)) {
+		key := k
+		if prefix != "" {
+			key = prefix + "." + k
+		}
+		switch v := m[k].(type) {
+		case map[string]any:
+			out = append(out, flattenCfg(key, v)...)
+		case []any:
+			strs := make([]string, len(v))
+			for i, e := range v {
+				strs[i] = fmt.Sprint(e)
+			}
+			out = append(out, [2]string{key, strings.Join(strs, ",")})
+		default:
+			out = append(out, [2]string{key, fmt.Sprint(v)})
+		}
+	}
+	return out
+}
+
 // setMessage says what set did: "Set a, b", "Unset c", or "Set a; unset c".
 func setMessage(set, unset []string) string {
 	set, unset = uniq(set), uniq(unset)
@@ -397,8 +453,27 @@ func dumpCommand(cl *client.Client) *cobra.Command {
 		Use:   "dump",
 		Short: "Dump the loaded configuration, with ${NAME} references as written.",
 		Args:  cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
-			toml.NewEncoder(os.Stdout).Encode(cl.DiskCfg())
+		RunE: func(_ *cobra.Command, _ []string) error {
+			cfg := cl.DiskCfg()
+			switch cl.Format() {
+			case out.FormatJSON:
+				m, err := cfgMap(cfg)
+				if err != nil {
+					return err
+				}
+				out.MarshalJSON("profile.dump", 1, m)
+			case out.FormatAWK:
+				m, err := cfgMap(cfg)
+				if err != nil {
+					return err
+				}
+				for _, kv := range flattenCfg("", m) {
+					fmt.Printf("%s\t%s\n", kv[0], kv[1])
+				}
+			default:
+				return toml.NewEncoder(os.Stdout).Encode(cfg)
+			}
+			return nil
 		},
 	}
 }

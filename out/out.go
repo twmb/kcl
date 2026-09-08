@@ -50,11 +50,12 @@ func Errf(code int, format string, args ...any) error {
 var ErrSilent = &ExitCodeError{Code: ExitError, Err: errors.New("")}
 
 // HandleError formats an error for output and calls os.Exit. If format is
-// "json", the error is written as JSON to stdout. Otherwise it is written
-// as plain text to stderr. The exit code is extracted from ExitCodeError
-// if present, otherwise defaults to 1. ErrSilent exits non-zero without
-// printing anything.
-func HandleError(err error, format string) {
+// "json", the error is written as JSON to stdout, with _command and
+// _version as a success document has when command is not empty. Otherwise
+// it is written as plain text to stderr. The exit code is extracted from
+// ExitCodeError if present, otherwise defaults to 1. ErrSilent exits
+// non-zero without printing anything.
+func HandleError(err error, format, command string) {
 	code := ExitError
 	var ce *ExitCodeError
 	if errors.As(err, &ce) {
@@ -64,10 +65,15 @@ func HandleError(err error, format string) {
 		os.Exit(code)
 	}
 	if format == FormatJSON {
-		writeJSON(map[string]any{
+		doc := map[string]any{
 			"error": err.Error(),
 			"code":  code,
-		})
+		}
+		if command != "" {
+			doc["_command"] = command
+			doc["_version"] = 1
+		}
+		writeJSON(doc)
 	} else {
 		fmt.Fprintln(os.Stderr, err)
 	}
