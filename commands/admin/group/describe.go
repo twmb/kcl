@@ -95,7 +95,18 @@ SEE ALSO:
 			if err != nil {
 				return err
 			}
-			return printDescribed(cl.Format(), described, fetchedOffsets, listedOffsets, section)
+			if err := printDescribed(cl.Format(), described, fetchedOffsets, listedOffsets, section); err != nil {
+				return err
+			}
+			// A group the broker could not describe, GROUP_ID_NOT_FOUND above
+			// all, is printed with its error and is a failure, as a missing
+			// topic is for topic describe.
+			for _, d := range described {
+				if d.ErrorCode != 0 {
+					return out.ErrSilent
+				}
+			}
+			return nil
 		},
 	}
 
@@ -513,6 +524,11 @@ func describeConsumerGroups(cl *client.Client, groups []string, readCommitted bo
 			if gi < len(results)-1 {
 				fmt.Println()
 			}
+		}
+	}
+	for _, g := range allGroups {
+		if g.group.ErrorCode != 0 {
+			return out.ErrSilent
 		}
 	}
 	return nil

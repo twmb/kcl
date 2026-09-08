@@ -547,9 +547,12 @@ func fetchTopicConfigs(ctx context.Context, cl kmsg.Requestor, topics []string) 
 	result := make(map[string][]kmsg.DescribeConfigsResponseResourceConfig)
 	for _, r := range resp.Resources {
 		if err := kerr.ErrorForCode(r.ErrorCode); err != nil {
-			// Route per-resource errors to stderr so they don't
-			// contaminate JSON/awk output on stdout.
-			fmt.Fprintf(os.Stderr, "config error for %s: %v\n", r.ResourceName, err)
+			// A missing topic was already reported from the metadata
+			// response. Route other per-resource errors to stderr so they
+			// don't contaminate JSON/awk output on stdout.
+			if err != kerr.UnknownTopicOrPartition {
+				fmt.Fprintf(os.Stderr, "config error for %s: %v\n", r.ResourceName, err)
+			}
 			continue
 		}
 		// Sort configs: non-default first, then alphabetical.

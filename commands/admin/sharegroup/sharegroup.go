@@ -114,6 +114,9 @@ Use --section to show only a specific section of the output:
 Defaults: text shows all sections, awk shows offsets.
 `,
 		RunE: func(_ *cobra.Command, groups []string) error {
+			// A group the broker could not describe is printed with its error
+			// and is a failure, as a missing topic is for topic describe.
+			anyErr := false
 			if section != "" {
 				switch client.Strnorm(section) {
 				case "summary":
@@ -341,6 +344,9 @@ Defaults: text shows all sections, awk shows offsets.
 					resp := shard.Resp.(*kmsg.ShareGroupDescribeResponse)
 					for _, group := range resp.Groups {
 						groupErr := kerr.ErrorForCode(group.ErrorCode)
+						if groupErr != nil {
+							anyErr = true
+						}
 						if showSummary {
 							ls := lagByGroup[group.GroupID]
 							printShareGroupSummary(shard.Meta.NodeID, group, ls.totalLag, ls.partCount, ls.nonZeroLag)
@@ -380,6 +386,9 @@ Defaults: text shows all sections, awk shows offsets.
 						fmt.Println()
 					}
 				}
+			}
+			if anyErr {
+				return out.ErrSilent
 			}
 			return nil
 		},
