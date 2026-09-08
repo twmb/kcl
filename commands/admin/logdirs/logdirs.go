@@ -291,6 +291,7 @@ which allows you to alter replicas.
 
 		Example: `alter foo:1,2,3=/dir bar:6=/dir2 baz:9=/dir`,
 
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, topics []string) error {
 			dests := make(map[string]map[string][]int32)
 			for _, topic := range topics {
