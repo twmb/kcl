@@ -20,6 +20,11 @@ func TestParseTopicIDAndMaybe(t *testing.T) {
 	}{
 		{in: "15fc1bf40a5c1c3cdd363ec28f5c0c69", ok: true, first: 0x15},
 		{in: "15fc1bf4-0a5c-1c3c-dd36-3ec28f5c0c69", ok: true, first: 0x15},
+		{in: "15FC1BF40A5C1C3CDD363EC28F5C0C69", ok: true, first: 0x15},
+		{in: "15FC1BF4-0A5C-1C3C-DD36-3EC28F5C0C69", ok: true, first: 0x15},
+		{in: "urn:uuid:15fc1bf4-0a5c-1c3c-dd36-3ec28f5c0c69", ok: true, first: 0x15},
+		{in: "{15fc1bf4-0a5c-1c3c-dd36-3ec28f5c0c69}", ok: true, first: 0x15},
+		{in: "00000000-0000-0000-0000-000000000000", ok: true},
 		{in: "mytopic"},
 		{in: ""},
 		{in: "15fc1bf40a5c1c3cdd363ec28f5c0c6"},   // 31

@@ -2,27 +2,21 @@ package flagutil
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
-	"strings"
+	"uuid"
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// ParseTopicID accepts a topic UUID as either 32 hex chars or the dashed
-// 8-4-4-4-12 form and returns the raw 16 bytes.
+// ParseTopicID returns the 16 bytes of a topic id, which may be written as
+// bare hex, the dashed 8-4-4-4-12 form, in either case, and with a urn:uuid:
+// prefix or braces around it.
 func ParseTopicID(s string) ([16]byte, error) {
-	var id [16]byte
-	stripped := strings.ReplaceAll(s, "-", "")
-	if len(stripped) != 32 {
-		return id, fmt.Errorf("topic id must be 32 hex chars (with optional dashes), got %d", len(stripped))
-	}
-	raw, err := hex.DecodeString(stripped)
+	id, err := uuid.Parse(s)
 	if err != nil {
-		return id, fmt.Errorf("not a hex string: %v", err)
+		return [16]byte{}, fmt.Errorf("not a topic id: %v", err)
 	}
-	copy(id[:], raw)
 	return id, nil
 }
 

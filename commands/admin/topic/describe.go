@@ -73,7 +73,7 @@ SEE ALSO:
 			// Parse and validate topic IDs up front.
 			parsedIDs := make([][16]byte, 0, len(topicIDs))
 			for _, raw := range topicIDs {
-				id, err := parseTopicID(raw)
+				id, err := flagutil.ParseTopicID(raw)
 				if err != nil {
 					return out.Errf(out.ExitUsage, "invalid --topic-id %q: %v", raw, err)
 				}
@@ -519,22 +519,6 @@ SEE ALSO:
 	cmd.Flags().StringArrayVar(&topicIDs, "topic-id", nil, "topic UUID to describe (repeatable; 32 hex chars with optional dashes)")
 
 	return cmd
-}
-
-// parseTopicID accepts a topic UUID as either 32 hex chars or the
-// dashed 8-4-4-4-12 form and returns the raw 16 bytes.
-func parseTopicID(s string) ([16]byte, error) {
-	var id [16]byte
-	stripped := strings.ReplaceAll(s, "-", "")
-	if len(stripped) != 32 {
-		return id, fmt.Errorf("topic id must be 32 hex chars (with optional dashes), got %d", len(stripped))
-	}
-	raw, err := hex.DecodeString(stripped)
-	if err != nil {
-		return id, fmt.Errorf("not a hex string: %v", err)
-	}
-	copy(id[:], raw)
-	return id, nil
 }
 
 func fetchTopicConfigs(ctx context.Context, cl kmsg.Requestor, topics []string) (map[string][]kmsg.DescribeConfigsResponseResourceConfig, error) {
