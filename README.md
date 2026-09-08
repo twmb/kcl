@@ -47,12 +47,16 @@ A container image is also published for each release, useful as a
 short-lived Kubernetes or CI client:
 
 ```bash
-kubectl run kafka-client --rm -it --restart=Never \
-  --image=ghcr.io/twmb/kcl:v0.19.0 \
+kubectl run kafka-client --rm -i --restart=Never \
+  --image=ghcr.io/twmb/kcl:latest \
   -- --no-config-file -B kafka-headless:9092 topic list
 ```
 
-(the image's entrypoint is already `kcl`, so args after `--` go straight to it)
+(the image's entrypoint is already `kcl`, so args after `--` go straight to it;
+suffix the image with `:v#.#.#` for a specific release)
+
+The image has no shell, so it cannot serve as a CI job's container; run it
+from a step with `docker run` or `kubectl run`.
 
 ## Configuration
 
