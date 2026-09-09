@@ -45,3 +45,8 @@ jobs:
       # exactly the code most likely to have a data race.
       - name: test
         run: go test -race -count=1 ./...
+
+      # The release image is otherwise first built after a GitHub Release is
+      # already public, so catch a broken Dockerfile here.
+      - name: docker build
+        run: docker build --build-arg VERSION=ci .
