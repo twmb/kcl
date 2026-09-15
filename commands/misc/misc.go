@@ -25,10 +25,10 @@ import (
 )
 
 func apiVersionsRequest() *kmsg.ApiVersionsRequest {
-	return &kmsg.ApiVersionsRequest{
-		ClientSoftwareName:    "kcl",
-		ClientSoftwareVersion: "v0.0.0",
-	}
+	req := kmsg.NewPtrApiVersionsRequest()
+	req.ClientSoftwareName = "kcl"
+	req.ClientSoftwareVersion = "v0.0.0"
+	return req
 }
 
 func Command(cl *client.Client) *cobra.Command {
@@ -287,6 +287,9 @@ func probeVersion(cl *client.Client) {
 	}
 
 	resp := kresp.(*kmsg.ApiVersionsResponse)
+	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		out.Die("ApiVersions request failed: %v", err)
+	}
 
 	v := kversion.FromApiVersionsResponse(resp)
 	fmt.Println("Kafka " + v.VersionGuess())
