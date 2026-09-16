@@ -492,7 +492,7 @@ SEE ALSO:
 		},
 	}
 
-	// Primary flags — the ergonomic interface.
+	// Primary flags: the ergonomic interface.
 	cmd.Flags().StringArrayVar(&allowPrincipals, "allow-principal", nil, "principal to allow (repeatable)")
 	cmd.Flags().StringArrayVar(&denyPrincipals, "deny-principal", nil, "principal to deny (repeatable)")
 	cmd.Flags().StringArrayVar(&allowHosts, "allow-host", nil, "host to allow from (repeatable; default '*')")
@@ -506,7 +506,7 @@ SEE ALSO:
 	cmd.Flags().StringVar(&pattern, "pattern", "literal", "resource pattern type: literal or prefixed (Kafka 2.0.0+)")
 	cmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "preview ACLs that would be created without creating them")
 
-	// Deprecated flags — hidden, still work.
+	// Deprecated flags: hidden, and they still work.
 	cmd.Flags().StringArrayVar(&oldTypes, "type", nil, "")
 	cmd.Flags().StringArrayVar(&oldNames, "name", nil, "")
 	cmd.Flags().StringArrayVar(&oldPrincipals, "principal", nil, "")

@@ -223,7 +223,7 @@ func parseTimestampSpec(s string, now time.Time) (Spec, error) {
 		return Spec{}, fmt.Errorf("empty timestamp after @")
 	}
 
-	// @:T → from start to timestamp T
+	// @:T is from the start to timestamp T.
 	if s[0] == ':' {
 		if len(s) == 1 {
 			return Spec{}, fmt.Errorf("empty end timestamp in @:")

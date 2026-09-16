@@ -235,7 +235,8 @@ func TestFormattedTableJSONTypesPreserved(t *testing.T) {
 	data := result["data"].([]any)
 
 	first := data[0].(map[string]any)
-	// JSON encoding preserves Go types: int→float64, bool→bool, string→string.
+	// JSON encoding preserves Go types: an int reads back as a float64, a
+	// bool as a bool, a string as a string.
 	if first["name"] != "alpha" {
 		t.Errorf("name = %v", first["name"])
 	}

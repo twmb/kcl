@@ -227,7 +227,7 @@ func TestRegistryCommands(t *testing.T) {
 
 func TestRegistryNotConfiguredStillDefaults(t *testing.T) {
 	// With no registry reachable, a command should fail (connection refused),
-	// not panic — exercising the default/build path without a live server.
+	// not panic, which exercises the default/build path without a live server.
 	if _, err := runText(t, "http://127.0.0.1:1", "subjects"); err == nil {
 		t.Error("expected an error against an unreachable registry")
 	}
