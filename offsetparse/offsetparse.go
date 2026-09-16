@@ -8,6 +8,7 @@
 package offsetparse
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -102,7 +103,7 @@ func parseOffsetSpec(s string) (Spec, error) {
 	if s[0] == ':' {
 		n, err := strconv.ParseInt(s[1:], 10, 64)
 		if err != nil {
-			return Spec{}, fmt.Errorf("invalid until-offset %q: %w", s, err)
+			return Spec{}, fmt.Errorf("invalid until-offset %q: %s", s, numErr(err))
 		}
 		return Spec{
 			Start: Position{Kind: KindStart},
@@ -114,7 +115,7 @@ func parseOffsetSpec(s string) (Spec, error) {
 	if strings.HasPrefix(s, "start+") {
 		v, err := strconv.ParseInt(s[6:], 10, 64)
 		if err != nil {
-			return Spec{}, fmt.Errorf("invalid start+offset %q: %w", s, err)
+			return Spec{}, fmt.Errorf("invalid start+offset %q: %s", s, numErr(err))
 		}
 		return Spec{Start: Position{Kind: KindStart, Delta: v}}, nil
 	}
@@ -123,7 +124,7 @@ func parseOffsetSpec(s string) (Spec, error) {
 	if strings.HasPrefix(s, "end-") {
 		v, err := strconv.ParseInt(s[4:], 10, 64)
 		if err != nil {
-			return Spec{}, fmt.Errorf("invalid end-offset %q: %w", s, err)
+			return Spec{}, fmt.Errorf("invalid end-offset %q: %s", s, numErr(err))
 		}
 		return Spec{Start: Position{Kind: KindEnd, Delta: -v}}, nil
 	}
@@ -132,7 +133,7 @@ func parseOffsetSpec(s string) (Spec, error) {
 	if s[0] == '+' {
 		v, err := strconv.ParseInt(s[1:], 10, 64)
 		if err != nil {
-			return Spec{}, fmt.Errorf("invalid relative offset %q: %w", s, err)
+			return Spec{}, fmt.Errorf("invalid relative offset %q: %s", s, numErr(err))
 		}
 		return Spec{Start: Position{Kind: KindRelative, Value: v}}, nil
 	}
@@ -141,7 +142,7 @@ func parseOffsetSpec(s string) (Spec, error) {
 	if s[0] == '-' {
 		v, err := strconv.ParseInt(s[1:], 10, 64)
 		if err != nil {
-			return Spec{}, fmt.Errorf("invalid relative offset %q: %w", s, err)
+			return Spec{}, fmt.Errorf("invalid relative offset %q: %s", s, numErr(err))
 		}
 		return Spec{Start: Position{Kind: KindRelative, Value: -v}}, nil
 	}
@@ -151,7 +152,7 @@ func parseOffsetSpec(s string) (Spec, error) {
 
 		startN, err := strconv.ParseInt(startStr, 10, 64)
 		if err != nil {
-			return Spec{}, fmt.Errorf("invalid range start %q in %q: %w", startStr, s, err)
+			return Spec{}, fmt.Errorf("invalid range start %q in %q: %s", startStr, s, numErr(err))
 		}
 
 		// N: is alias for N
@@ -168,7 +169,7 @@ func parseOffsetSpec(s string) (Spec, error) {
 
 		endN, err := strconv.ParseInt(endStr, 10, 64)
 		if err != nil {
-			return Spec{}, fmt.Errorf("invalid range end %q in %q: %w", endStr, s, err)
+			return Spec{}, fmt.Errorf("invalid range end %q in %q: %s", endStr, s, numErr(err))
 		}
 		return Spec{
 			Start: Position{Kind: KindExact, Value: startN},
@@ -179,7 +180,7 @@ func parseOffsetSpec(s string) (Spec, error) {
 	// Plain N
 	n, err := strconv.ParseInt(s, 10, 64)
 	if err != nil {
-		return Spec{}, fmt.Errorf("unable to parse offset %q: %w", s, err)
+		return Spec{}, fmt.Errorf("unable to parse offset %q: %s", s, numErr(err))
 	}
 	return Spec{Start: Position{Kind: KindExact, Value: n}}, nil
 }
@@ -204,7 +205,7 @@ func parseUntilEnd(s string) (Spec, error) {
 
 	v, err := strconv.ParseInt(rest[1:], 10, 64)
 	if err != nil {
-		return Spec{}, fmt.Errorf("invalid :end offset %q: %w", s, err)
+		return Spec{}, fmt.Errorf("invalid :end offset %q: %s", s, numErr(err))
 	}
 
 	delta := v
@@ -319,7 +320,7 @@ func parseTimestamp(s string, relativeTo *int64, now time.Time) (Position, error
 	if isAllDigits(s) {
 		n, err := strconv.ParseInt(s, 10, 64)
 		if err != nil {
-			return Position{}, fmt.Errorf("invalid numeric timestamp %q: %w", s, err)
+			return Position{}, fmt.Errorf("invalid numeric timestamp %q: %s", s, numErr(err))
 		}
 		switch l := len(s); {
 		case l == 19: // nanoseconds
@@ -381,7 +382,7 @@ func ParseDuration(s string) (time.Duration, error) {
 
 	days, err := strconv.ParseFloat(dayStr, 64)
 	if err != nil {
-		return 0, fmt.Errorf("invalid day value in duration %q: %w", s, err)
+		return 0, fmt.Errorf("invalid day value in duration %q: %s", s, numErr(err))
 	}
 
 	total := time.Duration(days * 24 * float64(time.Hour))
@@ -405,4 +406,19 @@ func isAllDigits(s string) bool {
 		}
 	}
 	return true
+}
+
+// Syntax is the one line summary of what an offset spec looks like. The
+// --offset flag help and the error a bad offset produces both print it, so
+// the two cannot drift.
+const Syntax = "start, end, +N, -N, N, N:M, :end, @timestamp, @T1:T2"
+
+// numErr says why a number did not parse without repeating the input. The
+// message we wrap it into already quotes the input, and strconv's own text
+// prints "strconv.ParseInt: parsing" in front of a second copy of it.
+func numErr(err error) string {
+	if errors.Is(err, strconv.ErrRange) {
+		return "out of range"
+	}
+	return "not a number"
 }

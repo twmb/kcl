@@ -522,7 +522,7 @@ func (c *consumption) run(topics []string) error {
 func (c *consumption) parseOffset() (kgo.Offset, error) {
 	spec, err := offsetparse.Parse(c.offset, time.Now())
 	if err != nil {
-		return kgo.Offset{}, fmt.Errorf("unable to parse offset %q: %v", c.offset, err)
+		return kgo.Offset{}, out.Errf(out.ExitUsage, "%s (offsets look like %s)", err, offsetparse.Syntax)
 	}
 
 	c.end = -1
