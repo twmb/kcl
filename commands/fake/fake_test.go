@@ -132,16 +132,24 @@ func TestCheckFlagPairs(t *testing.T) {
 		name      string
 		blackhole bool
 		seedDemo  bool
+		synthetic bool
+		batch     bool
 		err       string
 	}{
-		{"neither", false, false, ""},
-		{"blackhole alone", true, false, ""},
-		{"seed demo alone", false, true, ""},
-		{"both", true, true, "--seed-demo produces records, which --blackhole-produce would drop"},
+		{"none", false, false, false, false, ""},
+		{"blackhole alone", true, false, false, false, ""},
+		{"seed demo alone", false, true, false, false, ""},
+		{"blackhole and seed demo", true, true, false, false, "--seed-demo produces records, which --blackhole-produce would drop"},
+		{"synthetic alone", false, false, true, false, ""},
+		{"synthetic with a batch", false, false, true, true, ""},
+		{"a batch alone", false, false, false, true, "--synthetic-batch shapes the batch --synthetic-fetch serves; give --synthetic-fetch too"},
+		// A synthetic fetch writes the log, so the demo topics come up
+		// with their records and are consumed from the canned batch.
+		{"synthetic and seed demo", false, true, true, true, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := checkFlagPairs(tt.blackhole, tt.seedDemo)
+			err := checkFlagPairs(tt.blackhole, tt.seedDemo, tt.synthetic, tt.batch)
 			if tt.err == "" {
 				if err != nil {
 					t.Errorf("unexpected error: %v", err)
@@ -212,6 +220,103 @@ func TestBlackholeProduce(t *testing.T) {
 	defer cancel()
 	if fs := ccl.PollFetches(pctx); fs.NumRecords() != 0 {
 		t.Errorf("fetched %d records from a blackholed cluster, want 0", fs.NumRecords())
+	}
+}
+
+func TestParseSyntheticBatch(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want kfake.SyntheticBatch
+		err  string
+	}{
+		{"unset", "", kfake.SyntheticBatch{}, ""},
+		{"records", "records=10", kfake.SyntheticBatch{Records: 10}, ""},
+		{"bytes", "bytes=20", kfake.SyntheticBatch{RecordBytes: 20}, ""},
+		{"random", "random=0.5", kfake.SyntheticBatch{RandomFrac: 0.5}, ""},
+		{"random all", "random=1", kfake.SyntheticBatch{RandomFrac: 1}, ""},
+		{"compression", "compression=lz4", kfake.SyntheticBatch{Compression: kgo.Lz4Compression()}, ""},
+		{"compression any case", "compression=ZSTD", kfake.SyntheticBatch{Compression: kgo.ZstdCompression()}, ""},
+		{"compression none", "compression=none", kfake.SyntheticBatch{Compression: kgo.NoCompression()}, ""},
+		{"zeroes", "records=0,bytes=0,random=0", kfake.SyntheticBatch{}, ""},
+		{
+			"every key",
+			"records=1000,bytes=100,random=0.5,compression=gzip",
+			kfake.SyntheticBatch{Records: 1000, RecordBytes: 100, RandomFrac: 0.5, Compression: kgo.GzipCompression()},
+			"",
+		},
+		{"no equals", "records", kfake.SyntheticBatch{}, `invalid --synthetic-batch "records": want KEY=VALUE`},
+		{"unknown key", "nope=1", kfake.SyntheticBatch{}, `invalid --synthetic-batch key "nope": want records, bytes, random, compression`},
+		{"records not a number", "records=ten", kfake.SyntheticBatch{}, `invalid --synthetic-batch "records=ten"`},
+		{"records negative", "records=-1", kfake.SyntheticBatch{}, `invalid --synthetic-batch "records=-1": must be >= 0`},
+		{"bytes negative", "bytes=-1", kfake.SyntheticBatch{}, `invalid --synthetic-batch "bytes=-1": must be >= 0`},
+		{"random not a number", "random=half", kfake.SyntheticBatch{}, `invalid --synthetic-batch "random=half"`},
+		{"random too big", "random=1.5", kfake.SyntheticBatch{}, `invalid --synthetic-batch "random=1.5": must be in [0,1]`},
+		{"random negative", "random=-0.5", kfake.SyntheticBatch{}, `invalid --synthetic-batch "random=-0.5": must be in [0,1]`},
+		{"random not a number at all", "random=NaN", kfake.SyntheticBatch{}, `invalid --synthetic-batch "random=NaN": must be in [0,1]`},
+		{"unknown codec", "compression=lzo", kfake.SyntheticBatch{}, `invalid --synthetic-batch "compression=lzo": must be none, gzip, snappy, lz4, or zstd`},
+		{"one key bad", "records=10,nope=1", kfake.SyntheticBatch{}, `invalid --synthetic-batch key "nope"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseSyntheticBatch(tt.in)
+			if tt.err != "" {
+				if err == nil {
+					t.Fatalf("expected an error containing %q, got %+v", tt.err, got)
+				}
+				if !strings.Contains(err.Error(), tt.err) {
+					t.Errorf("error = %v, want it to contain %q", err, tt.err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("got %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+// A synthetic cluster answers a fetch from any offset, so a consumer can run
+// as long as you like without producing anything to read.
+func TestSyntheticFetch(t *testing.T) {
+	batch, err := parseSyntheticBatch("records=10,bytes=20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := kfake.NewCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "foo"), kfake.SyntheticFetch(batch))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics("foo"),
+		kgo.ConsumeResetOffset(kgo.NewOffset().At(1000000)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	fs := cl.PollRecords(ctx, 5)
+	if err := fs.Err(); err != nil {
+		t.Fatalf("fetching at 1000000: %v", err)
+	}
+	if fs.NumRecords() != 5 {
+		t.Fatalf("fetched %d records, want 5", fs.NumRecords())
+	}
+	r := fs.Records()[0]
+	if r.Offset < 1000000 {
+		t.Errorf("first offset = %d, want at least 1000000", r.Offset)
+	}
+	if len(r.Value) != 20 {
+		t.Errorf("value is %d bytes, want 20", len(r.Value))
 	}
 }
 

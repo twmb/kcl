@@ -5,6 +5,7 @@ package fake
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
@@ -18,6 +19,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/twmb/franz-go/pkg/kfake"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kversion"
 	"github.com/twmb/franz-go/pkg/sr/srfake"
 
@@ -46,6 +48,8 @@ func Command() *cobra.Command {
 		registryPort int
 		seedDemoFlag bool
 		blackhole    bool
+		synthetic    bool
+		syntheticFmt string
 	)
 
 	cmd := &cobra.Command{
@@ -94,6 +98,11 @@ Seed topics at startup:
 Producer benchmarks, taking records and dropping them:
 
   kcl fake --blackhole-produce
+
+Consumer benchmarks, answering every fetch from one canned batch:
+
+  kcl fake --synthetic-fetch
+  kcl fake --synthetic-fetch --synthetic-batch records=1000,bytes=100,random=0.5,compression=lz4
 
 Custom broker config (repeatable):
 
@@ -159,7 +168,11 @@ Tune log verbosity for debugging:
 			if err != nil {
 				return out.Errf(out.ExitUsage, "%v", err)
 			}
-			if err := checkFlagPairs(blackhole, seedDemoFlag); err != nil {
+			if err := checkFlagPairs(blackhole, seedDemoFlag, synthetic, cmd.Flags().Changed("synthetic-batch")); err != nil {
+				return out.Errf(out.ExitUsage, "%v", err)
+			}
+			batch, err := parseSyntheticBatch(syntheticFmt)
+			if err != nil {
 				return out.Errf(out.ExitUsage, "%v", err)
 			}
 
@@ -212,6 +225,9 @@ Tune log verbosity for debugging:
 			}
 			if blackhole {
 				opts = append(opts, kfake.BlackholeProduce())
+			}
+			if synthetic {
+				opts = append(opts, kfake.SyntheticFetch(batch))
 			}
 			if acls {
 				opts = append(opts, kfake.EnableACLs())
@@ -355,6 +371,8 @@ Tune log verbosity for debugging:
 	cmd.Flags().StringSliceVar(&seedTopics, "seed-topic", nil, "seed topics at startup as NAME:PARTITIONS (repeatable and/or comma-separated)")
 	cmd.Flags().BoolVar(&allowAuto, "allow-auto-topic-creation", false, "allow producers/consumers to auto-create topics")
 	cmd.Flags().BoolVar(&blackhole, "blackhole-produce", false, "accept produce and discard the records (offsets still advance; nothing can be consumed)")
+	cmd.Flags().BoolVar(&synthetic, "synthetic-fetch", false, "answer every fetch of an existing partition from one canned batch, served from any offset with no end (consume benchmarks)")
+	cmd.Flags().StringVar(&syntheticFmt, "synthetic-batch", "", "shape the batch --synthetic-fetch serves, as KEY=VAL,...: records, bytes, random, compression")
 	cmd.Flags().BoolVar(&acls, "acls", false, "enable ACL enforcement (requires --sasl superusers to get through the deny-by-default)")
 	cmd.Flags().StringArrayVar(&saslUsers, "sasl", nil, "add a SASL superuser as MECHANISM:USER:PASS (repeatable; enables SASL). Mechanisms: plain, scram-sha-256, scram-sha-512")
 	cmd.Flags().StringVar(&pprofAddr, "pprof", "", "if set, serve pprof on this addr (e.g. :6060 or 127.0.0.1:6060)")
@@ -372,11 +390,83 @@ Tune log verbosity for debugging:
 // checkFlagPairs reports flags that cannot run together. We check before
 // anything binds, as with the --control port clash, so a pair that cannot
 // work fails at the prompt rather than after the brokers are listening.
-func checkFlagPairs(blackhole, seedDemo bool) error {
+func checkFlagPairs(blackhole, seedDemo, syntheticFetch, syntheticBatch bool) error {
 	if blackhole && seedDemo {
 		return errors.New("--seed-demo produces records, which --blackhole-produce would drop")
 	}
+	if syntheticBatch && !syntheticFetch {
+		return errors.New("--synthetic-batch shapes the batch --synthetic-fetch serves; give --synthetic-fetch too")
+	}
 	return nil
+}
+
+// syntheticCodecs are the codecs we can compress a canned batch with, by the
+// names kcl takes everywhere else.
+var syntheticCodecs = map[string]kgo.CompressionCodec{
+	"none":   kgo.NoCompression(),
+	"gzip":   kgo.GzipCompression(),
+	"snappy": kgo.SnappyCompression(),
+	"lz4":    kgo.Lz4Compression(),
+	"zstd":   kgo.ZstdCompression(),
+}
+
+// parseSyntheticBatch parses KEY=VAL entries shaping the batch a
+// --synthetic-fetch cluster serves. An empty string leaves kfake its own
+// default, one megabyte of uncompressed 100 byte values.
+func parseSyntheticBatch(s string) (kfake.SyntheticBatch, error) {
+	var b kfake.SyntheticBatch
+	if s == "" {
+		return b, nil
+	}
+	for _, kv := range strings.Split(s, ",") {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			return b, fmt.Errorf("invalid --synthetic-batch %q: want KEY=VALUE", kv)
+		}
+		var err error
+		switch k {
+		case "records":
+			b.Records, err = atLeastZero(v)
+		case "bytes":
+			b.RecordBytes, err = atLeastZero(v)
+		case "random":
+			f, ferr := strconv.ParseFloat(v, 64)
+			switch {
+			case ferr != nil:
+				err = ferr
+			case math.IsNaN(f) || f < 0 || f > 1:
+				err = errors.New("must be in [0,1]")
+			default:
+				b.RandomFrac = f
+			}
+		case "compression":
+			codec, ok := syntheticCodecs[strings.ToLower(v)]
+			if !ok {
+				err = errors.New("must be none, gzip, snappy, lz4, or zstd")
+				break
+			}
+			b.Compression = codec
+		default:
+			return b, fmt.Errorf("invalid --synthetic-batch key %q: want records, bytes, random, compression", k)
+		}
+		if err != nil {
+			return b, fmt.Errorf("invalid --synthetic-batch %q: %v", kv, err)
+		}
+	}
+	return b, nil
+}
+
+// atLeastZero parses a count. kfake rejects a negative one when the cluster
+// starts; we say so while you are still typing.
+func atLeastZero(v string) (int, error) {
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, err
+	}
+	if n < 0 {
+		return 0, errors.New("must be >= 0")
+	}
+	return n, nil
 }
 
 func parseLogLevel(s string) (kfake.LogLevel, error) {
