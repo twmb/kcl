@@ -226,6 +226,7 @@ Defaults: text shows all sections, awk shows offsets.
 							jg.TotalLag = ls.totalLag
 						}
 						if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
+							anyErr = true
 							msg := err.Error()
 							if group.ErrorMessage != nil {
 								msg += ": " + *group.ErrorMessage
@@ -276,11 +277,15 @@ Defaults: text shows all sections, awk shows offsets.
 					}
 					resp := shard.Resp.(*kmsg.ShareGroupDescribeResponse)
 					for _, group := range resp.Groups {
+						groupErr := kerr.ErrorForCode(group.ErrorCode)
+						if groupErr != nil {
+							anyErr = true
+						}
 						switch awkSection {
 						case "summary":
 							errMsg := ""
-							if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
-								errMsg = err.Error()
+							if groupErr != nil {
+								errMsg = groupErr.Error()
 								if group.ErrorMessage != nil {
 									errMsg += ": " + *group.ErrorMessage
 								}
