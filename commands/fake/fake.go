@@ -145,7 +145,7 @@ Tune log verbosity for debugging:
 			if err != nil {
 				return out.Errf(out.ExitUsage, "%v", err)
 			}
-			seeds, err := parseSeedTopics(seedTopics)
+			seeds, err := parseSeedTopics(cmd.Flags().Changed("seed-topic"), seedTopics)
 			if err != nil {
 				return out.Errf(out.ExitUsage, "%v", err)
 			}
@@ -334,7 +334,7 @@ Tune log verbosity for debugging:
 		},
 	}
 
-	cmd.Flags().IntSliceVar(&ports, "ports", []int{9092, 9093, 9094}, "ports for brokers (comma-separated; broker count = number of ports)")
+	cmd.Flags().IntSliceVar(&ports, "ports", []int{9092, 9093, 9094}, "ports for brokers (repeatable and/or comma-separated; broker count = number of ports)")
 	cmd.Flags().StringVarP(&logLevel, "log-level", "l", "none", "kfake log level: none, error, warn, info, debug")
 	cmd.Flags().StringVarP(&dataDir, "data-dir", "d", "", "persist state under this directory across restarts (default: in-memory only)")
 	cmd.Flags().BoolVar(&syncWrites, "sync", false, "fsync every write for immediate durability (slower)")
@@ -393,10 +393,20 @@ type seedTopic struct {
 	partitions int32
 }
 
-func parseSeedTopics(list []string) ([]seedTopic, error) {
+// parseSeedTopics parses NAME:PARTITIONS entries. given says whether the flag
+// was set at all: pflag splits the value with a csv reader, and a csv reader
+// reads "" as no records, so --seed-topic ” arrives here as an empty list
+// rather than as one empty entry.
+func parseSeedTopics(given bool, list []string) ([]seedTopic, error) {
+	if given && len(list) == 0 {
+		return nil, fmt.Errorf(`invalid --seed-topic "": empty`)
+	}
 	var out []seedTopic
 	for _, s := range list {
 		name, parts, ok := strings.Cut(s, ":")
+		if name == "" {
+			return nil, fmt.Errorf("invalid --seed-topic %q: empty", s)
+		}
 		if !ok {
 			out = append(out, seedTopic{topic: s, partitions: -1})
 			continue

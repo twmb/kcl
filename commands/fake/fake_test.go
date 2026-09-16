@@ -82,23 +82,31 @@ func TestParseBrokerConfigs(t *testing.T) {
 
 func TestParseSeedTopics(t *testing.T) {
 	tests := []struct {
-		name string
-		in   []string
-		want []seedTopic
-		err  bool
+		name  string
+		given bool
+		in    []string
+		want  []seedTopic
+		err   bool
 	}{
-		{"nil", nil, nil, false},
-		{"bare name", []string{"foo"}, []seedTopic{{"foo", -1}}, false},
-		{"name:partitions", []string{"foo:3"}, []seedTopic{{"foo", 3}}, false},
-		{"multiple repeatable", []string{"foo:3", "bar:2"}, []seedTopic{{"foo", 3}, {"bar", 2}}, false},
-		{"non-int partitions", []string{"foo:abc"}, nil, true},
-		{"zero partitions", []string{"foo:0"}, nil, true},
-		{"negative partitions", []string{"foo:-1"}, nil, true},
-		{"missing partition count", []string{"foo:"}, nil, true},
+		{"nil", false, nil, nil, false},
+		{"bare name", true, []string{"foo"}, []seedTopic{{"foo", -1}}, false},
+		{"name:partitions", true, []string{"foo:3"}, []seedTopic{{"foo", 3}}, false},
+		{"multiple repeatable", true, []string{"foo:3", "bar:2"}, []seedTopic{{"foo", 3}, {"bar", 2}}, false},
+		{"non-int partitions", true, []string{"foo:abc"}, nil, true},
+		{"zero partitions", true, []string{"foo:0"}, nil, true},
+		{"negative partitions", true, []string{"foo:-1"}, nil, true},
+		{"missing partition count", true, []string{"foo:"}, nil, true},
+		{"empty", true, []string{""}, nil, true},
+		{"empty among others", true, []string{"foo:3", ""}, nil, true},
+		{"empty name", true, []string{":3"}, nil, true},
+		// pflag drops the value of --seed-topic '' rather than passing an
+		// empty entry, so the flag being given with nothing in it is only
+		// visible as given with an empty list.
+		{"given but empty", true, nil, nil, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseSeedTopics(tt.in)
+			got, err := parseSeedTopics(tt.given, tt.in)
 			if tt.err {
 				if err == nil {
 					t.Errorf("expected error, got %v", got)
