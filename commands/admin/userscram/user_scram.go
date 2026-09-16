@@ -139,14 +139,17 @@ Both user and mechanism are required.
 
 To insert or update, you must pass a user, scram mechanism, and password.
 Optional arguments are iterations and salt; if these are empty, they will
-be 4096 and 20 cryptographically random bytes. To pass a halt, use hex.
+be 4096 and 20 cryptographically random bytes. To pass a salt, use hex.
+
+The password must come last: everything after "password=" is the password,
+commas and equals signs included, so there is nothing to quote or escape.
 
 For example,
 
     --set user=alice,mechanism=scram-sha-512,password=foo
-    --set user=bob,mechanism=scram-sha-256,iterations=16384,salt=ab01cd3f
-    --set user=george,mechanism=scram-sha-512,iterations=8192
-    --set user=sally,mechanism=scram-sha-256,salt=01020304badcef
+    --set user=bob,mechanism=scram-sha-256,iterations=16384,salt=ab01cd3f,password=foo
+    --set user=george,mechanism=scram-sha-512,iterations=8192,password=foo
+    --set user=sally,mechanism=scram-sha-256,password=a,b=c
 
 Both --set and --del can be specified many times.
 `,
@@ -206,7 +209,14 @@ Both --set and --del can be specified many times.
 				}
 				var password string
 
-				for _, kv := range strings.Split(set, ",") {
+				// The password is everything after "password=", so a
+				// password can hold commas and equals signs.
+				pairs, password, hasPassword := splitPassword(set)
+				if hasPassword {
+					delete(allowed, "password")
+				}
+
+				for _, kv := range pairs {
 					split := strings.SplitN(kv, "=", 2)
 					if len(split) != 2 {
 						return out.Errf(out.ExitUsage, "set kv %q missing value", kv)
@@ -226,15 +236,13 @@ Both --set and --del can be specified many times.
 							return err
 						}
 						u.Mechanism = mech
-					case "password":
-						password = v
 					case "iterations":
 						i, err := strconv.ParseInt(v, 10, 32)
 						if err != nil {
 							return fmt.Errorf("set iterations is not a number: %v", err)
 						}
-						if i < 4092 || i > 16<<10 {
-							return out.Errf(out.ExitUsage, "invalid iterations %d: min allowed 4k, max 16k", i)
+						if i < 4096 || i > 16<<10 {
+							return out.Errf(out.ExitUsage, "invalid iterations %d: min allowed 4096, max 16384", i)
 						}
 						u.Iterations = int32(i)
 					case "salt":
@@ -283,11 +291,23 @@ Both --set and --del can be specified many times.
 			resp := kresp.(*kmsg.AlterUserSCRAMCredentialsResponse)
 
 			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
-				"USER", "ERROR")
+				"USER", "ERROR", "MESSAGE")
+			var failed bool
 			for _, res := range resp.Results {
-				table.Row(res.User, kerr.ErrorForCode(res.ErrorCode))
+				errStr, msg := "", ""
+				if err := kerr.ErrorForCode(res.ErrorCode); err != nil {
+					errStr = err.Error()
+					failed = true
+				}
+				if res.ErrorMessage != nil {
+					msg = *res.ErrorMessage
+				}
+				table.Row(res.User, errStr, msg)
 			}
 			table.Flush()
+			if failed {
+				return out.ErrSilent
+			}
 			return nil
 		},
 	}
@@ -296,4 +316,25 @@ Both --set and --del can be specified many times.
 	cmd.Flags().StringArrayVarP(&sets, "set", "s", nil, "user and mechanism pairing to insert or update, repeatable")
 
 	return cmd
+}
+
+// splitPassword splits a --set value into its comma separated pairs before
+// "password=" and the password after it. The password runs to the end of
+// the value, so it may contain commas and equals signs.
+func splitPassword(set string) (pairs []string, password string, ok bool) {
+	const key = "password="
+	for i := 0; i <= len(set); {
+		if strings.HasPrefix(strings.ToLower(set[i:]), key) {
+			if i > 0 {
+				pairs = strings.Split(set[:i-1], ",")
+			}
+			return pairs, set[i+len(key):], true
+		}
+		next := strings.IndexByte(set[i:], ',')
+		if next < 0 {
+			break
+		}
+		i += next + 1
+	}
+	return strings.Split(set, ","), "", false
 }
