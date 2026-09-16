@@ -22,7 +22,6 @@ func Command(cl *client.Client) *cobra.Command {
 		Use:     "group",
 		Aliases: []string{"g"},
 		Short:   "Consumer group operations (list, describe, seek, delete).",
-		Args:    cobra.ExactArgs(0),
 	}
 
 	cmd.AddCommand(

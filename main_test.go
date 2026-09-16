@@ -270,3 +270,32 @@ func TestTreeShorthandsAndUsage(t *testing.T) {
 		}
 	}
 }
+
+// TestGroupsNameAnUnknownSubcommand pins that every command group answers a
+// typo by naming it. Cobra validates arguments before RunE, so a group that
+// sets Args of its own reports an argument count instead: "kcl acl zzz" said
+// "accepts 0 arg(s), received 1" while the other thirteen groups said
+// `unknown command "zzz" for "kcl acl"`.
+func TestGroupsNameAnUnknownSubcommand(t *testing.T) {
+	root, _ := buildRoot()
+	allCommands(root, func(cmd *cobra.Command) {
+		if !cmd.HasParent() || !cmd.HasSubCommands() {
+			return
+		}
+		// kcl fake is a cluster you run, not only a group, so a stray
+		// argument to it really is an argument error.
+		if strings.HasPrefix(cmd.CommandPath(), "kcl fake") {
+			return
+		}
+		if err := cmd.ValidateArgs([]string{"zzz"}); err != nil {
+			t.Errorf("%s: %v; a group must let the argument through so the run can name it", cmd.CommandPath(), err)
+			return
+		}
+		err := cmd.RunE(cmd, []string{"zzz"})
+		want := `unknown command "zzz" for "` + cmd.CommandPath() + `"`
+		var ce *out.ExitCodeError
+		if err == nil || !errors.As(err, &ce) || ce.Code != out.ExitUsage || err.Error() != want {
+			t.Errorf("%s: err = %v, want exit 2 and %q", cmd.CommandPath(), err, want)
+		}
+	})
+}

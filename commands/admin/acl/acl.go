@@ -130,7 +130,6 @@ Note that if combining with delegation tokens, you do not create ACLs for the
 delegation token ID. The principal of the client using the token is the same
 as the principal of the user that created the token.
 `,
-		Args: cobra.ExactArgs(0),
 	}
 
 	cmd.AddCommand(
