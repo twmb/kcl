@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 )
@@ -106,6 +107,40 @@ func (t *FormattedTable) flushAWK() {
 		}
 		fmt.Println(strings.Join(strs, "\t"))
 	}
+}
+
+// Number is a number for a table cell whose value the cluster may not have
+// reported. JSON gets the number itself, or null when there is none; text and
+// awk get the digits, or the dash those columns already showed. Build one
+// with Num, or use NoNum.
+//
+// A cell holding strconv.FormatInt of a number reaches JSON as a string, and
+// "start":"0" sat beside "stable":5 in one list-offsets document. A cell
+// holding the int64 itself is a JSON number, so reach for Number only where
+// a dash is also possible.
+type Number struct {
+	v  int64
+	ok bool
+}
+
+// Num is the table cell for v.
+func Num[T int | int32 | int64](v T) Number { return Number{v: int64(v), ok: true} }
+
+// NoNum is the table cell for a number the cluster did not report.
+var NoNum Number
+
+func (n Number) String() string {
+	if !n.ok {
+		return "-"
+	}
+	return strconv.FormatInt(n.v, 10)
+}
+
+func (n Number) MarshalJSON() ([]byte, error) {
+	if !n.ok {
+		return []byte("null"), nil
+	}
+	return strconv.AppendInt(nil, n.v, 10), nil
 }
 
 // MarshalJSON outputs structured JSON with _command and _version metadata

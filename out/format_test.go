@@ -307,3 +307,59 @@ func TestDieJSON(t *testing.T) {
 		t.Errorf("message = %v", result["message"])
 	}
 }
+
+func TestNumber(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		n      Number
+		expStr string
+		expRaw string
+	}{
+		{"a number", Num(5), "5", "5"},
+		{"zero", Num(0), "0", "0"},
+		{"negative", Num(int64(-1)), "-1", "-1"},
+		{"not reported", NoNum, "-", "null"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.n.String(); got != test.expStr {
+				t.Errorf("String() = %s != exp %s", got, test.expStr)
+			}
+			raw, err := json.Marshal(test.n)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			if string(raw) != test.expRaw {
+				t.Errorf("Marshal = %s != exp %s", raw, test.expRaw)
+			}
+		})
+	}
+}
+
+func TestNumberInTable(t *testing.T) {
+	rows := func(format string) string {
+		return captureStdout(func() {
+			table := NewFormattedTable(format, "test.cmd", 1, "data", "NAME", "SIZE", "LAG")
+			table.Row("alpha", Num(395), NoNum)
+			table.Flush()
+		})
+	}
+
+	if got, exp := rows("awk"), "alpha\t395\t-\n"; got != exp {
+		t.Errorf("awk = %q != exp %q", got, exp)
+	}
+	if got := rows("text"); !strings.Contains(got, "alpha  395   -") {
+		t.Errorf("text = %q", got)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal([]byte(rows("json")), &result); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	first := result["data"].([]any)[0].(map[string]any)
+	if first["size"] != float64(395) {
+		t.Errorf("size = %v (type %T), want a JSON number", first["size"], first["size"])
+	}
+	if first["lag"] != nil {
+		t.Errorf("lag = %v (type %T), want null", first["lag"], first["lag"])
+	}
+}

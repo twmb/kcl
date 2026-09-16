@@ -5,6 +5,48 @@ output is for people and may change between releases without an entry here;
 `--format awk` is the stable scripting contract. Entries cover `--format
 json` and any `text` change worth calling out.
 
+## Numbers in `--format json` are JSON numbers
+
+Some columns reached JSON as the string of a number, so one document carried
+`"start":"0"` beside `"stable":5`. The fields that changed type:
+
+| command | fields |
+|---|---|
+| `misc list-offsets` | `start`, `end` |
+| `logdirs describe` | `size`, `total`, `usable` |
+| `group describe` | `current_offset`, `lag` in the `lag` rows |
+| `share-group describe` | `lag` in the `offsets` rows |
+
+Before:
+
+```
+$ kcl misc list-offsets demo-avro --format json
+{"_command":"misc.list-offsets","_version":1,"offsets":[{"broker":0,"end":"5","error":"","partition":0,"stable":5,"start":"0","topic":"demo-avro"}]}
+$ kcl logdirs describe --format json
+{"_command":"logdirs.describe",...,"size":"395",...,"total":"1738","usable":"34359738368"}
+```
+
+After:
+
+```
+$ kcl misc list-offsets demo-avro --format json
+{"_command":"misc.list-offsets","_version":1,"offsets":[{"broker":0,"end":5,"error":"","partition":0,"stable":5,"start":0,"topic":"demo-avro"}]}
+$ kcl logdirs describe --format json
+{"_command":"logdirs.describe",...,"size":395,...,"total":1738,"usable":34359738368}
+```
+
+A field the cluster did not report is `null` rather than the string `"-"`:
+`logdirs describe` against a broker below Kafka 3.3, which sends -1 for the
+volume size, and the `current_offset` and `lag` of a partition a group has
+not committed. `text` and `awk` still print the dash.
+
+Two cases stay strings, both because the column holds more than a number.
+`-H` formats sizes as `1.7KB`, which is the display you asked for.
+`misc list-offsets --with-epochs` writes `START` and `END` as `offset/epoch`.
+
+A script comparing `.size` to a string now compares it to a number; `jq`
+reads `.size | tostring` for the old shape.
+
 ## `cluster metadata` sorts topics in every format
 
 `--format json` and `--format awk` printed topics in whatever order the

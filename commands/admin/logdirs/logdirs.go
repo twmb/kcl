@@ -49,14 +49,18 @@ func humanSize(bytes int64) string {
 // formatSize renders a byte count for a size column, human readable if
 // --human-readable was used. A broker that does not report a size sends -1,
 // which we print as a dash rather than as a number that looks like a size.
-func formatSize(bytes int64, human bool) string {
+//
+// The plain form is the number itself, so that JSON gets a JSON number.
+// -H is a display choice you asked for, and its KB and MB reach JSON as the
+// strings they are.
+func formatSize(bytes int64, human bool) any {
 	if bytes < 0 {
-		return "-"
+		return out.NoNum
 	}
 	if human {
 		return humanSize(bytes)
 	}
-	return fmt.Sprintf("%d", bytes)
+	return out.Num(bytes)
 }
 
 func describeCommand(cl *client.Client) *cobra.Command {

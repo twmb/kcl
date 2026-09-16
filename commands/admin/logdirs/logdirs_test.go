@@ -1,6 +1,10 @@
 package logdirs
 
-import "testing"
+import (
+	"encoding/json"
+	"fmt"
+	"testing"
+)
 
 func TestHumanSize(t *testing.T) {
 	tests := []struct {
@@ -30,18 +34,27 @@ func TestFormatSize(t *testing.T) {
 		bytes int64
 		human bool
 		want  string
+		json  string
 	}{
-		{"zero", 0, false, "0"},
-		{"bytes", 5368709120, false, "5368709120"},
-		{"human", 5368709120, true, "5.0GB"},
+		{"zero", 0, false, "0", "0"},
+		{"bytes", 5368709120, false, "5368709120", "5368709120"},
+		{"human", 5368709120, true, "5.0GB", `"5.0GB"`},
 		// A broker below Kafka 3.3 does not report the volume size and
 		// sends -1 for it.
-		{"unreported", -1, false, "-"},
-		{"unreported human", -1, true, "-"},
+		{"unreported", -1, false, "-", "null"},
+		{"unreported human", -1, true, "-", "null"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := formatSize(test.bytes, test.human); got != test.want {
-				t.Errorf("formatSize(%d, %v) = %q, want %q", test.bytes, test.human, got, test.want)
+			got := formatSize(test.bytes, test.human)
+			if s := fmt.Sprint(got); s != test.want {
+				t.Errorf("formatSize(%d, %v) = %q, want %q", test.bytes, test.human, s, test.want)
+			}
+			raw, err := json.Marshal(got)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			if string(raw) != test.json {
+				t.Errorf("formatSize(%d, %v) JSON = %s, want %s", test.bytes, test.human, raw, test.json)
 			}
 		})
 	}

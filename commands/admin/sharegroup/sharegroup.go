@@ -377,11 +377,11 @@ Defaults: text shows all sections, awk shows offsets.
 										if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
 											errMsg = err.Error()
 										}
-										lagStr := "-"
+										lag := out.NoNum
 										if p.Lag >= 0 {
-											lagStr = fmt.Sprintf("%d", p.Lag)
+											lag = out.Num(p.Lag)
 										}
-										lagTable.Row(topic.Topic, p.Partition, p.StartOffset, p.LeaderEpoch, lagStr, errMsg)
+										lagTable.Row(topic.Topic, p.Partition, p.StartOffset, p.LeaderEpoch, lag, errMsg)
 									}
 								}
 								lagTable.Flush()

@@ -480,15 +480,15 @@ func describeConsumerGroups(cl *client.Client, groups []string, readCommitted bo
 				table := out.NewFormattedTable(format, "group.describe", 1, "lag",
 					"TOPIC", "PARTITION", "CURRENT-OFFSET", "LOG-END-OFFSET", "LAG", "MEMBER-ID", "CLIENT-ID", "HOST")
 				for _, row := range r.rows {
-					curStr := strconv.FormatInt(row.currentOffset, 10)
+					cur := out.Num(row.currentOffset)
 					if row.currentOffset < 0 {
-						curStr = "-"
+						cur = out.NoNum
 					}
-					lagStr := strconv.FormatInt(row.lag, 10)
+					lag := out.Num(row.lag)
 					if !row.lagValid {
-						lagStr = "-"
+						lag = out.NoNum
 					}
-					table.Row(row.topic, row.partition, curStr, row.logEndOffset, lagStr, row.memberID, row.clientID, row.host)
+					table.Row(row.topic, row.partition, cur, row.logEndOffset, lag, row.memberID, row.clientID, row.host)
 				}
 				table.Flush()
 			}
@@ -1050,15 +1050,15 @@ func printDescribed(
 				table := out.NewFormattedTable(format, "group.describe", 1, "lag",
 					"TOPIC", "PARTITION", "CURRENT-OFFSET", "LOG-END-OFFSET", "LAG", "MEMBER-ID", "CLIENT-ID", "HOST")
 				for _, r := range rows {
-					curStr := strconv.FormatInt(r.currentOffset, 10)
+					cur := out.Num(r.currentOffset)
 					if r.currentOffset < 0 {
-						curStr = "-"
+						cur = out.NoNum
 					}
-					lagStr := strconv.FormatInt(r.lag, 10)
+					lag := out.Num(r.lag)
 					if !r.lagValid {
-						lagStr = "-"
+						lag = out.NoNum
 					}
-					table.Row(r.topic, r.partition, curStr, r.logEndOffset, lagStr, r.memberID, r.clientID, r.host)
+					table.Row(r.topic, r.partition, cur, r.logEndOffset, lag, r.memberID, r.clientID, r.host)
 				}
 				table.Flush()
 			}

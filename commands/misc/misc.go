@@ -637,18 +637,18 @@ offset.
 			for _, topic := range sorted {
 				for _, part := range topic.parts {
 					if part.err != nil {
-						table.Row(part.broker, topic.topic, part.part, "", "", "", part.err)
+						table.Row(part.broker, topic.topic, part.part, "", "", "", part.err.Error())
 						continue
 					}
-					var startStr, endStr string
+					// --with-epochs asks for two numbers in one
+					// column, so START and END are strings there.
+					// Plain, they are the offsets themselves.
+					var start, end any = part.startOffset, part.endOffset
 					if withEpochs {
-						startStr = fmt.Sprintf("%d/%d", part.startOffset, part.startLeaderEpoch)
-						endStr = fmt.Sprintf("%d/%d", part.endOffset, part.endLeaderEpoch)
-					} else {
-						startStr = fmt.Sprintf("%d", part.startOffset)
-						endStr = fmt.Sprintf("%d", part.endOffset)
+						start = fmt.Sprintf("%d/%d", part.startOffset, part.startLeaderEpoch)
+						end = fmt.Sprintf("%d/%d", part.endOffset, part.endLeaderEpoch)
 					}
-					table.Row(part.broker, topic.topic, part.part, startStr, part.stableOffset, endStr, "")
+					table.Row(part.broker, topic.topic, part.part, start, part.stableOffset, end, "")
 				}
 			}
 			table.Flush()
