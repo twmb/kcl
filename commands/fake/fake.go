@@ -516,7 +516,7 @@ type seedTopic struct {
 
 // parseSeedTopics parses NAME:PARTITIONS entries. given says whether the flag
 // was set at all: pflag splits the value with a csv reader, and a csv reader
-// reads "" as no records, so --seed-topic ” arrives here as an empty list
+// reads "" as no records, so --seed-topic '' arrives here as an empty list
 // rather than as one empty entry.
 func parseSeedTopics(given bool, list []string) ([]seedTopic, error) {
 	if given && len(list) == 0 {

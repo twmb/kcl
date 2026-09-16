@@ -17,7 +17,7 @@ import (
 // seedRecordCount is how many demo records are produced to each demo topic.
 const seedRecordCount = 5
 
-// demoSchemas all describe the same logical shape — {id: string, count: int} —
+// demoSchemas all describe the same logical shape, {id: string, count: int},
 // so the three encodings can be compared directly.
 const (
 	demoAvroSchema  = `{"type":"record","name":"Demo","fields":[{"name":"id","type":"string"},{"name":"count","type":"int"}]}`
