@@ -162,6 +162,15 @@ func describeConsumerGroups(cl *client.Client, groups []string, readCommitted bo
 		}
 	}
 
+	var assignments []*kmsg.Assignment
+	for i := range allGroups {
+		for j := range allGroups[i].group.Members {
+			m := &allGroups[i].group.Members[j]
+			assignments = append(assignments, &m.Assignment, &m.TargetAssignment)
+		}
+	}
+	nameAssignedTopics(cl, assignments)
+
 	// Build topic-partition set from member assignments for offset lookups.
 	tps := make(map[string]map[int32]struct{})
 	for _, gi := range allGroups {
@@ -535,6 +544,45 @@ func describeConsumerGroups(cl *client.Client, groups []string, readCommitted bo
 		}
 	}
 	return nil
+}
+
+// nameAssignedTopics fills in the name of every topic an assignment carries
+// by ID alone, from cluster metadata. A broker can send the ID without the
+// name, and the name is what committed offsets and ListOffsets are keyed by.
+// A topic the cluster no longer has keeps its ID, printed in hex.
+func nameAssignedTopics(cl *client.Client, assignments []*kmsg.Assignment) {
+	var unnamed bool
+	for _, a := range assignments {
+		for _, tp := range a.TopicPartitions {
+			if tp.Topic == "" && tp.TopicID != [16]byte{} {
+				unnamed = true
+			}
+		}
+	}
+	if !unnamed {
+		return
+	}
+
+	req := kmsg.NewPtrMetadataRequest() // nil Topics lists every topic
+	resp, err := req.RequestWith(context.Background(), cl.Client())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "unable to issue Metadata to name assigned topics: %v\n", err)
+		return
+	}
+	names := make(map[[16]byte]string)
+	for _, t := range resp.Topics {
+		if t.Topic != nil {
+			names[t.TopicID] = *t.Topic
+		}
+	}
+	for _, a := range assignments {
+		for i := range a.TopicPartitions {
+			tp := &a.TopicPartitions[i]
+			if tp.Topic == "" {
+				tp.Topic = names[tp.TopicID]
+			}
+		}
+	}
 }
 
 func formatAssignment(a kmsg.Assignment) string {
