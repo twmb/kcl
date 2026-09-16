@@ -156,10 +156,11 @@ func faultRmCommand(addr *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "rm ID...",
 		Short: "Remove faults by ID, or all of them.",
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			if all == (len(args) > 0) {
 				return out.Errf(out.ExitUsage, "give either fault IDs or --all")
 			}
+			var removed int
 			if all {
 				var resp struct {
 					Removed int `json:"removed"`
@@ -167,18 +168,21 @@ func faultRmCommand(addr *string) *cobra.Command {
 				if err := controlDo(http.MethodDelete, *addr, "/faults", nil, &resp); err != nil {
 					return err
 				}
-				fmt.Printf("removed %d\n", resp.Removed)
-				return nil
+				removed = resp.Removed
 			}
 			for _, arg := range args {
 				if _, err := strconv.Atoi(arg); err != nil {
 					return out.Errf(out.ExitUsage, "fault ID %q is not a number", arg)
 				}
-				var resp struct{}
+				var resp struct {
+					Removed int `json:"removed"`
+				}
 				if err := controlDo(http.MethodDelete, *addr, "/faults/"+arg, nil, &resp); err != nil {
 					return err
 				}
+				removed += resp.Removed
 			}
+			printRemoved(controlFormat(cmd), removed)
 			return nil
 		},
 	}
@@ -228,6 +232,20 @@ SEE ALSO:
 	cmd.Flags().IntVar(&hits, "hits", 1, "requests the fault must have answered")
 	cmd.Flags().StringVar(&timeout, "timeout", "30s", "how long to wait before giving up")
 	return cmd
+}
+
+// printRemoved says what rm removed, in whichever format was asked for. Both
+// forms of rm print it: naming an ID that was there printed nothing at all
+// before, and --all printed prose whatever --format said.
+func printRemoved(format string, n int) {
+	switch format {
+	case out.FormatJSON:
+		out.MarshalJSON("fake.control.fault.rm", 1, map[string]any{"removed": n})
+	case out.FormatAWK:
+		fmt.Println(n)
+	default:
+		fmt.Printf("removed %d\n", n)
+	}
 }
 
 // parseRules reads one --rule value: JSON as written, or @FILE, or @- for

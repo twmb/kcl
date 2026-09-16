@@ -5,16 +5,20 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json/v2"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"strconv"
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
+
+	"github.com/twmb/kcl/out"
 )
 
 func TestParseRequestKey(t *testing.T) {
@@ -475,4 +479,49 @@ func TestFaults(t *testing.T) {
 			t.Errorf("removed = %v, want 2", got["removed"])
 		}
 	})
+}
+
+func TestPrintRemoved(t *testing.T) {
+	tests := []struct {
+		format string
+		n      int
+		want   string
+	}{
+		{out.FormatText, 4, "removed 4\n"},
+		{out.FormatText, 0, "removed 0\n"},
+		{out.FormatAWK, 4, "4\n"},
+		{out.FormatAWK, 0, "0\n"},
+		{out.FormatJSON, 4, `{"_command":"fake.control.fault.rm","_version":1,"removed":4}` + "\n"},
+		{out.FormatJSON, 0, `{"_command":"fake.control.fault.rm","_version":1,"removed":0}` + "\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.format+" "+strconv.Itoa(tt.n), func(t *testing.T) {
+			got := captureStdout(t, func() { printRemoved(tt.format, tt.n) })
+			if got != tt.want {
+				t.Errorf("printRemoved(%s, %d) = %q, want %q", tt.format, tt.n, got, tt.want)
+			}
+		})
+	}
+}
+
+// captureStdout runs fn with stdout on a pipe and returns what it wrote. The
+// pipe buffer bounds how much fn may print before this blocks, which is fine
+// for a line or two.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+	defer func() { os.Stdout = orig }()
+	fn()
+	w.Close()
+	b, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	return string(b)
 }
