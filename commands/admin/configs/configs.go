@@ -2,8 +2,11 @@
 package configs
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strconv"
@@ -287,14 +290,18 @@ func (c *cfger) alterIncremental() error {
 
 	table := out.NewFormattedTable(c.cl.Format(), "config.alter", 1, "results",
 		"RESOURCE", "ERROR", "ERROR-MESSAGE")
+	anyErr := false
 	for _, resource := range resp.Resources {
-		errMsg := ""
-		if resource.ErrorMessage != nil {
-			errMsg = *resource.ErrorMessage
+		errName, errMsg := alterError(resource.ErrorCode, resource.ErrorMessage)
+		if resource.ErrorCode != 0 {
+			anyErr = true
 		}
-		table.Row(resource.ResourceName, resource.ErrorCode, errMsg)
+		table.Row(resource.ResourceName, errName, errMsg)
 	}
 	table.Flush()
+	if anyErr {
+		return out.ErrSilent
+	}
 	return nil
 }
 
@@ -328,15 +335,35 @@ func (c *cfger) alterOld() error {
 
 	table := out.NewFormattedTable(c.cl.Format(), "config.alter", 1, "results",
 		"RESOURCE", "ERROR", "ERROR-MESSAGE")
+	anyErr := false
 	for _, resource := range resp.Resources {
-		errMsg := ""
-		if resource.ErrorMessage != nil {
-			errMsg = *resource.ErrorMessage
+		errName, errMsg := alterError(resource.ErrorCode, resource.ErrorMessage)
+		if resource.ErrorCode != 0 {
+			anyErr = true
 		}
-		table.Row(resource.ResourceName, resource.ErrorCode, errMsg)
+		table.Row(resource.ResourceName, errName, errMsg)
 	}
 	table.Flush()
+	if anyErr {
+		return out.ErrSilent
+	}
 	return nil
+}
+
+// alterError renders one alter response resource into the ERROR and
+// ERROR-MESSAGE columns. A clean resource is OK, matching topic create. A
+// failed one names the code rather than printing the number, and falls back
+// to the error description when the broker attaches no message of its own.
+func alterError(code int16, brokerMsg *string) (string, string) {
+	if code == 0 {
+		return "OK", ""
+	}
+	e := kerr.TypedErrorForCode(code)
+	msg := e.Description
+	if brokerMsg != nil {
+		msg = *brokerMsg
+	}
+	return e.Message, msg
 }
 
 // confirmAlterLoss prompts for yes or no when issuing alter configs
@@ -384,21 +411,40 @@ func (c *cfger) confirmAlterLoss() error {
 		}
 		fmt.Fprintln(os.Stderr)
 
-		for {
-			fmt.Fprint(os.Stderr, "[y]es|[n]o > ")
-			var s string
-			fmt.Scanf("%s", &s)
-			switch s {
-			case "y", "yes":
-				return nil
-			case "n", "no":
-				return fmt.Errorf("aborting")
-			default:
-				fmt.Fprintf(os.Stderr, "unrecognized input %q, valid options are y, yes, n, no\n", s)
-			}
-		}
+		return promptAlterLoss(os.Stdin, os.Stderr)
 	}
 	return nil
+}
+
+// promptAlterLoss asks whether to proceed, rereading r until the answer is
+// recognized. EOF and a read error both abort: a non-interactive stdin cannot
+// answer, and looping on it spins forever.
+func promptAlterLoss(r io.Reader, w io.Writer) error {
+	br := bufio.NewReader(r)
+	for {
+		fmt.Fprint(w, "[y]es|[n]o > ")
+		line, err := br.ReadString('\n')
+		if err != nil && line == "" {
+			fmt.Fprintln(w, "Aborting.")
+			if errors.Is(err, io.EOF) {
+				return out.ErrSilent
+			}
+			return out.Errf(out.ExitError, "unable to read stdin: %v", err)
+		}
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "y", "yes":
+			return nil
+		case "n", "no":
+			fmt.Fprintln(w, "Aborting.")
+			return out.ErrSilent
+		default:
+			fmt.Fprintf(w, "unrecognized input %q, valid options are y, yes, n, no\n", strings.TrimSpace(line))
+		}
+		if err != nil {
+			fmt.Fprintln(w, "Aborting.")
+			return out.ErrSilent
+		}
+	}
 }
 
 // issues a describe config for a single resource and returns
