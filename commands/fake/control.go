@@ -1,6 +1,7 @@
 package fake
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
@@ -34,7 +35,8 @@ type controlMethod struct {
 	Name      string `json:"name"`
 	Signature string `json:"signature"`
 
-	fn reflect.Value
+	fn  reflect.Value
+	ctx bool // the method takes a leading context, which we supply
 }
 
 // controlMethods returns the cluster methods we can call with arguments built
@@ -57,8 +59,9 @@ func controlMethods(c *kfake.Cluster) []controlMethod {
 		}
 		ms = append(ms, controlMethod{
 			Name:      name,
-			Signature: strings.TrimPrefix(fn.Type().String(), "func"),
+			Signature: signature(fn.Type()),
 			fn:        fn,
+			ctx:       takesCtx(fn.Type()),
 		})
 	}
 	slices.SortFunc(ms, func(a, b controlMethod) int { return strings.Compare(a.Name, b.Name) })
@@ -68,19 +71,47 @@ func controlMethods(c *kfake.Cluster) []controlMethod {
 // callable reports whether we can build every argument of fn from a string.
 // Funcs are the interesting exclusion: they are how Control, ControlKey and
 // SleepControl take their callbacks, and there is no sending one of those
-// over a wire. We skip variadic methods too; kfake has none today, and one
-// that appears later is better absent than half working.
+// over a wire. A leading context is the one interface we allow, because we
+// supply it rather than you. We skip variadic methods too; kfake has none
+// today, and one that appears later is better absent than half working.
 func callable(fn reflect.Type) bool {
 	if fn.IsVariadic() {
 		return false
 	}
 	for i := range fn.NumIn() {
+		if i == 0 && takesCtx(fn) {
+			continue
+		}
 		switch fn.In(i).Kind() {
 		case reflect.Func, reflect.Chan, reflect.Interface, reflect.UnsafePointer:
 			return false
 		}
 	}
 	return true
+}
+
+// takesCtx reports whether fn's first parameter is a context. A method that
+// blocks takes one, WaitGroupStable being the first; we hand it the
+// request's context so that a caller hanging up ends the wait.
+func takesCtx(fn reflect.Type) bool {
+	return fn.NumIn() > 0 && fn.In(0) == reflect.TypeFor[context.Context]()
+}
+
+// signature is what you type: the method's parameters and results, without
+// the context we supply ourselves.
+func signature(fn reflect.Type) string {
+	if takesCtx(fn) {
+		in := make([]reflect.Type, 0, fn.NumIn()-1)
+		for i := 1; i < fn.NumIn(); i++ {
+			in = append(in, fn.In(i))
+		}
+		out := make([]reflect.Type, 0, fn.NumOut())
+		for i := range fn.NumOut() {
+			out = append(out, fn.Out(i))
+		}
+		fn = reflect.FuncOf(in, out, false)
+	}
+	return strings.TrimPrefix(fn.String(), "func")
 }
 
 // isID reports whether t is a 16 byte array, i.e. a topic ID.
@@ -110,21 +141,27 @@ func buildArg(t reflect.Type, arg string) (reflect.Value, error) {
 	return p.Elem(), nil
 }
 
-// call invokes m. A trailing error return comes back as an error rather than
-// as a result; what is left is the result, alone if there is one and as a
-// list if there are more.
-func (m controlMethod) call(args []string) (any, error) {
+// call invokes m with ctx, which a method that takes a context gets as its
+// first argument and you do not pass. A trailing error return comes back as
+// an error rather than as a result; what is left is the result, alone if
+// there is one and as a list if there are more.
+func (m controlMethod) call(ctx context.Context, args []string) (any, error) {
 	ft := m.fn.Type()
-	if len(args) != ft.NumIn() {
-		return nil, usagef("%s takes %d argument(s), got %d", m.Name, ft.NumIn(), len(args))
+	var in []reflect.Value
+	var off int
+	if m.ctx {
+		in = append(in, reflect.ValueOf(ctx))
+		off = 1
 	}
-	in := make([]reflect.Value, len(args))
+	if len(args) != ft.NumIn()-off {
+		return nil, usagef("%s takes %d argument(s), got %d", m.Name, ft.NumIn()-off, len(args))
+	}
 	for i, arg := range args {
-		v, err := buildArg(ft.In(i), arg)
+		v, err := buildArg(ft.In(i+off), arg)
 		if err != nil {
-			return nil, usagef("argument %d (%s): %v", i+1, ft.In(i), err)
+			return nil, usagef("argument %d (%s): %v", i+1, ft.In(i+off), err)
 		}
-		in[i] = v
+		in = append(in, v)
 	}
 
 	outs := m.fn.Call(in)
@@ -180,7 +217,7 @@ func controlHandler(c *kfake.Cluster) http.Handler {
 			controlWriteErr(w, http.StatusBadRequest, usageErr{err})
 			return
 		}
-		res, err := m.call(req.Args)
+		res, err := m.call(r.Context(), req.Args)
 		if err != nil {
 			controlWriteErr(w, http.StatusBadRequest, err)
 			return

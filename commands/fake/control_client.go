@@ -2,12 +2,15 @@ package fake
 
 import (
 	"bytes"
+	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -71,6 +74,7 @@ func controlMethodsCommand(addr *string) *cobra.Command {
 }
 
 func controlCallCommand(addr *string) *cobra.Command {
+	var timeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "call METHOD [ARGS...]",
 		Short: "Call a kfake Cluster method on a running fake cluster.",
@@ -89,12 +93,17 @@ Results print as one line of JSON, so pipe to jq if you want it wide. This
 is the one control output --format does not touch: what comes back is the
 method's own return value rather than kcl's output.
 
+A method that takes a context, WaitGroupStable being one, gets the request's
+context from the endpoint rather than an argument from you, so it blocks
+until what it waits for happens; --timeout bounds how long that is.
+
 EXAMPLES:
   kcl fake control call ShufflePartitionLeaders
   kcl fake control call MoveTopicPartition foo 0 2
   kcl fake control call SetFollowers foo 0 [1,2]
   kcl fake control call -- DeleteRecords foo 0 -1   # -1 is an argument
   kcl fake control call TopicInfo foo | jq -r .TopicID
+  kcl fake control call WaitGroupStable g1 2 --timeout 10s
 
 SEE ALSO:
   kcl fake control methods  what this cluster can call
@@ -108,7 +117,18 @@ SEE ALSO:
 				Result jsontext.Value `json:"result"`
 			}
 			body := map[string]any{"args": args[1:]}
-			if err := controlDo(http.MethodPost, *addr, "/call/"+args[0], body, &resp); err != nil {
+			ctx := context.Background()
+			if timeout > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, timeout)
+				defer cancel()
+			}
+			if err := controlDoCtx(ctx, http.MethodPost, *addr, "/call/"+args[0], body, &resp); err != nil {
+				// Our deadline ran out, so say what we were waiting
+				// on. The endpoint saw us hang up and stopped too.
+				if errors.Is(err, context.DeadlineExceeded) {
+					return out.Errf(out.ExitError, "timed out after %s waiting for %s", timeout, args[0])
+				}
 				return err
 			}
 			if len(resp.Result) == 0 || string(resp.Result) == "null" {
@@ -125,6 +145,7 @@ SEE ALSO:
 	// as pflag is concerned, and "unknown shorthand flag: '1' in -1" does
 	// not tell you what to do about it. We add that, then hand the error to
 	// whoever handles ours, which is what gives it exit code 2.
+	cmd.Flags().DurationVar(&timeout, "timeout", 0, "how long to wait for a method that takes a context (default: no limit)")
 	cmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
 		err = dashArgHint(err)
 		if p := c.Parent(); p != nil {
@@ -165,6 +186,12 @@ func controlFormat(cmd *cobra.Command) string {
 // parse); those exit 2, and a cluster that ran the call and refused it
 // exits 1.
 func controlDo(method, addr, path string, body, into any) error {
+	return controlDoCtx(context.Background(), method, addr, path, body, into)
+}
+
+// controlDoCtx is controlDo bounded by ctx. A deadline that runs out comes
+// back as ctx's own error, which the caller words for what it was waiting on.
+func controlDoCtx(ctx context.Context, method, addr, path string, body, into any) error {
 	var rdr io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -173,13 +200,16 @@ func controlDo(method, addr, path string, body, into any) error {
 		}
 		rdr = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, controlURL(addr, path), rdr)
+	req, err := http.NewRequestWithContext(ctx, method, controlURL(addr, path), rdr)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("unable to reach a control endpoint at %s: %v (is the cluster running with --control?)", addr, err)
 	}
 	defer resp.Body.Close()
@@ -197,7 +227,13 @@ func controlDo(method, addr, path string, body, into any) error {
 		}
 		return fmt.Errorf("control endpoint returned %s", resp.Status)
 	}
-	return json.UnmarshalRead(resp.Body, into)
+	if err := json.UnmarshalRead(resp.Body, into); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return err
+	}
+	return nil
 }
 
 func controlURL(addr, path string) string {

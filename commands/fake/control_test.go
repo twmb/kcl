@@ -2,16 +2,19 @@ package fake
 
 import (
 	"bytes"
+	"context"
 	"encoding/json/v2"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/twmb/franz-go/pkg/kfake"
+	"github.com/twmb/franz-go/pkg/kgo"
 
 	"github.com/twmb/kcl/out"
 )
@@ -27,8 +30,10 @@ func TestControlMethods(t *testing.T) {
 	defer c.Close()
 
 	got := make(map[string]bool)
+	sigs := make(map[string]string)
 	for _, m := range controlMethods(c) {
 		got[m.Name] = true
+		sigs[m.Name] = m.Signature
 	}
 
 	want := []string{
@@ -47,6 +52,7 @@ func TestControlMethods(t *testing.T) {
 		"ShufflePartitionLeaders",
 		"TopicIDInfo",
 		"TopicInfo",
+		"WaitGroupStable",
 	}
 	for _, name := range want {
 		if !got[name] {
@@ -54,9 +60,15 @@ func TestControlMethods(t *testing.T) {
 		}
 	}
 
+	// The context we supply is not an argument you pass, so the signature
+	// we list is what you type.
+	if want := "(string, int) (*kfake.GroupInfo, error)"; sigs["WaitGroupStable"] != want {
+		t.Errorf("WaitGroupStable signature = %q, want %q", sigs["WaitGroupStable"], want)
+	}
+
 	// Methods taking a callback cannot cross a wire, and the skip list is
 	// only correct while the names on it exist.
-	for _, name := range []string{"Control", "ControlKey", "SleepControl"} {
+	for _, name := range []string{"Control", "ControlKey", "SleepControl", "WaitGroupInfo"} {
 		if got[name] {
 			t.Errorf("method %s takes a func and should not be callable", name)
 		}
@@ -69,6 +81,34 @@ func TestControlMethods(t *testing.T) {
 		if _, ok := ct.MethodByName(name); !ok {
 			t.Errorf("skipped method %s no longer exists; drop it from controlSkip", name)
 		}
+	}
+}
+
+// A leading context is the one interface we take, because the endpoint
+// supplies it; anything else is an argument we cannot build from a string.
+func TestCallable(t *testing.T) {
+	tests := []struct {
+		name string
+		fn   reflect.Type
+		want bool
+	}{
+		{"no arguments", reflect.TypeFor[func()](), true},
+		{"strings and numbers", reflect.TypeFor[func(string, int32, []int32) error](), true},
+		{"leading context", reflect.TypeFor[func(context.Context, string, int) error](), true},
+		{"context alone", reflect.TypeFor[func(context.Context) error](), true},
+		{"context second", reflect.TypeFor[func(string, context.Context) error](), false},
+		{"another interface", reflect.TypeFor[func(any) error](), false},
+		{"callback", reflect.TypeFor[func(func(string) bool) error](), false},
+		{"channel", reflect.TypeFor[func(chan int) error](), false},
+		{"variadic", reflect.TypeFor[func(...string) error](), false},
+		{"variadic after a context", reflect.TypeFor[func(context.Context, ...string) error](), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := callable(tt.fn); got != tt.want {
+				t.Errorf("callable(%s) = %v, want %v", tt.fn, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -187,6 +227,39 @@ func TestControlHandler(t *testing.T) {
 		}
 		if info["Topic"] != "foo" {
 			t.Errorf("Topic = %v, want foo", info["Topic"])
+		}
+	})
+
+	// A method that takes a context blocks on the cluster until it can
+	// answer, and the context is not an argument: g1 and 1 are.
+	t.Run("waiting method", func(t *testing.T) {
+		kcl, err := kgo.NewClient(
+			kgo.SeedBrokers(c.ListenAddrs()...),
+			kgo.ConsumerGroup("g1"),
+			kgo.ConsumeTopics("foo"),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer kcl.Close()
+		pctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		go kcl.PollFetches(pctx) //nolint:errcheck // polling is how the consumer joins
+
+		code, got := call(t, "WaitGroupStable", "g1", "1")
+		if code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (%v)", code, got)
+		}
+		info, ok := got["result"].(map[string]any)
+		if !ok {
+			t.Fatalf("result = %#v, want an object", got["result"])
+		}
+		if info["Group"] != "g1" || info["State"] != "Stable" {
+			t.Errorf("group = %v, state = %v, want g1 and Stable", info["Group"], info["State"])
+		}
+		ms, _ := info["Members"].([]any)
+		if len(ms) != 1 {
+			t.Errorf("members = %v, want 1", info["Members"])
 		}
 	})
 
@@ -309,6 +382,39 @@ func TestControlHandler(t *testing.T) {
 			t.Fatalf("status = %d, want 404", code)
 		}
 	})
+}
+
+// TestControlCallTimeout pins what --timeout does to a method that blocks:
+// we stop waiting, say what we were waiting for, and exit 1, since a wait
+// that ran out is not a call you made wrong.
+func TestControlCallTimeout(t *testing.T) {
+	c, err := kfake.NewCluster(kfake.NumBrokers(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	srv := httptest.NewServer(controlHandler(c))
+	defer srv.Close()
+	addr := srv.Listener.Addr().String()
+
+	root := &cobra.Command{Use: "kcl", SilenceUsage: true, SilenceErrors: true}
+	root.PersistentFlags().String("format", out.FormatText, "output format")
+	root.AddCommand(controlCallCommand(&addr))
+	root.SetOut(io.Discard)
+	root.SetErr(io.Discard)
+	root.SetArgs([]string{"call", "WaitGroupStable", "nosuch", "1", "--timeout", "200ms"})
+
+	err = root.Execute()
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if want := "timed out after 200ms waiting for WaitGroupStable"; err.Error() != want {
+		t.Errorf("error = %q, want %q", err, want)
+	}
+	if got := out.ExitCode(err); got != out.ExitError {
+		t.Errorf("exit code = %d, want %d", got, out.ExitError)
+	}
 }
 
 func jsonInt(n int32) string {
