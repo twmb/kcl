@@ -496,7 +496,8 @@ func describeCommand(cl *client.Client) *cobra.Command {
 Describe configurations (Kafka 0.11.0+).
 
 This command prints all key/value config values for a given entity. Read only
-keys are suffixed with *.
+keys are suffixed with * in text. In JSON and awk the key is the key and a
+read_only field says whether it is read only.
 
 Describing requires specifying the "entity type":
   t,  topic           topic configuration
@@ -534,17 +535,24 @@ kcl config describe my-subscription -tcm`,
 				return kvs[i].Name < kvs[j].Name
 			})
 
-			var table *out.FormattedTable
-			if resp.Version >= 3 && withTypes {
-				table = out.NewFormattedTable(cl.Format(), "config.describe", 1, "configs",
-					"KEY", "TYPE", "VALUE", "SOURCE")
-			} else {
-				table = out.NewFormattedTable(cl.Format(), "config.describe", 1, "configs",
-					"KEY", "VALUE", "SOURCE")
+			// Text marks a read only key by suffixing the key with a
+			// star, which is fine to read and awful to match on. JSON
+			// and awk get the key itself and a READ-ONLY column, so
+			// that a script grepping for broker.id finds it.
+			text := cl.Format() == out.FormatText
+			withTypes := withTypes && resp.Version >= 3
+			headers := []string{"KEY"}
+			if withTypes {
+				headers = append(headers, "TYPE")
 			}
+			headers = append(headers, "VALUE", "SOURCE")
+			if !text {
+				headers = append(headers, "READ-ONLY")
+			}
+			table := out.NewFormattedTable(cl.Format(), "config.describe", 1, "configs", headers...)
 			for _, kv := range kvs {
 				key := kv.Name
-				if kv.ReadOnly {
+				if kv.ReadOnly && text {
 					key += "*"
 				}
 				val := "(null)"
@@ -555,11 +563,15 @@ kcl config describe my-subscription -tcm`,
 					val = "(sensitive)"
 				}
 
-				if resp.Version >= 3 && withTypes {
-					table.Row(key, kv.ConfigType, val, kv.Source)
-				} else {
-					table.Row(key, val, kv.Source)
+				row := []any{key}
+				if withTypes {
+					row = append(row, kv.ConfigType)
 				}
+				row = append(row, val, kv.Source)
+				if !text {
+					row = append(row, kv.ReadOnly)
+				}
+				table.Row(row...)
 			}
 			table.Flush()
 

@@ -338,7 +338,7 @@ SEE ALSO:
 								tj.Configs = append(tj.Configs, configJSON{
 									Key:       c.Name,
 									Value:     val,
-									Source:    describeConfigSource(c.Source),
+									Source:    c.Source.String(),
 									Sensitive: c.IsSensitive,
 								})
 							}
@@ -422,7 +422,7 @@ SEE ALSO:
 										topicName,
 										c.Name,
 										val,
-										describeConfigSource(c.Source),
+										c.Source.String(),
 										c.IsSensitive,
 									)
 								}
@@ -497,7 +497,7 @@ SEE ALSO:
 								if c.Value != nil {
 									val = *c.Value
 								}
-								source := describeConfigSource(c.Source)
+								source := c.Source.String()
 								configTw.Print(c.Name, val, source, c.IsSensitive)
 							}
 							configTw.Flush()
@@ -573,27 +573,6 @@ func int32sToString(vals []int32) string {
 		strs[i] = strconv.FormatInt(int64(v), 10)
 	}
 	return "[" + strings.Join(strs, ",") + "]"
-}
-
-func describeConfigSource(source kmsg.ConfigSource) string {
-	switch source {
-	case 0:
-		return "UNKNOWN"
-	case 1:
-		return "DYNAMIC_TOPIC"
-	case 2:
-		return "DYNAMIC_BROKER"
-	case 3:
-		return "DYNAMIC_DEFAULT_BROKER"
-	case 4:
-		return "STATIC_BROKER"
-	case 5:
-		return "DEFAULT"
-	case 6:
-		return "DYNAMIC_BROKER_LOGGER"
-	default:
-		return fmt.Sprintf("SOURCE(%d)", source)
-	}
 }
 
 func strval(s *string) string {

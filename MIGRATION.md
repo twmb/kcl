@@ -5,6 +5,71 @@ output is for people and may change between releases without an entry here;
 `--format awk` is the stable scripting contract. Entries cover `--format
 json` and any `text` change worth calling out.
 
+## `config describe` moves the read only marker out of the key
+
+Text marks a read only key by suffixing the key with a star, and JSON and awk
+carried the star inside the key, so `"key":"broker.id*"` did not match a
+script looking for `broker.id`. The key is now the key, and a `READ-ONLY`
+column, `read_only` in JSON, says whether it is read only. The column is last,
+so an awk script keeps the indexes it had, and `--with-types` still slots
+`TYPE` second. `text` is unchanged and keeps the star.
+
+Before:
+
+```
+$ kcl config describe 0 -tb --format json
+{"_command":"config.describe","_version":1,"configs":[{"key":"broker.id*","source":"STATIC_BROKER_CONFIG","value":"0"},...]}
+$ kcl config describe 0 -tb --format awk | head -1
+broker.id*	STATIC_BROKER_CONFIG	0
+```
+
+After:
+
+```
+$ kcl config describe 0 -tb --format json
+{"_command":"config.describe","_version":1,"configs":[{"key":"broker.id","read_only":true,"source":"STATIC_BROKER_CONFIG","value":"0"},...]}
+$ kcl config describe 0 -tb --format awk | head -1
+broker.id	0	STATIC_BROKER_CONFIG	true
+```
+
+A script that stripped the star reads the key straight now; one that tested
+for it reads `.read_only`.
+
+## `topic describe` names a config source the way `config describe` does
+
+The two commands disagreed about the source of the same key on the same
+topic: `cleanup.policy` was `DEFAULT` under `topic describe` and
+`DEFAULT_CONFIG` under `config describe`. `topic describe` had its own list of
+names. Both now print what `kmsg.ConfigSource` calls the source, in text, json
+and awk.
+
+| was | is |
+|---|---|
+| `DYNAMIC_TOPIC` | `DYNAMIC_TOPIC_CONFIG` |
+| `DYNAMIC_BROKER` | `DYNAMIC_BROKER_CONFIG` |
+| `DYNAMIC_DEFAULT_BROKER` | `DYNAMIC_DEFAULT_BROKER_CONFIG` |
+| `STATIC_BROKER` | `STATIC_BROKER_CONFIG` |
+| `DEFAULT` | `DEFAULT_CONFIG` |
+| `DYNAMIC_BROKER_LOGGER` | `DYNAMIC_BROKER_LOGGER_CONFIG` |
+| `SOURCE(7)`, `SOURCE(8)` | `CLIENT_METRICS_CONFIG`, `GROUP_CONFIG` |
+
+Before:
+
+```
+$ kcl topic describe demo-avro --format json
+{...,"configs":[{"key":"cleanup.policy","value":"delete","source":"DEFAULT","sensitive":false},...]}
+```
+
+After:
+
+```
+$ kcl topic describe demo-avro --format json
+{...,"configs":[{"key":"cleanup.policy","value":"delete","source":"DEFAULT_CONFIG","sensitive":false},...]}
+```
+
+A script matching `DEFAULT` exactly matches `DEFAULT_CONFIG` now. There is no
+way back to the old names.
+
 ## `--format awk` is one shape per command
 
 Three commands answered `--format awk` with something other than TSV rows.

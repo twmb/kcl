@@ -47,6 +47,24 @@ func TestDescribeAWKRowShape(t *testing.T) {
 		return string(b)
 	}
 
+	// The source of a config is what kmsg.ConfigSource calls it, the same
+	// name "kcl config describe" prints for the same key.
+	t.Run("config sources are kmsg names", func(t *testing.T) {
+		got := describe("--section", "configs")
+		if got == "" {
+			t.Skip("this kfake reports no topic configs")
+		}
+		for _, line := range strings.Split(strings.TrimSuffix(got, "\n"), "\n") {
+			fields := strings.Split(line, "\t")
+			if len(fields) != 5 {
+				t.Fatalf("configs row = %d fields: %q", len(fields), line)
+			}
+			if !strings.HasSuffix(fields[3], "_CONFIG") {
+				t.Errorf("source = %q, want a kmsg.ConfigSource name", fields[3])
+			}
+		}
+	})
+
 	for _, test := range []struct {
 		name    string
 		args    []string
