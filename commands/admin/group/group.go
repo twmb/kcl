@@ -99,6 +99,21 @@ the groups listed. This prints all of the information from a ListGroups request.
 	return cmd
 }
 
+// deleteGroupResult returns what to print for one deleted group: the ERROR
+// column, the MESSAGE column, and the error itself so the caller can fail the
+// command. Kafka 4.4 attaches a message to a failed delete (KIP-1331); an
+// older broker sends none and the message is empty.
+func deleteGroupResult(g kmsg.DeleteGroupsResponseGroup) (status, message string, err error) {
+	status = "OK"
+	if err = kerr.ErrorForCode(g.ErrorCode); err != nil {
+		status = err.Error()
+	}
+	if g.ErrorMessage != nil {
+		message = *g.ErrorMessage
+	}
+	return status, message, err
+}
+
 func deleteCommand(cl *client.Client) *cobra.Command {
 	var dryRun bool
 	var regex bool
@@ -130,24 +145,25 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 			brokerResps := cl.Client().RequestSharded(context.Background(), &kmsg.DeleteGroupsRequest{
 				Groups: args,
 			})
+			// MESSAGE is appended rather than folded into ERROR so that a
+			// script keeps the columns it already indexes.
 			table := out.NewFormattedTable(cl.Format(), "group.delete", 1, "results",
-				"BROKER", "GROUP", "ERROR")
+				"BROKER", "GROUP", "ERROR", "MESSAGE")
 			anyErr := false
 			for _, brokerResp := range brokerResps {
 				kresp, err := brokerResp.Resp, brokerResp.Err
 				if err != nil {
 					anyErr = true
-					table.Row(brokerResp.Meta.NodeID, "", fmt.Sprintf("unable to issue request (addr %s:%d): %v", brokerResp.Meta.Host, brokerResp.Meta.Port, err))
+					table.Row(brokerResp.Meta.NodeID, "", fmt.Sprintf("unable to issue request (addr %s:%d): %v", brokerResp.Meta.Host, brokerResp.Meta.Port, err), "")
 					continue
 				}
 				resp := kresp.(*kmsg.DeleteGroupsResponse)
-				for _, resp := range resp.Groups {
-					msg := "OK"
-					if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+				for _, g := range resp.Groups {
+					status, message, err := deleteGroupResult(g)
+					if err != nil {
 						anyErr = true
-						msg = err.Error()
 					}
-					table.Row(brokerResp.Meta.NodeID, resp.Group, msg)
+					table.Row(brokerResp.Meta.NodeID, g.Group, status, message)
 				}
 			}
 			table.Flush()
