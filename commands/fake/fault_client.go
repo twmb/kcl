@@ -44,6 +44,8 @@ Rules are JSON, matching kfake's Fault type:
               its entities
   error       error name or code, default UNKNOWN_SERVER_ERROR
   count       requests to fault, default 1, -1 until removed
+  observe     count matching requests rather than faulting them, so a
+              wait blocks on requests that succeed; not with error
 
 EXAMPLES:
   kcl fake control fault add --rule '{"topic":"foo","error":"NOT_LEADER_OR_FOLLOWER"}'
@@ -79,6 +81,8 @@ EXAMPLES:
   kcl fake control fault add --rule '{"topic_id":"4286fc61-8d3e-4b4a-9d3e-1a2b3c4d5e6f","error":"UNKNOWN_TOPIC_ID","count":3}'
   kcl fake control fault add --rule '{"keys":["fetch"],"nodes":[1],"topic":"foo","error":"NOT_LEADER_OR_FOLLOWER","count":-1}'
   kcl fake control fault add --rule @faults.json
+  kcl fake control fault add --rule '{"keys":["fetch"],"topic":"foo","observe":true,"count":-1}'
+  kcl fake control fault wait ID --hits 5           # blocks until the consumer has fetched five times
 
 SEE ALSO:
   kcl fake control fault list  what is installed

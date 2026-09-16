@@ -31,8 +31,9 @@ type Rule struct {
 	Resource   string   `json:"resource,omitzero"`   // a config resource, quota entity, SCRAM user, log dir, feature, member, or ACL name
 	TopLevel   bool     `json:"top_level,omitzero"`  // fault the response's top-level error code rather than its entities
 
-	Error string `json:"error,omitzero"` // error name or code; unset is UNKNOWN_SERVER_ERROR
-	Count int    `json:"count,omitzero"` // requests to fault; unset is one, -1 is until removed
+	Error   string `json:"error,omitzero"`   // error name or code; unset is UNKNOWN_SERVER_ERROR
+	Count   int    `json:"count,omitzero"`   // requests to fault; unset is one, -1 is until removed
+	Observe bool   `json:"observe,omitzero"` // count matching requests rather than faulting them, so a wait blocks on requests that succeed
 }
 
 // fault converts r into what kfake takes.
@@ -46,6 +47,10 @@ func (r Rule) fault() (kfake.Fault, error) {
 		Resource:   r.Resource,
 		TopLevel:   r.TopLevel,
 		Count:      r.Count,
+		Observe:    r.Observe,
+	}
+	if r.Observe && r.Error != "" {
+		return f, errors.New("observe and error are exclusive")
 	}
 	for _, k := range r.Keys {
 		key, err := parseRequestKey(k)

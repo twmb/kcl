@@ -135,6 +135,20 @@ func TestRuleFault(t *testing.T) {
 		t.Errorf("Err = %v, want nil so kfake defaults it", f.Err)
 	}
 
+	// An observing rule counts rather than faults, so it has no error to
+	// carry and giving it one is a rule we cannot install.
+	f, err = Rule{Keys: []string{"produce"}, Observe: true, Count: -1}.fault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.Observe || f.Count != -1 {
+		t.Errorf("observe rule did not carry through: %+v", f)
+	}
+	_, err = Rule{Observe: true, Error: "UNKNOWN_TOPIC_ID"}.fault()
+	if err == nil || err.Error() != "observe and error are exclusive" {
+		t.Errorf("observe with an error = %v, want observe and error are exclusive", err)
+	}
+
 	for _, bad := range []Rule{
 		{Keys: []string{"nope"}},
 		{TopicID: "not-a-uuid"},
@@ -158,6 +172,8 @@ func TestRuleMarshal(t *testing.T) {
 		{Rule{TopLevel: true}, `{"top_level":true}`},
 		{Rule{Count: -1}, `{"count":-1}`},
 		{Rule{Keys: []string{"fetch"}, Error: "UNKNOWN_TOPIC_ID"}, `{"keys":["fetch"],"error":"UNKNOWN_TOPIC_ID"}`},
+		{Rule{Observe: true}, `{"observe":true}`},
+		{Rule{Keys: []string{"produce"}, Observe: true, Count: -1}, `{"keys":["produce"],"count":-1,"observe":true}`},
 	} {
 		b, err := json.Marshal(tt.rule)
 		if err != nil {
@@ -195,6 +211,7 @@ func TestParseRules(t *testing.T) {
 		{"leading space", "  \n {\"topic\":\"foo\"}", []Rule{{Topic: "foo"}}, false},
 		{"file object", write("one.json", `{"topic":"foo"}`), []Rule{{Topic: "foo"}}, false},
 		{"file array", write("many.json", arr), []Rule{{Topic: "foo", Error: "UNKNOWN_TOPIC_ID", Count: 1}, {Topic: "bar", Count: -1}}, false},
+		{"observe", `{"keys":["produce"],"observe":true,"count":-1}`, []Rule{{Keys: []string{"produce"}, Observe: true, Count: -1}}, false},
 		{"unknown member", `{"topci":"foo"}`, nil, true},
 		{"not json", `nope`, nil, true},
 		{"missing file", "@" + dir + "/nope.json", nil, true},
@@ -464,6 +481,54 @@ func TestFaults(t *testing.T) {
 		}
 		if got["usage"] != nil {
 			t.Errorf("usage = %v, want unset for an ID that does not exist", got["usage"])
+		}
+	})
+
+	// An observing rule is counted where a faulting one would have
+	// answered, so the produce still appends and the hits still rise.
+	t.Run("observe", func(t *testing.T) {
+		code, got := do(t, http.MethodPost, "/faults", map[string]any{"rules": []Rule{{
+			Keys:    []string{"produce"},
+			Topic:   "foo",
+			Observe: true,
+			Count:   -1,
+		}}})
+		if code != http.StatusOK {
+			t.Fatalf("installing: status %d (%v)", code, got)
+		}
+		id := int(got["id"].(float64))
+		defer do(t, http.MethodDelete, "/faults/"+strconv.Itoa(id), nil)
+
+		res := cl.ProduceSync(ctx, &kgo.Record{Topic: "foo", Value: []byte("observed")})
+		if err := res.FirstErr(); err != nil {
+			t.Fatalf("produce with an observing fault: %v", err)
+		}
+
+		code, got = do(t, http.MethodPost, "/faults/"+strconv.Itoa(id)+"/wait", map[string]any{"hits": 1, "timeout": "5s"})
+		if code != http.StatusOK {
+			t.Fatalf("waiting: status %d (%v)", code, got)
+		}
+		if got["hits"] != float64(1) {
+			t.Errorf("hits = %v, want 1", got["hits"])
+		}
+	})
+
+	// A rule that counts has no error to fault with, so both together is
+	// a rule we cannot install.
+	t.Run("observe with an error", func(t *testing.T) {
+		code, got := do(t, http.MethodPost, "/faults", map[string]any{"rules": []Rule{{
+			Keys:    []string{"produce"},
+			Observe: true,
+			Error:   "UNKNOWN_TOPIC_ID",
+		}}})
+		if code != http.StatusBadRequest {
+			t.Fatalf("status %d (%v), want 400", code, got)
+		}
+		if want := "rule 1: observe and error are exclusive"; got["error"] != want {
+			t.Errorf("error = %v, want %q", got["error"], want)
+		}
+		if got["usage"] != true {
+			t.Errorf("usage = %v, want true", got["usage"])
 		}
 	})
 
