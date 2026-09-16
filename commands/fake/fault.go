@@ -3,6 +3,7 @@ package fake
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -256,12 +257,12 @@ func faultRoutes(mux *http.ServeMux, fs *faults) {
 			Rules []Rule `json:"rules"`
 		}
 		if err := json.UnmarshalRead(r.Body, &req, json.RejectUnknownMembers(true)); err != nil {
-			controlWriteErr(w, http.StatusBadRequest, err)
+			controlWriteErr(w, http.StatusBadRequest, usageErr{err})
 			return
 		}
 		set, err := fs.add(req.Rules)
 		if err != nil {
-			controlWriteErr(w, http.StatusBadRequest, err)
+			controlWriteErr(w, http.StatusBadRequest, usageErr{err})
 			return
 		}
 		controlWrite(w, http.StatusOK, set)
@@ -277,8 +278,12 @@ func faultRoutes(mux *http.ServeMux, fs *faults) {
 
 	mux.HandleFunc("DELETE /faults/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.Atoi(r.PathValue("id"))
-		if err != nil || !fs.remove(id) {
-			controlWriteErr(w, http.StatusNotFound, fmt.Errorf("no fault %s", r.PathValue("id")))
+		if err != nil {
+			controlWriteErr(w, http.StatusBadRequest, usagef("fault ID %q is not a number", r.PathValue("id")))
+			return
+		}
+		if !fs.remove(id) {
+			controlWriteErr(w, http.StatusNotFound, fmt.Errorf("no fault %d", id))
 			return
 		}
 		controlWrite(w, http.StatusOK, map[string]any{"removed": 1})
@@ -288,9 +293,13 @@ func faultRoutes(mux *http.ServeMux, fs *faults) {
 	// a caller out of process can pace itself against one.
 	mux.HandleFunc("POST /faults/{id}/wait", func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.Atoi(r.PathValue("id"))
+		if err != nil {
+			controlWriteErr(w, http.StatusBadRequest, usagef("fault ID %q is not a number", r.PathValue("id")))
+			return
+		}
 		set := fs.get(id)
-		if err != nil || set == nil {
-			controlWriteErr(w, http.StatusNotFound, fmt.Errorf("no fault %s", r.PathValue("id")))
+		if set == nil {
+			controlWriteErr(w, http.StatusNotFound, fmt.Errorf("no fault %d", id))
 			return
 		}
 		req := struct {
@@ -298,18 +307,26 @@ func faultRoutes(mux *http.ServeMux, fs *faults) {
 			Timeout string `json:"timeout"`
 		}{Hits: 1, Timeout: "30s"}
 		if err := json.UnmarshalRead(r.Body, &req, json.RejectUnknownMembers(true)); err != nil {
-			controlWriteErr(w, http.StatusBadRequest, err)
+			controlWriteErr(w, http.StatusBadRequest, usageErr{err})
 			return
 		}
 		timeout, err := time.ParseDuration(req.Timeout)
 		if err != nil {
-			controlWriteErr(w, http.StatusBadRequest, fmt.Errorf("timeout %q: %v", req.Timeout, err))
+			controlWriteErr(w, http.StatusBadRequest, usagef("timeout %q: %v", req.Timeout, err))
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
 		if err := set.h.Wait(ctx, req.Hits); err != nil {
-			controlWriteErr(w, http.StatusRequestTimeout, fmt.Errorf("waiting for %d hit(s), have %d: %v", req.Hits, set.h.Hits(), err))
+			// The timeout we were given is what ran out, so say that
+			// rather than handing back the context's own wording. Any
+			// other failure is the caller hanging up, which is not.
+			if errors.Is(err, context.DeadlineExceeded) {
+				err = fmt.Errorf("timed out after %s waiting for %d hit(s), have %d", timeout, req.Hits, set.h.Hits())
+			} else {
+				err = fmt.Errorf("waiting for %d hit(s), have %d: %v", req.Hits, set.h.Hits(), err)
+			}
+			controlWriteErr(w, http.StatusRequestTimeout, err)
 			return
 		}
 		controlWrite(w, http.StatusOK, map[string]any{"hits": set.h.Hits()})

@@ -354,10 +354,41 @@ func TestFaults(t *testing.T) {
 		if code != http.StatusOK {
 			t.Fatalf("status %d (%v)", code, got)
 		}
-		// Two hits never come; the fault spent its budget.
+		// Two hits never come; the fault spent its budget. The message
+		// names the timeout that ran out, and a timeout is not the caller
+		// asking for something wrong.
 		code, got = do(t, http.MethodPost, "/faults/1/wait", map[string]any{"hits": 2, "timeout": "50ms"})
 		if code != http.StatusRequestTimeout {
 			t.Fatalf("status %d (%v), want 408", code, got)
+		}
+		if want := "timed out after 50ms waiting for 2 hit(s), have 1"; got["error"] != want {
+			t.Errorf("error = %v, want %q", got["error"], want)
+		}
+		if got["usage"] != nil {
+			t.Errorf("usage = %v, want unset for a timeout", got["usage"])
+		}
+	})
+
+	t.Run("wait unknown ID", func(t *testing.T) {
+		code, got := do(t, http.MethodPost, "/faults/99/wait", map[string]any{"hits": 1, "timeout": "50ms"})
+		if code != http.StatusNotFound {
+			t.Fatalf("status %d (%v), want 404", code, got)
+		}
+		if got["error"] != "no fault 99" {
+			t.Errorf("error = %v, want no fault 99", got["error"])
+		}
+		if got["usage"] != nil {
+			t.Errorf("usage = %v, want unset for an ID that does not exist", got["usage"])
+		}
+	})
+
+	t.Run("wait bad timeout", func(t *testing.T) {
+		code, got := do(t, http.MethodPost, "/faults/1/wait", map[string]any{"hits": 1, "timeout": "bogus"})
+		if code != http.StatusBadRequest {
+			t.Fatalf("status %d (%v), want 400", code, got)
+		}
+		if got["usage"] != true {
+			t.Errorf("usage = %v, want true", got["usage"])
 		}
 	})
 
@@ -394,8 +425,12 @@ func TestFaults(t *testing.T) {
 			{"rules": []Rule{{Keys: []string{"nope"}}}},
 			{"rules": []Rule{}},
 		} {
-			if code, got := do(t, http.MethodPost, "/faults", body); code != http.StatusBadRequest {
+			code, got := do(t, http.MethodPost, "/faults", body)
+			if code != http.StatusBadRequest {
 				t.Errorf("%v: status %d (%v), want 400", body, code, got)
+			}
+			if got["usage"] != true {
+				t.Errorf("%v: usage = %v, want true", body, got["usage"])
 			}
 		}
 	})
@@ -416,8 +451,15 @@ func TestFaults(t *testing.T) {
 		if code, got := do(t, http.MethodDelete, "/faults/1", nil); code != http.StatusOK {
 			t.Fatalf("status %d (%v)", code, got)
 		}
-		if code, _ := do(t, http.MethodDelete, "/faults/1", nil); code != http.StatusNotFound {
+		code, got := do(t, http.MethodDelete, "/faults/1", nil)
+		if code != http.StatusNotFound {
 			t.Errorf("status %d, want 404 removing twice", code)
+		}
+		if got["error"] != "no fault 1" {
+			t.Errorf("error = %v, want no fault 1", got["error"])
+		}
+		if got["usage"] != nil {
+			t.Errorf("usage = %v, want unset for an ID that does not exist", got["usage"])
 		}
 	})
 

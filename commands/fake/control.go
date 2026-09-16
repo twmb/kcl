@@ -3,6 +3,7 @@ package fake
 import (
 	"encoding/hex"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -115,13 +116,13 @@ func buildArg(t reflect.Type, arg string) (reflect.Value, error) {
 func (m controlMethod) call(args []string) (any, error) {
 	ft := m.fn.Type()
 	if len(args) != ft.NumIn() {
-		return nil, fmt.Errorf("%s takes %d argument(s), got %d", m.Name, ft.NumIn(), len(args))
+		return nil, usagef("%s takes %d argument(s), got %d", m.Name, ft.NumIn(), len(args))
 	}
 	in := make([]reflect.Value, len(args))
 	for i, arg := range args {
 		v, err := buildArg(ft.In(i), arg)
 		if err != nil {
-			return nil, fmt.Errorf("argument %d (%s): %v", i+1, ft.In(i), err)
+			return nil, usagef("argument %d (%s): %v", i+1, ft.In(i), err)
 		}
 		in[i] = v
 	}
@@ -163,14 +164,14 @@ func controlHandler(c *kfake.Cluster) http.Handler {
 		name := r.PathValue("method")
 		m, ok := byName[name]
 		if !ok {
-			controlWriteErr(w, http.StatusNotFound, fmt.Errorf("unknown method %q, GET /methods lists what we can call", name))
+			controlWriteErr(w, http.StatusNotFound, usagef("unknown method %q, GET /methods lists what we can call", name))
 			return
 		}
 		var req struct {
 			Args []string `json:"args"`
 		}
 		if err := json.UnmarshalRead(r.Body, &req, json.RejectUnknownMembers(true)); err != nil {
-			controlWriteErr(w, http.StatusBadRequest, err)
+			controlWriteErr(w, http.StatusBadRequest, usageErr{err})
 			return
 		}
 		res, err := m.call(req.Args)
@@ -197,6 +198,29 @@ func controlWrite(w http.ResponseWriter, code int, v any) {
 	json.MarshalWrite(w, v, controlHex) //nolint:errcheck // the client is gone, nothing to do
 }
 
+// controlWriteErr writes err as the error document. A usage error carries
+// "usage":true so the client can tell what you asked for being wrong from
+// the cluster refusing what you asked; see usageErr.
 func controlWriteErr(w http.ResponseWriter, code int, err error) {
-	controlWrite(w, code, map[string]any{"error": err.Error()})
+	doc := map[string]any{"error": err.Error()}
+	if isUsage(err) {
+		doc["usage"] = true
+	}
+	controlWrite(w, code, doc)
+}
+
+// usageErr is a failure you fix by calling differently: a method we do not
+// have, the wrong number of arguments, an argument or a rule that does not
+// parse. The client exits 2 for these and 1 for everything else, so a method
+// that ran and returned an error is NOT one of these, and neither is a fault
+// ID that does not exist or a wait that timed out.
+type usageErr struct{ error }
+
+func usagef(format string, args ...any) error {
+	return usageErr{fmt.Errorf(format, args...)}
+}
+
+func isUsage(err error) bool {
+	var u usageErr
+	return errors.As(err, &u)
 }

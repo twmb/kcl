@@ -134,7 +134,10 @@ func controlFormat(cmd *cobra.Command) string {
 
 // controlDo sends one request to a control endpoint and decodes the response
 // into into. A non-200 carries the reason as an error message, which we
-// return as the error.
+// return as the error. The endpoint says whether the call itself was wrong
+// (an unknown method, an argument we cannot build, a rule that does not
+// parse); those exit 2, and a cluster that ran the call and refused it
+// exits 1.
 func controlDo(method, addr, path string, body, into any) error {
 	var rdr io.Reader
 	if body != nil {
@@ -157,9 +160,14 @@ func controlDo(method, addr, path string, body, into any) error {
 	if resp.StatusCode != http.StatusOK {
 		var e struct {
 			Error string `json:"error"`
+			Usage bool   `json:"usage"`
 		}
 		if json.UnmarshalRead(resp.Body, &e) == nil && e.Error != "" {
-			return out.Errf(out.ExitUsage, "%s", e.Error)
+			code := out.ExitError
+			if e.Usage {
+				code = out.ExitUsage
+			}
+			return out.Errf(code, "%s", e.Error)
 		}
 		return fmt.Errorf("control endpoint returned %s", resp.Status)
 	}

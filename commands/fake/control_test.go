@@ -3,12 +3,15 @@ package fake
 import (
 	"bytes"
 	"encoding/json/v2"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/kfake"
+
+	"github.com/twmb/kcl/out"
 )
 
 // TestControlMethods pins the methods we expect to reach remotely. Discovery
@@ -230,12 +233,20 @@ func TestControlHandler(t *testing.T) {
 		if got["error"] == nil {
 			t.Errorf("no error message in %v", got)
 		}
+		// The call was fine, the cluster refused it, so the client exits
+		// 1 rather than 2.
+		if got["usage"] != nil {
+			t.Errorf("usage = %v, want unset for a method that ran and failed", got["usage"])
+		}
 	})
 
 	t.Run("unknown method", func(t *testing.T) {
 		code, got := call(t, "Nope")
 		if code != http.StatusNotFound {
 			t.Fatalf("status = %d, want 404 (%v)", code, got)
+		}
+		if got["usage"] != true {
+			t.Errorf("usage = %v, want true", got["usage"])
 		}
 	})
 
@@ -246,6 +257,19 @@ func TestControlHandler(t *testing.T) {
 		}
 		if got["error"] == nil {
 			t.Errorf("no error message in %v", got)
+		}
+		if got["usage"] != true {
+			t.Errorf("usage = %v, want true", got["usage"])
+		}
+	})
+
+	t.Run("unbuildable argument", func(t *testing.T) {
+		code, got := call(t, "MoveTopicPartition", "foo", "0", "two")
+		if code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (%v)", code, got)
+		}
+		if got["usage"] != true {
+			t.Errorf("usage = %v, want true", got["usage"])
 		}
 	})
 
@@ -260,4 +284,40 @@ func TestControlHandler(t *testing.T) {
 func jsonInt(n int32) string {
 	b, _ := json.Marshal(n)
 	return string(b)
+}
+
+// TestControlDoExitCodes pins what the client exits with: 2 when the endpoint
+// says the call itself was wrong, 1 when the cluster ran it and refused, and
+// 1 for anything we cannot read.
+func TestControlDoExitCodes(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		want   int
+	}{
+		{"unknown method", http.StatusNotFound, `{"error":"unknown method \"Nope\"","usage":true}`, out.ExitUsage},
+		{"cluster refused", http.StatusBadRequest, `{"error":"node 9 not found"}`, out.ExitError},
+		{"no fault", http.StatusNotFound, `{"error":"no fault 99"}`, out.ExitError},
+		{"timed out", http.StatusRequestTimeout, `{"error":"timed out after 2s waiting for 100 hit(s), have 1"}`, out.ExitError},
+		{"not a document", http.StatusInternalServerError, `nope`, out.ExitError},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.status)
+				io.WriteString(w, tt.body) //nolint:errcheck // the test client is right here
+			}))
+			defer srv.Close()
+
+			var into struct{}
+			err := controlDo(http.MethodGet, srv.Listener.Addr().String(), "/methods", nil, &into)
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if got := out.ExitCode(err); got != tt.want {
+				t.Errorf("exit code = %d, want %d (%v)", got, tt.want, err)
+			}
+		})
+	}
 }
