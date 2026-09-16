@@ -11,6 +11,7 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -282,6 +283,126 @@ func TestFaultListRoundTrip(t *testing.T) {
 	}
 }
 
+func TestParseRulePairs(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want Rule
+		err  string
+	}{
+		{"topic", "topic=foo", Rule{Topic: "foo"}, ""},
+		{"topic id", "topic_id=465a97c5-9919-152e-1827-030ce374ec71", Rule{TopicID: "465a97c5-9919-152e-1827-030ce374ec71"}, ""},
+		{"group", "group=g1", Rule{Group: "g1"}, ""},
+		{"txn id", "txn_id=t1", Rule{TxnID: "t1"}, ""},
+		{"resource", "resource=r1", Rule{Resource: "r1"}, ""},
+		{"error", "error=NOT_LEADER_OR_FOLLOWER", Rule{Error: "NOT_LEADER_OR_FOLLOWER"}, ""},
+		{"error code", "error=100", Rule{Error: "100"}, ""},
+		{"count", "count=3", Rule{Count: 3}, ""},
+		{"count unlimited", "count=-1", Rule{Count: -1}, ""},
+		{"keys", "keys=fetch", Rule{Keys: []string{"fetch"}}, ""},
+		{"nodes", "nodes=1", Rule{Nodes: []int32{1}}, ""},
+		{"partitions", "partitions=0", Rule{Partitions: []int32{0}}, ""},
+		{"top_level", "top_level=true", Rule{TopLevel: true}, ""},
+		{"top_level false", "top_level=false", Rule{}, ""},
+		{"observe", "observe=true", Rule{Observe: true}, ""},
+		{"bare observe", "observe", Rule{Observe: true}, ""},
+		{"bare top_level", "top_level", Rule{TopLevel: true}, ""},
+		{"several", "topic=foo,error=NOT_LEADER_OR_FOLLOWER,count=3", Rule{Topic: "foo", Error: "NOT_LEADER_OR_FOLLOWER", Count: 3}, ""},
+		{
+			"lists repeat",
+			"keys=fetch,keys=produce,nodes=1,nodes=2,partitions=0,partitions=1,observe,count=-1",
+			Rule{Keys: []string{"fetch", "produce"}, Nodes: []int32{1, 2}, Partitions: []int32{0, 1}, Observe: true, Count: -1},
+			"",
+		},
+		{"spaces around pairs", " topic=foo , count=2 ", Rule{Topic: "foo", Count: 2}, ""},
+		{"topic twice", "topic=a,topic=b", Rule{}, "topic given twice"},
+		{"count twice", "count=1,count=2", Rule{}, "count given twice"},
+		{"observe twice", "observe,observe", Rule{}, "observe given twice"},
+		{"unknown key", "nope=1", Rule{}, `unknown key "nope": want keys, nodes, topic, topic_id, partitions, group, txn_id, resource, top_level, error, count, observe`},
+		{"unknown bare key", "nope", Rule{}, `unknown key "nope"`},
+		{"value missing", "topic", Rule{}, "topic: want topic=VALUE"},
+		{"empty value", "topic=", Rule{}, "topic: empty value"},
+		{"empty pair", "topic=foo,,count=1", Rule{}, "empty pair"},
+		{"node not a number", "nodes=one", Rule{}, `nodes: "one" is not a number`},
+		{"count not a number", "count=many", Rule{}, `count: "many" is not a number`},
+		{"observe not a bool", "observe=maybe", Rule{}, `observe: "maybe" is not true or false`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseRulePairs(tt.in)
+			if tt.err != "" {
+				if err == nil {
+					t.Fatalf("parseRulePairs(%q) expected an error, got %+v", tt.in, got)
+				}
+				if !strings.Contains(err.Error(), tt.err) {
+					t.Errorf("error = %v, want it to contain %q", err, tt.err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseRulePairs(%q): %v", tt.in, err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("parseRulePairs(%q) = %+v, want %+v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// Pairs and JSON are two ways to write one rule, so the cluster must end up
+// enforcing the same thing either way.
+func TestFaultPairsAndJSONInstallTheSame(t *testing.T) {
+	c, err := kfake.NewCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "foo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	srv := httptest.NewServer(controlHandler(c))
+	defer srv.Close()
+
+	install := func(t *testing.T, raw string) {
+		t.Helper()
+		rules, err := parseRules(raw)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", raw, err)
+		}
+		b, err := json.Marshal(map[string]any{"rules": rules})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.Post(srv.URL+"/faults", "application/json", bytes.NewReader(b))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("installing %s: status %d", raw, resp.StatusCode)
+		}
+	}
+
+	install(t, "keys=fetch,keys=produce,topic=foo,partitions=0,error=NOT_LEADER_OR_FOLLOWER,count=3,top_level")
+	install(t, `{"keys":["fetch","produce"],"topic":"foo","partitions":[0],"top_level":true,"error":"NOT_LEADER_OR_FOLLOWER","count":3}`)
+
+	resp, err := http.Get(srv.URL + "/faults")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got struct {
+		Faults []faultSet `json:"faults"`
+	}
+	if err := json.UnmarshalRead(resp.Body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Faults) != 2 {
+		t.Fatalf("faults = %+v, want two", got.Faults)
+	}
+	if !reflect.DeepEqual(got.Faults[0].Rules, got.Faults[1].Rules) {
+		t.Errorf("pairs installed %+v, JSON installed %+v", got.Faults[0].Rules, got.Faults[1].Rules)
+	}
+}
+
 func TestParseRules(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name, body string) string {
@@ -304,13 +425,16 @@ func TestParseRules(t *testing.T) {
 		err  bool
 	}{
 		{"object", `{"topic":"foo"}`, []Rule{{Topic: "foo"}}, false},
+		{"pairs", "topic=foo,count=2", []Rule{{Topic: "foo", Count: 2}}, false},
+		{"pairs with a json looking value", "topic=a{b", []Rule{{Topic: "a{b"}}, false},
 		{"array", `[{"topic":"foo"},{"topic":"bar"}]`, []Rule{{Topic: "foo"}, {Topic: "bar"}}, false},
 		{"leading space", "  \n {\"topic\":\"foo\"}", []Rule{{Topic: "foo"}}, false},
 		{"file object", write("one.json", `{"topic":"foo"}`), []Rule{{Topic: "foo"}}, false},
 		{"file array", write("many.json", arr), []Rule{{Topic: "foo", Error: "UNKNOWN_TOPIC_ID", Count: 1}, {Topic: "bar", Count: -1}}, false},
 		{"observe", `{"keys":["produce"],"observe":true,"count":-1}`, []Rule{{Keys: []string{"produce"}, Observe: true, Count: -1}}, false},
 		{"unknown member", `{"topci":"foo"}`, nil, true},
-		{"not json", `nope`, nil, true},
+		{"not json and not pairs", `nope`, nil, true},
+		{"file holds pairs", write("pairs.txt", "topic=foo"), nil, true},
 		{"missing file", "@" + dir + "/nope.json", nil, true},
 	}
 	for _, tt := range tests {

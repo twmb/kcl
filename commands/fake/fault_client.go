@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -28,9 +29,11 @@ everything, so a rule with only an error faults everything that can carry
 one. A faulted entity is rejected before the cluster acts on it, so a
 faulted produce does not append.
 
-Rules are JSON, matching kfake's Fault type:
+A rule is comma separated key=value pairs, or JSON, or @FILE holding JSON
+(@- for stdin). Both forms take the same fields, matching kfake's Fault
+type:
 
-  keys        request names or numbers, e.g. ["fetch","produce"]
+  keys        request names or numbers, e.g. fetch or ["fetch","produce"]
   nodes       broker IDs the request arrived at
   topic       topic name
   topic_id    topic uuid, e.g. a stale ID a client still uses; matches
@@ -47,7 +50,14 @@ Rules are JSON, matching kfake's Fault type:
   observe     count matching requests rather than faulting them, so a
               wait blocks on requests that succeed; not with error
 
+In pairs, keys, nodes, and partitions append when repeated and every other
+field given twice is an error; a bare observe or top_level means true.
+fault list prints rules as JSON with the defaults filled in, which pastes
+back into fault add --rule.
+
 EXAMPLES:
+  kcl fake control fault add --rule topic=foo,error=NOT_LEADER_OR_FOLLOWER,count=3
+  kcl fake control fault add --rule keys=fetch,keys=produce,nodes=1,observe,count=-1
   kcl fake control fault add --rule '{"topic":"foo","error":"NOT_LEADER_OR_FOLLOWER"}'
   kcl fake control fault list                   # the fault and what it has hit
 
@@ -74,10 +84,12 @@ func faultAddCommand(addr *string) *cobra.Command {
 		Long: `Install one or more faults, returning their ID.
 
 Rules installed together share an ID, and removing that ID removes all of
-them. Each --rule is a JSON object, or @FILE to read one from a file (@- for
-stdin) holding either an object or an array of them.
+them. Each --rule is key=value pairs, or a JSON object, or @FILE to read one
+from a file (@- for stdin) holding either an object or an array of them.
+Run "kcl fake control fault --help" for the fields a rule takes.
 
 EXAMPLES:
+  kcl fake control fault add --rule topic=foo,error=NOT_LEADER_OR_FOLLOWER,count=3
   kcl fake control fault add --rule '{"topic_id":"4286fc61-8d3e-4b4a-9d3e-1a2b3c4d5e6f","error":"UNKNOWN_TOPIC_ID","count":3}'
   kcl fake control fault add --rule '{"keys":["fetch"],"nodes":[1],"topic":"foo","error":"NOT_LEADER_OR_FOLLOWER","count":-1}'
   kcl fake control fault add --rule @faults.json
@@ -275,11 +287,12 @@ func printRemoved(format string, n int) {
 	}
 }
 
-// parseRules reads one --rule value: JSON as written, or @FILE, or @- for
-// stdin. A file may hold one rule or an array of them.
+// parseRules reads one --rule value. The first character decides: { or [ is
+// JSON, @ is a file (@- for stdin) holding JSON, one rule or an array of
+// them, and anything else is key=value pairs.
 func parseRules(raw string) ([]Rule, error) {
-	b := []byte(raw)
 	if s, ok := strings.CutPrefix(raw, "@"); ok {
+		var b []byte
 		var err error
 		if s == "-" {
 			b, err = io.ReadAll(os.Stdin)
@@ -289,7 +302,20 @@ func parseRules(raw string) ([]Rule, error) {
 		if err != nil {
 			return nil, err
 		}
+		return parseRulesJSON(b)
 	}
+	if t := strings.TrimLeft(raw, " \t\r\n"); len(t) > 0 && (t[0] == '{' || t[0] == '[') {
+		return parseRulesJSON([]byte(raw))
+	}
+	r, err := parseRulePairs(raw)
+	if err != nil {
+		return nil, err
+	}
+	return []Rule{r}, nil
+}
+
+// parseRulesJSON reads one rule or an array of them.
+func parseRulesJSON(b []byte) ([]Rule, error) {
 	if t := bytes.TrimLeft(b, " \t\r\n"); len(t) > 0 && t[0] == '[' {
 		var rs []Rule
 		err := json.Unmarshal(b, &rs, json.RejectUnknownMembers(true))
@@ -300,6 +326,112 @@ func parseRules(raw string) ([]Rule, error) {
 		return nil, err
 	}
 	return []Rule{r}, nil
+}
+
+// ruleFields are the fields a rule takes, in the order fault --help lists
+// them. The pairs form and the JSON form take the same ones.
+var ruleFields = []string{"keys", "nodes", "topic", "topic_id", "partitions", "group", "txn_id", "resource", "top_level", "error", "count", "observe"}
+
+// ruleAppends are the fields that take a list, which a repeat appends to.
+// Every other field given twice is an error: one of the two was meant to
+// win and we cannot tell which.
+var ruleAppends = map[string]bool{"keys": true, "nodes": true, "partitions": true}
+
+// parseRulePairs reads a rule written as comma separated key=value pairs,
+// the shape -c and --synthetic-batch take. Fields and values are the JSON
+// rule's, and a bare observe or top_level means true.
+func parseRulePairs(s string) (Rule, error) {
+	var r Rule
+	seen := make(map[string]bool)
+	for _, pair := range strings.Split(s, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			return r, fmt.Errorf("empty pair; want %s", strings.Join(ruleFields, ", "))
+		}
+		k, v, given := strings.Cut(pair, "=")
+		if !given {
+			if k != "observe" && k != "top_level" {
+				if slices.Contains(ruleFields, k) {
+					return r, fmt.Errorf("%s: want %s=VALUE", k, k)
+				}
+				return r, fmt.Errorf("unknown key %q: want %s", k, strings.Join(ruleFields, ", "))
+			}
+			v = "true"
+		}
+		if v == "" {
+			return r, fmt.Errorf("%s: empty value", k)
+		}
+		if seen[k] && !ruleAppends[k] {
+			return r, fmt.Errorf("%s given twice", k)
+		}
+		seen[k] = true
+
+		switch k {
+		case "keys":
+			r.Keys = append(r.Keys, v)
+		case "nodes":
+			n, err := ruleInt32(k, v)
+			if err != nil {
+				return r, err
+			}
+			r.Nodes = append(r.Nodes, n)
+		case "partitions":
+			n, err := ruleInt32(k, v)
+			if err != nil {
+				return r, err
+			}
+			r.Partitions = append(r.Partitions, n)
+		case "topic":
+			r.Topic = v
+		case "topic_id":
+			r.TopicID = v
+		case "group":
+			r.Group = v
+		case "txn_id":
+			r.TxnID = v
+		case "resource":
+			r.Resource = v
+		case "error":
+			r.Error = v
+		case "count":
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				return r, fmt.Errorf("%s: %q is not a number", k, v)
+			}
+			r.Count = n
+		case "top_level":
+			b, err := ruleBool(k, v)
+			if err != nil {
+				return r, err
+			}
+			r.TopLevel = b
+		case "observe":
+			b, err := ruleBool(k, v)
+			if err != nil {
+				return r, err
+			}
+			r.Observe = b
+		default:
+			return r, fmt.Errorf("unknown key %q: want %s", k, strings.Join(ruleFields, ", "))
+		}
+	}
+	return r, nil
+}
+
+func ruleInt32(k, v string) (int32, error) {
+	n, err := strconv.ParseInt(v, 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %q is not a number", k, v)
+	}
+	return int32(n), nil
+}
+
+func ruleBool(k, v string) (bool, error) {
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("%s: %q is not true or false", k, v)
+	}
+	return b, nil
 }
 
 // elide shortens a rule for an error message.
