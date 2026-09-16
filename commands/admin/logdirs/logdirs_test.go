@@ -23,3 +23,26 @@ func TestHumanSize(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatSize(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		bytes int64
+		human bool
+		want  string
+	}{
+		{"zero", 0, false, "0"},
+		{"bytes", 5368709120, false, "5368709120"},
+		{"human", 5368709120, true, "5.0GB"},
+		// A broker below Kafka 3.3 does not report the volume size and
+		// sends -1 for it.
+		{"unreported", -1, false, "-"},
+		{"unreported human", -1, true, "-"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := formatSize(test.bytes, test.human); got != test.want {
+				t.Errorf("formatSize(%d, %v) = %q, want %q", test.bytes, test.human, got, test.want)
+			}
+		})
+	}
+}

@@ -46,6 +46,19 @@ func humanSize(bytes int64) string {
 	}
 }
 
+// formatSize renders a byte count for a size column, human readable if
+// --human-readable was used. A broker that does not report a size sends -1,
+// which we print as a dash rather than as a number that looks like a size.
+func formatSize(bytes int64, human bool) string {
+	if bytes < 0 {
+		return "-"
+	}
+	if human {
+		return humanSize(bytes)
+	}
+	return fmt.Sprintf("%d", bytes)
+}
+
 func describeCommand(cl *client.Client) *cobra.Command {
 	var broker int32
 	var humanReadable bool
@@ -75,6 +88,12 @@ In math,
 
 A directory is a "future" directory if it was created with an alter command and
 will replace the replica's current log directory in the future.
+
+TOTAL and USABLE are the size and the free space of the volume the directory
+lives on, and require Kafka 3.3+. They cover local storage only: whatever the
+directory has tiered to remote storage is not counted. CORDONED is whether the
+broker has cordoned the directory, and requires Kafka 4.3+. A size a broker
+does not report prints as -.
 
 Input format is topic:1,2,3.
 
@@ -141,6 +160,9 @@ describe // describes all`,
 
 			kresps := cl.Client().RequestSharded(context.Background(), &req)
 
+			// total, usable, and cordoned describe the whole directory
+			// rather than the partition, so every row in a directory
+			// repeats them.
 			type logdirRow struct {
 				broker    int32
 				dir       string
@@ -149,6 +171,9 @@ describe // describes all`,
 				size      int64
 				offsetLag int64
 				isFuture  bool
+				total     int64
+				usable    int64
+				cordoned  bool
 				err       error
 			}
 			var rows []logdirRow
@@ -174,6 +199,9 @@ describe // describes all`,
 								size:      partition.Size,
 								offsetLag: partition.OffsetLag,
 								isFuture:  partition.IsFuture,
+								total:     dir.TotalBytes,
+								usable:    dir.UsableBytes,
+								cordoned:  dir.IsCordoned,
 							})
 						}
 					}
@@ -235,28 +263,25 @@ describe // describes all`,
 				aggTable := out.NewFormattedTable(cl.Format(), "logdirs.describe", 1, "dirs",
 					header, "SIZE")
 				for _, e := range entries {
-					sizeStr := fmt.Sprintf("%d", e.size)
-					if humanReadable {
-						sizeStr = humanSize(e.size)
-					}
-					aggTable.Row(e.key, sizeStr)
+					aggTable.Row(e.key, formatSize(e.size, humanReadable))
 				}
 				aggTable.Flush()
 				return nil
 			}
 
+			// TOTAL, USABLE, and CORDONED are appended rather than slotted
+			// next to SIZE so that an awk script keeps the columns it
+			// already indexes.
 			table := out.NewFormattedTable(cl.Format(), "logdirs.describe", 1, "dirs",
-				"BROKER", "ERR", "DIR", "TOPIC", "PARTITION", "SIZE", "OFFSET-LAG", "IS-FUTURE")
+				"BROKER", "ERR", "DIR", "TOPIC", "PARTITION", "SIZE", "OFFSET-LAG", "IS-FUTURE", "TOTAL", "USABLE", "CORDONED")
 			for _, r := range rows {
 				if r.err != nil {
-					table.Row(r.broker, r.err, r.dir, "", "", "", "", "")
+					table.Row(r.broker, r.err, r.dir, "", "", "", "", "", "", "", "")
 					continue
 				}
-				sizeStr := fmt.Sprintf("%d", r.size)
-				if humanReadable {
-					sizeStr = humanSize(r.size)
-				}
-				table.Row(r.broker, "", r.dir, r.topic, r.partition, sizeStr, r.offsetLag, r.isFuture)
+				table.Row(r.broker, "", r.dir, r.topic, r.partition,
+					formatSize(r.size, humanReadable), r.offsetLag, r.isFuture,
+					formatSize(r.total, humanReadable), formatSize(r.usable, humanReadable), r.cordoned)
 			}
 			table.Flush()
 			return nil
