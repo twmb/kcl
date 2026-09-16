@@ -2,6 +2,7 @@ package group
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"strconv"
@@ -101,12 +102,82 @@ func TestDescribeEachGroupOwnOffsets(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("got %d rows, want 2:\n%s", len(rows), stdout)
 	}
-	// Rows are printed in group order: own-a, then own-b. CURRENT-OFFSET
-	// is the third column and LAG the fifth.
-	for i, want := range []struct{ current, lag string }{{"3", "7"}, {"7", "3"}} {
-		if rows[i][2] != want.current || rows[i][4] != want.lag {
-			t.Errorf("row %d = %q, want current %s and lag %s", i, rows[i], want.current, want.lag)
+	// Rows are printed in group order, and each begins with its group.
+	for i, want := range []struct{ group, current, lag string }{{"own-a", "3", "7"}, {"own-b", "7", "3"}} {
+		if rows[i][0] != want.group || rows[i][3] != want.current || rows[i][6] != want.lag {
+			t.Errorf("row %d = %q, want group %s, current %s, lag %s", i, rows[i], want.group, want.current, want.lag)
 		}
+	}
+}
+
+// TestDescribeLogStartOffset pins the LOG-START-OFFSET column against a log
+// trimmed with DeleteRecords, and that a partition with nothing committed
+// counts its lag from the log start rather than from zero.
+func TestDescribeLogStartOffset(t *testing.T) {
+	c, cl := newTestCluster(t)
+	adm := kadm.NewClient(cl)
+	ctx := context.Background()
+
+	if _, err := adm.CreateTopic(ctx, 1, 1, nil, "t"); err != nil {
+		t.Fatal(err)
+	}
+	produceN(t, cl, "t", 10)
+	var trim kadm.Offsets
+	trim.Add(kadm.Offset{Topic: "t", Partition: 0, At: 4})
+	if _, err := adm.DeleteRecords(ctx, trim); err != nil {
+		t.Fatal(err)
+	}
+	commitAt(t, adm, "trim-committed", "t", 0, 6)
+	joinGroup(t, c, "trim-classic", false, false, "t")
+	joinGroup(t, c, "trim-consumer", true, false, "t")
+
+	for _, test := range []struct {
+		group   string
+		args    []string
+		current string
+		lag     string
+		member  bool
+	}{
+		{group: "trim-committed", current: "6", lag: "4"},
+		{group: "trim-classic", current: "-", lag: "6", member: true},
+		{group: "trim-consumer", args: []string{"--consumer-protocol"}, current: "-", lag: "6", member: true},
+	} {
+		t.Run(test.group, func(t *testing.T) {
+			stdout, err := runDescribe(t, c, append([]string{test.group, "--format", "awk"}, test.args...)...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rows := awkRows(stdout)
+			if len(rows) != 1 {
+				t.Fatalf("got %d rows, want 1:\n%s", len(rows), stdout)
+			}
+			row := rows[0]
+			if row[3] != test.current || row[4] != "4" || row[5] != "10" || row[6] != test.lag || (row[7] != "") != test.member {
+				t.Errorf("row = %q, want current %s, start 4, end 10, lag %s, member %v", row, test.current, test.lag, test.member)
+			}
+		})
+	}
+
+	stdout, err := runDescribe(t, c, "trim-committed", "--format", "json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Groups []struct {
+			Lag []struct {
+				LogStartOffset int64 `json:"log_start_offset"`
+				LogEndOffset   int64 `json:"log_end_offset"`
+			} `json:"lag"`
+		} `json:"groups"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+	}
+	if len(doc.Groups) != 1 || len(doc.Groups[0].Lag) != 1 {
+		t.Fatalf("unexpected document: %s", stdout)
+	}
+	if got := doc.Groups[0].Lag[0]; got.LogStartOffset != 4 || got.LogEndOffset != 10 {
+		t.Errorf("log_start_offset %d, log_end_offset %d, want 4 and 10", got.LogStartOffset, got.LogEndOffset)
 	}
 }
 
@@ -170,7 +241,7 @@ func TestDescribeConsumerProtocolNamesTopics(t *testing.T) {
 		t.Fatalf("got %d rows, want 2:\n%s", len(rows), stdout)
 	}
 	for i, row := range rows {
-		if row[0] != "t" || row[1] != strconv.Itoa(i) || row[5] == "" {
+		if row[1] != "t" || row[2] != strconv.Itoa(i) || row[7] == "" {
 			t.Errorf("row %d = %q, want topic t, partition %d, and a member", i, row, i)
 		}
 	}
