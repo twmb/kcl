@@ -238,8 +238,22 @@ func main() {
 	}
 
 	if cmd, err := root.ExecuteC(); err != nil {
-		out.HandleError(asUsageError(err), cl.Format(), commandName(cmd))
+		out.HandleError(asUsageError(err), errFormat(root, cl), commandName(cmd))
 	}
+}
+
+// errFormat is the format to report a failed Execute in. Flag parsing stops
+// at the first bad flag, so "kcl topic list --nosuchflag --format json" never
+// reaches --format and cl still holds the default. When that happens we scan
+// the arguments for the format you asked for, the same way wantsHelpJSON
+// scans for --help-json.
+func errFormat(root *cobra.Command, cl *client.Client) string {
+	if !root.PersistentFlags().Changed("format") {
+		if format := formatFromArgs(os.Args[1:]); format != "" {
+			return format
+		}
+	}
+	return cl.Format()
 }
 
 // commandName is the _command a document from cmd carries: the command path
@@ -423,4 +437,38 @@ func wantsHelpJSON(args []string) bool {
 		}
 	}
 	return want
+}
+
+// formatFromArgs returns the format args ask for with --format, following
+// pflag's syntax for a string long flag: --format VALUE or --format=VALUE,
+// last one wins, and arguments after a bare "--" are positional. The flag has
+// no shorthand, so there is no short form to look for. We return "" if
+// --format is absent, has no value, or names a format we do not know, and the
+// caller then keeps whatever format it already had.
+func formatFromArgs(args []string) string {
+	var format string
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case a == "--":
+			return format
+		case a == "--format":
+			format = ""
+			if i+1 < len(args) {
+				i++
+				format = knownFormat(args[i])
+			}
+		case strings.HasPrefix(a, "--format="):
+			format = knownFormat(strings.TrimPrefix(a, "--format="))
+		}
+	}
+	return format
+}
+
+// knownFormat returns v if it is a format out can print, otherwise "".
+func knownFormat(v string) string {
+	switch v {
+	case out.FormatText, out.FormatJSON, out.FormatAWK:
+		return v
+	}
+	return ""
 }
