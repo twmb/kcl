@@ -76,7 +76,7 @@ type, the client uses "User", which is the only type that exists in Kafka's
 SimpleAuthorizer.
 `,
 
-		Example: "create -r admin1 -r User:admin2",
+		Example: "kcl dtoken create -r admin1 -r User:admin2",
 		Args:    cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
 			req := &kmsg.CreateDelegationTokenRequest{
@@ -103,7 +103,7 @@ SimpleAuthorizer.
 				return fmt.Errorf("%v", err)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "dtoken.create", 1, "tokens",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "tokens",
 				"FIELD", "VALUE")
 			table.Row("PRINCIPAL", fmt.Sprintf("%s:%s", resp.PrincipalType, resp.PrincipalName))
 			table.Row("ISSUED", millisToStr(resp.IssueTimestamp))
@@ -128,7 +128,7 @@ func renewTokenCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "renew",
 		Short:   "Renew a delegation token (Kafka 1.1.0+).",
-		Example: "renew [base64 hmac here]",
+		Example: "kcl dtoken renew [base64 hmac here]",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			decoded, err := base64.StdEncoding.DecodeString(args[0])
@@ -149,7 +149,7 @@ func renewTokenCommand(cl *client.Client) *cobra.Command {
 				return fmt.Errorf("%v", err)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "dtoken.renew", 1, "results",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
 				"FIELD", "VALUE")
 			table.Row("EXPIRY", millisToStr(resp.ExpiryTimestamp))
 			table.Flush()
@@ -168,7 +168,7 @@ func expireTokenCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "expire",
 		Short:   "Change a delegation token expiry time (Kafka 1.1.0+).",
-		Example: "expire [base64 hmac here]",
+		Example: "kcl dtoken expire [base64 hmac here]",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			decoded, err := base64.StdEncoding.DecodeString(args[0])
@@ -189,7 +189,7 @@ func expireTokenCommand(cl *client.Client) *cobra.Command {
 				return fmt.Errorf("%v", err)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "dtoken.expire", 1, "results",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
 				"FIELD", "VALUE")
 			table.Row("EXPIRY", millisToStr(resp.ExpiryTimestamp))
 			table.Flush()
@@ -209,9 +209,9 @@ func describeTokensCommand(cl *client.Client) *cobra.Command {
 		Use:     "describe",
 		Aliases: []string{"d"},
 		Short:   "Describe delegation tokens (Kafka 1.1.0+).",
-		Example: ` describe // to display all tokens
+		Example: `kcl dtoken describe                  # every token
 
-describe -o User:admin // to display tokens owned by the admin user`,
+kcl dtoken describe -o User:admin    # tokens the admin user owns`,
 		Args: cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
 			req := new(kmsg.DescribeDelegationTokenRequest)
@@ -236,7 +236,7 @@ describe -o User:admin // to display tokens owned by the admin user`,
 				return fmt.Errorf("%v", err)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "dtoken.describe", 1, "tokens",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "tokens",
 				"PRINCIPAL", "ISSUED", "EXPIRY", "MAX AGE", "TOKEN ID", "base64(HMAC)", "RENEWERS")
 			for _, detail := range resp.TokenDetails {
 				var renewers []string

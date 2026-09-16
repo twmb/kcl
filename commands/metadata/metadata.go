@@ -97,6 +97,7 @@ use "kcl cluster describe", which issues DescribeCluster instead.
 				return fmt.Errorf("unable to get metadata: %v", err)
 			}
 			resp := kresp.(*kmsg.MetadataResponse)
+			sortMetadata(resp)
 
 			switch cl.Format() {
 			case "json":
@@ -144,7 +145,7 @@ use "kcl cluster describe", which issues DescribeCluster instead.
 					topicsJSON = append(topicsJSON, tj)
 				}
 				fields["topics"] = topicsJSON
-				out.MarshalJSON("metadata", 1, fields)
+				out.MarshalJSON(cl.Command(), 1, fields)
 
 			case "awk":
 				awkSection := section
@@ -197,7 +198,7 @@ use "kcl cluster describe", which issues DescribeCluster instead.
 					if includeHeader {
 						fmt.Printf("BROKERS\n=======\n")
 					}
-					printBrokers(cl.Format(), resp.ControllerID, resp.Brokers)
+					printBrokers(cl.Format(), cl.Command(), resp.ControllerID, resp.Brokers)
 					if includeHeader {
 						fmt.Println()
 					}
@@ -207,7 +208,7 @@ use "kcl cluster describe", which issues DescribeCluster instead.
 					if includeHeader {
 						fmt.Printf("TOPICS\n======\n")
 					}
-					PrintTopics(cl.Format(), resp.Version, resp.Topics, pinternal, detailed)
+					PrintTopics(cl.Format(), cl.Command(), resp.Version, resp.Topics, pinternal, detailed)
 				}
 			}
 			return nil
@@ -221,12 +222,50 @@ use "kcl cluster describe", which issues DescribeCluster instead.
 	return cmd
 }
 
-func printBrokers(format string, controllerID int32, brokers []kmsg.MetadataResponseBroker) {
+// sortMetadata orders a metadata response so that every format prints the
+// same rows in the same order: brokers by node ID, topics by name, and each
+// topic's partitions by partition number. Kafka answers in whatever order it
+// pleases, and two runs of the same command disagreed.
+func sortMetadata(resp *kmsg.MetadataResponse) {
+	sortBrokers(resp.Brokers)
+	sortTopics(resp.Topics)
+}
+
+func sortBrokers(brokers []kmsg.MetadataResponseBroker) {
 	sort.Slice(brokers, func(i, j int) bool {
 		return brokers[i].NodeID < brokers[j].NodeID
 	})
+}
 
-	table := out.NewFormattedTable(format, "metadata.brokers", 1, "brokers",
+// sortTopics sorts topics by name, a topic we have only an ID for last, and
+// every topic's partitions by partition number.
+func sortTopics(topics []kmsg.MetadataResponseTopic) {
+	sort.Slice(topics, func(i, j int) bool {
+		l := topics[i].Topic
+		r := topics[j].Topic
+		switch {
+		case l != nil && r != nil:
+			return *l < *r
+		case l != nil && r == nil:
+			return true
+		case r != nil:
+			return false
+		default:
+			return string(topics[i].TopicID[:]) < string(topics[j].TopicID[:])
+		}
+	})
+	for i := range topics {
+		parts := topics[i].Partitions
+		sort.Slice(parts, func(i, j int) bool {
+			return parts[i].Partition < parts[j].Partition
+		})
+	}
+}
+
+func printBrokers(format, command string, controllerID int32, brokers []kmsg.MetadataResponseBroker) {
+	sortBrokers(brokers)
+
+	table := out.NewFormattedTable(format, command, 1, "brokers",
 		"ID", "HOST", "PORT", "RACK")
 	for _, broker := range brokers {
 		var controllerStar string
@@ -244,31 +283,18 @@ func printBrokers(format string, controllerID int32, brokers []kmsg.MetadataResp
 	table.Flush()
 }
 
-func PrintTopics(format string, version int16, topics []kmsg.MetadataResponseTopic, pinternal, detailed bool) {
-	sort.Slice(topics, func(i, j int) bool {
-		l := topics[i].Topic
-		r := topics[j].Topic
-		switch {
-		case l != nil && r != nil:
-			return *l < *r
-		case l != nil && r == nil:
-			return true
-		case r != nil:
-			return false
-		default:
-			return string(topics[i].TopicID[:]) < string(topics[j].TopicID[:])
-		}
-	})
+func PrintTopics(format, command string, version int16, topics []kmsg.MetadataResponseTopic, pinternal, detailed bool) {
+	sortTopics(topics)
 
 	hasID := version >= 10
 
 	if !detailed {
 		var table *out.FormattedTable
 		if hasID {
-			table = out.NewFormattedTable(format, "metadata.topics", 1, "topics",
+			table = out.NewFormattedTable(format, command, 1, "topics",
 				"NAME", "ID", "PARTITIONS", "REPLICAS")
 		} else {
-			table = out.NewFormattedTable(format, "metadata.topics", 1, "topics",
+			table = out.NewFormattedTable(format, command, 1, "topics",
 				"NAME", "PARTITIONS", "REPLICAS")
 		}
 		for _, topic := range topics {
@@ -313,9 +339,6 @@ func PrintTopics(format string, version int16, topics []kmsg.MetadataResponseTop
 			continue
 		}
 
-		sort.Slice(parts, func(i, j int) bool {
-			return parts[i].Partition < parts[j].Partition
-		})
 		for _, part := range topic.Partitions {
 			fmt.Fprintf(buf, "  %4d  leader %d", part.Partition, part.Leader)
 			if version >= 7 {

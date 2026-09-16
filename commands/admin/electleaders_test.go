@@ -16,8 +16,12 @@ import (
 func TestElectLeadersDryRunJSON(t *testing.T) {
 	root := &cobra.Command{Use: "kcl", SilenceUsage: true, SilenceErrors: true}
 	cl := client.New(root)
-	root.AddCommand(ElectLeadersCommand(cl))
-	root.SetArgs([]string{"--no-config-file", "--format", "json", "elect-leaders", "--dry-run", "foo:1,2", "bar:0"})
+	// Under "cluster", where the tree puts it, because _command is the
+	// command path.
+	cluster := &cobra.Command{Use: "cluster"}
+	cluster.AddCommand(ElectLeadersCommand(cl))
+	root.AddCommand(cluster)
+	root.SetArgs([]string{"--no-config-file", "--format", "json", "cluster", "elect-leaders", "--dry-run", "foo:1,2", "bar:0"})
 	r, w, _ := os.Pipe()
 	old := os.Stdout
 	os.Stdout = w

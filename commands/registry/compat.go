@@ -46,7 +46,7 @@ func compatGetCommand(cl *client.Client) *cobra.Command {
 				return err
 			}
 			results := scl.Compatibility(context.Background(), args...)
-			return printCompat(cl, "registry.compatibility.get", results)
+			return printCompat(cl, results)
 		},
 	}
 	return cmd
@@ -67,7 +67,7 @@ func compatSetCommand(cl *client.Client) *cobra.Command {
 				return err
 			}
 			results := scl.SetCompatibility(context.Background(), sr.SetCompatibility{Level: level}, args[1:]...)
-			return printCompat(cl, "registry.compatibility.set", results)
+			return printCompat(cl, results)
 		},
 	}
 	return cmd
@@ -92,7 +92,20 @@ Test whether a candidate schema is compatible with an existing subject version.
 The candidate schema is read from -s/--schema or stdin. --version selects which
 existing version to check against ("latest" by default, or "all" to check
 against every version). Exits non-zero if the schema is not compatible; pass
---verbose to have the registry explain why.`,
+--verbose to have the registry explain why.
+
+--format awk prints one word, true or false, and nothing else. The exit code
+says the same thing, so a script can read either.
+
+EXAMPLES:
+  kcl registry compatibility test foo-value -s new.avsc          # check the latest version
+  kcl registry compatibility test foo-value -s new.avsc -v all   # check every version
+  kcl registry compatibility test foo-value -s new.avsc --format awk
+
+SEE ALSO:
+  kcl registry compatibility get    the level a subject is checked at
+  kcl registry compatibility set    change that level
+`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			subject := args[0]
@@ -137,14 +150,22 @@ against every version). Exits non-zero if the schema is not compatible; pass
 				return dieErr("test compatibility", err)
 			}
 
-			if cl.Format() == out.FormatJSON {
-				out.MarshalJSON("registry.compatibility.test", 1, map[string]any{
+			switch cl.Format() {
+			case out.FormatJSON:
+				out.MarshalJSON(cl.Command(), 1, map[string]any{
 					"subject":    subject,
 					"version":    versionString(version),
 					"compatible": res.Is,
 					"messages":   res.Messages,
 				})
-			} else {
+			case out.FormatAWK:
+				// One word, so that "if [ $(kcl ... --format awk) =
+				// true ]" reads. The label belongs to text.
+				fmt.Printf("%v\n", res.Is)
+				for _, m := range res.Messages {
+					fmt.Fprintln(os.Stderr, m)
+				}
+			default:
 				fmt.Printf("compatible: %v\n", res.Is)
 				for _, m := range res.Messages {
 					fmt.Fprintln(os.Stderr, m)
@@ -177,9 +198,9 @@ func parseCheckVersion(s string) (int, error) {
 // printCompat prints compatibility results as a table (or JSON), surfacing any
 // per-subject errors. It returns ErrSilent if any result carried an error so
 // the process exits non-zero.
-func printCompat(cl *client.Client, command string, results []sr.CompatibilityResult) error {
+func printCompat(cl *client.Client, results []sr.CompatibilityResult) error {
 	var anyErr bool
-	tw := out.NewFormattedTable(cl.Format(), command, 1, "compatibility", "SUBJECT", "LEVEL", "ERROR")
+	tw := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "compatibility", "SUBJECT", "LEVEL", "ERROR")
 	for _, r := range results {
 		subject := r.Subject
 		if subject == "" {

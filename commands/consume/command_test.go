@@ -347,3 +347,99 @@ func TestConsumeGroupWithEndOffsetRejected(t *testing.T) {
 		t.Errorf("group consume without an end got %d records, want 2", len(got))
 	}
 }
+
+// TestConsumeGroupCommits pins that -g commits what it printed. Default
+// autocommit records a poll's offsets as dirty and promotes them only at the
+// start of the next poll, and a command that stops on --num or an interrupt
+// never polls again, so nothing was ever committed and every rerun replayed
+// the whole topic.
+func TestConsumeGroupCommits(t *testing.T) {
+	_, addrs := seedCluster(t, 5)
+
+	if got := runConsume(t, addrs, "-o", "start", "-n", "5", "-g", "g"); len(got) != 5 {
+		t.Fatalf("first run got %d records, want 5", len(got))
+	}
+
+	cl, err := kgo.NewClient(kgo.SeedBrokers(addrs...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	offsets, err := kadm.NewClient(cl).FetchOffsets(t.Context(), "g")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, ok := offsets.Lookup("t", 0)
+	if !ok {
+		t.Fatalf("group g committed no offset for t[0]")
+	}
+	if o.At != 5 {
+		t.Errorf("committed offset is %d, want 5", o.At)
+	}
+
+	// A second run with no -o starts from the commit, so there is nothing
+	// left and it stops on --timeout rather than replaying.
+	if got := runConsume(t, addrs, "-n", "5", "-g", "g", "--timeout", "400ms"); len(got) != 0 {
+		t.Errorf("second run replayed %d records, want 0", len(got))
+	}
+}
+
+// TestConsumeGroupCommitsOnInterrupt is the other exit path: no --num, so the
+// consume runs until it is signaled, and the offsets still have to land.
+func TestConsumeGroupCommitsOnInterrupt(t *testing.T) {
+	_, addrs := seedCluster(t, 5)
+
+	// --timeout unwinds through the same stop() the signal handler uses.
+	if got := runConsume(t, addrs, "-o", "start", "-g", "gi", "--timeout", "400ms"); len(got) != 5 {
+		t.Fatalf("got %d records, want 5", len(got))
+	}
+
+	cl, err := kgo.NewClient(kgo.SeedBrokers(addrs...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	offsets, err := kadm.NewClient(cl).FetchOffsets(t.Context(), "gi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, ok := offsets.Lookup("t", 0)
+	if !ok {
+		t.Fatalf("group gi committed no offset for t[0]")
+	}
+	if o.At != 5 {
+		t.Errorf("committed offset is %d, want 5", o.At)
+	}
+}
+
+// TestConsumeGroupCommitsOnlyWhatItPrinted pins that --num does not commit
+// past what it showed. A poll can hand back more records than --num asks for;
+// the ones dropped are not consumed and a rerun has to start on them.
+func TestConsumeGroupCommitsOnlyWhatItPrinted(t *testing.T) {
+	_, addrs := seedCluster(t, 10)
+
+	if got := runConsume(t, addrs, "-o", "start", "-n", "3", "-g", "gp"); len(got) != 3 {
+		t.Fatalf("got %d records, want 3", len(got))
+	}
+
+	cl, err := kgo.NewClient(kgo.SeedBrokers(addrs...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	offsets, err := kadm.NewClient(cl).FetchOffsets(t.Context(), "gp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, ok := offsets.Lookup("t", 0)
+	if !ok {
+		t.Fatalf("group gp committed no offset for t[0]")
+	}
+	if o.At != 3 {
+		t.Errorf("committed offset is %d, want 3", o.At)
+	}
+
+	if got := runConsume(t, addrs, "-n", "7", "-g", "gp", "--timeout", "400ms"); len(got) != 7 {
+		t.Errorf("second run got %d records, want the remaining 7", len(got))
+	}
+}

@@ -119,7 +119,7 @@ filter specified by flags is returned.
 				return fmt.Errorf("%s%s", kerr.ErrorForCode(resp.ErrorCode), additional)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "quota.describe", 1, "quotas",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "quotas",
 				"ENTITY", "KEY", "VALUE")
 			for _, entry := range resp.Entries {
 				var entityParts []string
@@ -248,7 +248,7 @@ matches, this runs an alter on anything that matches.
 			}
 			resp := kresp.(*kmsg.AlterClientQuotasResponse)
 
-			table := out.NewFormattedTable(cl.Format(), "quota.alter", 1, "results",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
 				"ENTITY", "STATUS", "MESSAGE")
 			for _, entry := range resp.Entries {
 				var entityParts []string

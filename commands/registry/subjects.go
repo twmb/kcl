@@ -31,7 +31,7 @@ func subjectsCommand(cl *client.Client) *cobra.Command {
 			if err != nil {
 				return dieErr("list subjects", err)
 			}
-			tw := out.NewFormattedTable(cl.Format(), "registry.subjects", 1, "subjects", "SUBJECT")
+			tw := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "subjects", "SUBJECT")
 			for _, s := range subjects {
 				tw.Row(s)
 			}
@@ -63,7 +63,7 @@ func versionsCommand(cl *client.Client) *cobra.Command {
 			if err != nil {
 				return dieErr("list versions", err)
 			}
-			tw := out.NewFormattedTable(cl.Format(), "registry.versions", 1, "versions", "VERSION")
+			tw := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "versions", "VERSION")
 			for _, v := range versions {
 				tw.Row(v)
 			}

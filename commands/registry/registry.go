@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"strconv"
 	"strings"
@@ -128,7 +129,15 @@ func readSchema(path string) (string, error) {
 	} else {
 		b, err = os.ReadFile(path)
 		if err != nil {
-			return "", out.Errf(out.ExitError, "unable to read schema file %q: %v", path, err)
+			// os.ReadFile wraps the reason in a PathError that repeats
+			// the path, so the unwrapped reason is what we print: the
+			// path is already in the sentence, once, unquoted.
+			reason := err
+			var pe *fs.PathError
+			if errors.As(err, &pe) {
+				reason = pe.Err
+			}
+			return "", out.Errf(out.ExitUsage, "unable to read schema file %s: %v", path, reason)
 		}
 	}
 	if len(b) == 0 {
@@ -176,6 +185,15 @@ func parseVersion(s string) (int, error) {
 	}
 	return v, nil
 }
+
+// awkText is s as one awk field. A schema can span lines, a .proto most of
+// all, and a row that spans lines is not TSV. The escapes are the ones Go and
+// JSON already write, so a reader knows them.
+func awkText(s string) string {
+	return awkEscaper.Replace(s)
+}
+
+var awkEscaper = strings.NewReplacer("\\", "\\\\", "\n", "\\n", "\r", "\\r", "\t", "\\t")
 
 // versionString renders a version int for display, mapping -1 to "latest".
 func versionString(v int) string {

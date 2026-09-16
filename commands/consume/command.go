@@ -5,6 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/twmb/kcl/offsetparse"
 	"github.com/twmb/kcl/out"
 )
 
@@ -23,13 +24,13 @@ func (c *consumption) command() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringArrayVarP(&topicFlags, "topic", "t", nil, "topic to consume (repeatable; alternative to positional args)")
-	cmd.Flags().StringVarP(&c.group, "group", "g", "", "consumer group to assign")
+	cmd.Flags().StringVarP(&c.group, "group", "g", "", "consumer group to assign; offsets for what is printed are committed while consuming and again on exit, so a rerun picks up where this one stopped")
 	cmd.Flags().StringVar(&c.shareGroup, "share-group", "", "share group to consume from (Kafka 4.0+, mutually exclusive with --group)")
 	cmd.Flags().StringVar(&c.shareAckType, "share-ack-type", "accept", "share group ack type: accept (mark processed), release (peek, return to pool for redelivery), reject (drain permanently, bumps delivery count); only with --share-group")
 	cmd.Flags().StringVar(&c.groupAlg, "balancer", "cooperative-sticky", "group balancer to use if group consuming (range, roundrobin, sticky, cooperative-sticky)")
 	cmd.Flags().StringVarP(&c.instanceID, "instance-id", "i", "", "group instance ID to use for consuming; empty means none (implies static membership, Kafka 2.3.0+)")
 	cmd.Flags().Int32SliceVarP(&c.partitions, "partitions", "p", nil, "comma delimited list of specific partitions to consume")
-	cmd.Flags().StringVarP(&c.offset, "offset", "o", "start", "offset to consume from (start, end, +N, -N, N, N:M, :end, @timestamp, @T1:T2)")
+	cmd.Flags().StringVarP(&c.offset, "offset", "o", "start", "offset to consume from ("+offsetparse.Syntax+")")
 	cmd.Flags().IntVarP(&c.num, "num", "n", 0, "quit after consuming this number of records; 0 is unbounded")
 	cmd.Flags().IntVar(&c.numPerPartition, "num-per-partition", 0, "stop printing individual partitions after this many records; 0 is unbounded")
 	cmd.Flags().StringVarP(&c.format, "format", "f", `%v\n`, "record output format; the bare word 'json' prints each record as a JSON object")

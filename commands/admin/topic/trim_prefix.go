@@ -191,7 +191,7 @@ SEE ALSO:
 
 			shards := kclClient.RequestSharded(ctx, req)
 			fmt.Fprintln(os.Stderr)
-			resultTable := out.NewFormattedTable(cl.Format(), "topic.trim-prefix", 1, "results",
+			resultTable := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
 				"PARTITION", "NEW-LOW-WATERMARK", "ERROR")
 			for _, shard := range shards {
 				if shard.Err != nil {

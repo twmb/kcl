@@ -142,10 +142,10 @@ replicas each. When using --replica-assignment, do not use --num-partitions or
 			resp := kresp.(*kmsg.CreateTopicsResponse)
 			var table *out.FormattedTable
 			if resp.Version >= 7 {
-				table = out.NewFormattedTable(cl.Format(), "topic.create", 1, "topics",
+				table = out.NewFormattedTable(cl.Format(), cl.Command(), 1, "topics",
 					"NAME", "ID", "MESSAGE")
 			} else {
-				table = out.NewFormattedTable(cl.Format(), "topic.create", 1, "topics",
+				table = out.NewFormattedTable(cl.Format(), cl.Command(), 1, "topics",
 					"NAME", "MESSAGE")
 			}
 			anyErr := false
@@ -226,7 +226,7 @@ EXAMPLES:
 				}
 				topics = append(topics, t)
 			}
-			metadata.PrintTopics(cl.Format(), resp.Version, topics, false, detailed)
+			metadata.PrintTopics(cl.Format(), cl.Command(), resp.Version, topics, false, detailed)
 			return nil
 		},
 	}
@@ -246,8 +246,19 @@ func topicDeleteCommand(cl *client.Client) *cobra.Command {
 		Long: `Delete all listed topics (Kafka 0.10.1+).
 
 Use --regex to treat arguments as regex patterns: all topics matching any
-pattern will be deleted. Use --dry-run to see which topics would be deleted
-without actually deleting them.
+pattern will be deleted. A pattern is matched against every topic in the
+cluster, so an unanchored one deletes more than it looks like it will; run
+the same command with --dry-run first to see what it matches.
+
+EXAMPLES:
+  kcl topic delete foo bar               # delete two topics by name
+  kcl topic delete --regex '^tmp-'       # delete every topic starting with tmp-
+  kcl topic delete --regex . --dry-run   # print every topic the pattern matches
+
+SEE ALSO:
+  kcl topic list         list topics
+  kcl topic describe     describe topic partitions
+  kcl topic trim-prefix  delete records without deleting the topic
 `,
 		RunE: func(_ *cobra.Command, topics []string) error {
 			if !useRegex {
@@ -331,7 +342,7 @@ without actually deleting them.
 			}
 
 			resps := resp.(*kmsg.DeleteTopicsResponse).Topics
-			table := out.NewFormattedTable(cl.Format(), "topic.delete", 1, "topics",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "topics",
 				"NAME", "MESSAGE")
 			anyErr := false
 			for _, topicResp := range resps {
@@ -386,9 +397,9 @@ in one value is the same as -a 1,2 -a 3,1. Each new partition must have as
 many replicas as the existing ones.
 `,
 
-		Example: `add-partitions foo -n 3                  # three more, broker places replicas
-add-partitions foo --total 12            # up to twelve; nothing to do if already there
-add-partitions foo -a 1,2 -a 3,1 -a 2,3  # three more, on brokers 1+2, 3+1, 2+3`,
+		Example: `kcl topic add-partitions foo -n 3                  # three more, broker places replicas
+kcl topic add-partitions foo --total 12            # up to twelve; nothing to do if already there
+kcl topic add-partitions foo -a 1,2 -a 3,1 -a 2,3  # three more, on brokers 1+2, 3+1, 2+3`,
 
 		Args: cobra.ArbitraryArgs,
 		RunE: func(_ *cobra.Command, args []string) error {
@@ -496,7 +507,7 @@ add-partitions foo -a 1,2 -a 3,1 -a 2,3  # three more, on brokers 1+2, 3+1, 2+3`
 			}
 
 			resps := createResp.(*kmsg.CreatePartitionsResponse).Topics
-			table := out.NewFormattedTable(cl.Format(), "topic.add-partitions", 1, "topics",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "topics",
 				"NAME", "STATUS", "MESSAGE")
 			for _, topic := range resps {
 				errKind := "OK"

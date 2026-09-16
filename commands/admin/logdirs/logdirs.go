@@ -49,14 +49,18 @@ func humanSize(bytes int64) string {
 // formatSize renders a byte count for a size column, human readable if
 // --human-readable was used. A broker that does not report a size sends -1,
 // which we print as a dash rather than as a number that looks like a size.
-func formatSize(bytes int64, human bool) string {
+//
+// The plain form is the number itself, so that JSON gets a JSON number.
+// -H is a display choice you asked for, and its KB and MB reach JSON as the
+// strings they are.
+func formatSize(bytes int64, human bool) any {
 	if bytes < 0 {
-		return "-"
+		return out.NoNum
 	}
 	if human {
 		return humanSize(bytes)
 	}
-	return fmt.Sprintf("%d", bytes)
+	return out.Num(bytes)
 }
 
 func describeCommand(cl *client.Client) *cobra.Command {
@@ -110,11 +114,11 @@ which allows you to control whether you are asking for information about
 replicas vs. the leader.
 `,
 
-		Example: `describe foo:1,2,3 bar:3,4,5
+		Example: `kcl logdirs describe foo:1,2,3 bar:3,4,5
 
-describe foo
+kcl logdirs describe foo
 
-describe // describes all`,
+kcl logdirs describe   # describes all`,
 
 		RunE: func(_ *cobra.Command, topics []string) error {
 			var req kmsg.DescribeLogDirsRequest
@@ -260,7 +264,7 @@ describe // describes all`,
 					return entries[i].key < entries[j].key
 				})
 				header := strings.ToUpper(aggregateInto)
-				aggTable := out.NewFormattedTable(cl.Format(), "logdirs.describe", 1, "dirs",
+				aggTable := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "dirs",
 					header, "SIZE")
 				for _, e := range entries {
 					aggTable.Row(e.key, formatSize(e.size, humanReadable))
@@ -272,7 +276,7 @@ describe // describes all`,
 			// TOTAL, USABLE, and CORDONED are appended rather than slotted
 			// next to SIZE so that an awk script keeps the columns it
 			// already indexes.
-			table := out.NewFormattedTable(cl.Format(), "logdirs.describe", 1, "dirs",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "dirs",
 				"BROKER", "ERR", "DIR", "TOPIC", "PARTITION", "SIZE", "OFFSET-LAG", "IS-FUTURE", "TOTAL", "USABLE", "CORDONED")
 			for _, r := range rows {
 				if r.err != nil {
@@ -314,7 +318,7 @@ You can direct this request to specific brokers with the --broker argument,
 which allows you to alter replicas.
 `,
 
-		Example: `alter foo:1,2,3=/dir bar:6=/dir2 baz:9=/dir`,
+		Example: `kcl logdirs alter foo:1,2,3=/dir bar:6=/dir2 baz:9=/dir`,
 
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, topics []string) error {
@@ -364,7 +368,7 @@ which allows you to alter replicas.
 			}
 
 			resp := kresp.(*kmsg.AlterReplicaLogDirsResponse)
-			table := out.NewFormattedTable(cl.Format(), "logdirs.alter", 1, "results",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
 				"TOPIC", "PARTITION", "ERROR")
 			for _, topic := range resp.Topics {
 				for _, partition := range topic.Partitions {

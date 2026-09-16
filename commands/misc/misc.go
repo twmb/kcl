@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -74,11 +75,11 @@ func errcodeCommand() *cobra.Command {
 			}
 			format, _ := cmd.Flags().GetString("format")
 			if code == 0 {
-				printKerr(format, "misc.errcode", 0, "NONE", "", "NONE\n")
+				printKerr(format, out.CommandName(cmd.CommandPath()), 0, "NONE", "", "NONE\n")
 				return nil
 			}
 			kerr := kerr.ErrorForCode(int16(code)).(*kerr.Error)
-			printKerr(format, "misc.errcode", kerr.Code, kerr.Message, kerr.Description, fmt.Sprintf("%s\n%s\n", kerr.Message, kerr.Description))
+			printKerr(format, out.CommandName(cmd.CommandPath()), kerr.Code, kerr.Message, kerr.Description, fmt.Sprintf("%s\n%s\n", kerr.Message, kerr.Description))
 			return nil
 		},
 	}
@@ -107,7 +108,7 @@ func errtextCommand() *cobra.Command {
 
 			var table *out.FormattedTable
 			if list && format != out.FormatText {
-				table = out.NewFormattedTable(format, "misc.errtext", 1, "errors", "NAME", "CODE", "DESCRIPTION")
+				table = out.NewFormattedTable(format, out.CommandName(cmd.CommandPath()), 1, "errors", "NAME", "CODE", "DESCRIPTION")
 				defer table.Flush()
 			}
 			var err error
@@ -127,7 +128,7 @@ func errtextCommand() *cobra.Command {
 					fmt.Fprintf(os.Stderr, "trying %s...\n", kerr.Message)
 				}
 				if client.Strnorm(kerr.Message) == text {
-					printKerr(format, "misc.errtext", kerr.Code, kerr.Message, kerr.Description, fmt.Sprintf("%s (%d)\n%s\n", kerr.Message, kerr.Code, kerr.Description))
+					printKerr(format, out.CommandName(cmd.CommandPath()), kerr.Code, kerr.Message, kerr.Description, fmt.Sprintf("%s (%d)\n%s\n", kerr.Message, kerr.Code, kerr.Description))
 					return nil
 				}
 			}
@@ -213,7 +214,7 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 			}
 
 			if keys {
-				table := out.NewFormattedTable(cl.Format(), "misc.api-versions", 1, "api_versions",
+				table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "api_versions",
 					"NAME", "KEY", "MAX")
 				v.EachMaxKeyVersion(func(k, ver int16) {
 					kind := kmsg.NameForKey(k)
@@ -224,7 +225,7 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 				})
 				table.Flush()
 			} else {
-				table := out.NewFormattedTable(cl.Format(), "misc.api-versions", 1, "api_versions",
+				table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "api_versions",
 					"NAME", "MAX")
 				v.EachMaxKeyVersion(func(k, ver int16) {
 					kind := kmsg.NameForKey(k)
@@ -250,14 +251,14 @@ func probeVersionCommand(cl *client.Client) *cobra.Command {
 		Use:   "probe-version",
 		Short: "Probe and print the version of Kafka running (incompatible with --as-version).",
 		Args:  cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
-			probeVersion(cl)
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return probeVersion(cl)
 		},
 	}
 }
 
 // probeVersion prints what version of Kafka the client is interacting with.
-func probeVersion(cl *client.Client) {
+func probeVersion(cl *client.Client) error {
 	// If we request against a Kafka older than ApiVersions,
 	// Kafka will close the connection. ErrConnDead is
 	// retried automatically, so we must stop that.
@@ -267,32 +268,74 @@ func probeVersion(cl *client.Client) {
 		cl.RemakeWithOpts(kgo.MaxVersions(kversion.V0_9_0()))
 		// 0.9.0 has list groups
 		if _, err = cl.Client().SeedBrokers()[0].Request(context.Background(), new(kmsg.ListGroupsRequest)); err == nil {
-			fmt.Println("Kafka 0.9.0")
-			return
+			printVersionGuess(cl.Format(), cl.Command(), "0.9.0")
+			return nil
 		}
 		cl.RemakeWithOpts(kgo.MaxVersions(kversion.V0_8_2()))
 		// 0.8.2 has find coordinator
 		if _, err = cl.Client().SeedBrokers()[0].Request(context.Background(), new(kmsg.FindCoordinatorRequest)); err == nil {
-			fmt.Println("Kafka 0.8.2")
-			return
+			printVersionGuess(cl.Format(), cl.Command(), "0.8.2")
+			return nil
 		}
 		cl.RemakeWithOpts(kgo.MaxVersions(kversion.V0_8_1()))
 		// 0.8.1 has offset fetch
 		if _, err = cl.Client().SeedBrokers()[0].Request(context.Background(), new(kmsg.OffsetFetchRequest)); err == nil {
-			fmt.Println("Kafka 0.8.1")
-			return
+			printVersionGuess(cl.Format(), cl.Command(), "0.8.1")
+			return nil
 		}
-		fmt.Println("Kafka 0.8.0")
-		return
+		printVersionGuess(cl.Format(), cl.Command(), "0.8.0")
+		return nil
 	}
 
 	resp := kresp.(*kmsg.ApiVersionsResponse)
 	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-		out.Die("ApiVersions request failed: %v", err)
+		return fmt.Errorf("ApiVersions request failed: %v", err)
 	}
 
 	v := kversion.FromApiVersionsResponse(resp)
-	fmt.Println("Kafka " + v.VersionGuess())
+	printVersionGuess(cl.Format(), cl.Command(), v.VersionGuess())
+	return nil
+}
+
+// printVersionGuess prints kversion's guess in the requested format. The
+// guess is a sentence, "between v1.0 and v1.1" or "at least v4.0" or a bare
+// "v3.7", and that is what text prints. json and awk get the ends of the range
+// it names instead, and an end the guess leaves open is empty.
+func printVersionGuess(format, command, guess string) {
+	min, max := splitVersionGuess(guess)
+	switch format {
+	case out.FormatJSON:
+		out.MarshalJSON(command, 1, map[string]any{
+			"guess": guess,
+			"min":   min,
+			"max":   max,
+		})
+	case out.FormatAWK:
+		fmt.Printf("%s\t%s\n", min, max)
+	default:
+		fmt.Println("Kafka " + guess)
+	}
+}
+
+// splitVersionGuess pulls the version or versions out of kversion's sentence.
+// An exact guess is both ends of a range of one.
+func splitVersionGuess(guess string) (min, max string) {
+	switch {
+	case guess == "unknown custom version":
+		return "", ""
+	case strings.HasPrefix(guess, "between "):
+		lo, hi, ok := strings.Cut(strings.TrimPrefix(guess, "between "), " and ")
+		if !ok {
+			return "", ""
+		}
+		return lo, hi
+	case strings.HasPrefix(guess, "not even "):
+		return "", strings.TrimPrefix(guess, "not even ")
+	case strings.Contains(guess, "at least "):
+		_, v, _ := strings.Cut(guess, "at least ")
+		return v, ""
+	}
+	return guess, guess
 }
 
 func rawCommand(cl *client.Client) *cobra.Command {
@@ -366,7 +409,7 @@ The wire version used is:
 			if err != nil {
 				return fmt.Errorf("response error: %v", err)
 			}
-			out.MarshalJSON("misc.raw-req", 1, map[string]any{
+			out.MarshalJSON(cl.Command(), 1, map[string]any{
 				"response": kresp,
 			})
 			return nil
@@ -403,7 +446,7 @@ If --with-epochs is true, the start and end offsets will have /### following
 the offset number, where ### corresponds to the broker epoch at that given
 offset.
 `,
-		Example: "list-offsets foo:1,2,3 bar:0",
+		Example: "kcl misc list-offsets foo:1,2,3 bar:0",
 		RunE: func(_ *cobra.Command, topicParts []string) error {
 			tps, err := loadTopicParts(cl, topicParts)
 			if err != nil {
@@ -588,24 +631,33 @@ offset.
 			}
 			sort.Slice(sorted, func(i, j int) bool { return sorted[i].topic < sorted[j].topic })
 
-			table := out.NewFormattedTable(cl.Format(), "misc.list-offsets", 1, "offsets",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "offsets",
 				"BROKER", "TOPIC", "PARTITION", "START", "STABLE", "END", "ERROR")
+
+			// ERROR is the last column and is usually empty, which
+			// ended every awk row in a tab. A dash there is what
+			// "topic describe" writes, and it keeps the column count
+			// where it was. Text and JSON keep the empty string.
+			noErr := ""
+			if cl.Format() == out.FormatAWK {
+				noErr = "-"
+			}
 
 			for _, topic := range sorted {
 				for _, part := range topic.parts {
 					if part.err != nil {
-						table.Row(part.broker, topic.topic, part.part, "", "", "", part.err)
+						table.Row(part.broker, topic.topic, part.part, "", "", "", part.err.Error())
 						continue
 					}
-					var startStr, endStr string
+					// --with-epochs asks for two numbers in one
+					// column, so START and END are strings there.
+					// Plain, they are the offsets themselves.
+					var start, end any = part.startOffset, part.endOffset
 					if withEpochs {
-						startStr = fmt.Sprintf("%d/%d", part.startOffset, part.startLeaderEpoch)
-						endStr = fmt.Sprintf("%d/%d", part.endOffset, part.endLeaderEpoch)
-					} else {
-						startStr = fmt.Sprintf("%d", part.startOffset)
-						endStr = fmt.Sprintf("%d", part.endOffset)
+						start = fmt.Sprintf("%d/%d", part.startOffset, part.startLeaderEpoch)
+						end = fmt.Sprintf("%d/%d", part.endOffset, part.endLeaderEpoch)
 					}
-					table.Row(part.broker, topic.topic, part.part, startStr, part.stableOffset, endStr, "")
+					table.Row(part.broker, topic.topic, part.part, start, part.stableOffset, end, noErr)
 				}
 			}
 			table.Flush()
@@ -632,7 +684,7 @@ This is an advanced command strictly for debugging purposes. To discover what
 it does, read the documentation for kmsg.OffsetForLeaderEpochRequest.
 `,
 
-		Example: "offset-for-leader-epoch foo bar biz:0,1,2",
+		Example: "kcl misc offset-for-leader-epoch foo bar biz:0,1,2",
 		RunE: func(_ *cobra.Command, topicParts []string) error {
 			tps, err := loadTopicParts(cl, topicParts)
 			if err != nil {
@@ -657,7 +709,7 @@ it does, read the documentation for kmsg.OffsetForLeaderEpochRequest.
 			}
 
 			shards := cl.Client().RequestSharded(context.Background(), req)
-			table := out.NewFormattedTable(cl.Format(), "misc.offset-for-leader-epoch", 1, "epochs",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "epochs",
 				"BROKER", "TOPIC", "PARTITION", "LEADER-EPOCH", "END-OFFSET", "ERROR")
 
 			for _, shard := range shards {

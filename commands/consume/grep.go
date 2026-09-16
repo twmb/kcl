@@ -88,7 +88,7 @@ func parseOneGrep(pattern string) (grepFilter, error) {
 		}
 
 	case strings.HasPrefix(s, "h:"):
-		// h:NAME=REGEX — match a specific header's value.
+		// h:NAME=REGEX matches a specific header's value.
 		name, pattern, ok := strings.Cut(s[2:], "=")
 		if !ok {
 			return f, fmt.Errorf("h: prefix requires NAME=REGEX format")

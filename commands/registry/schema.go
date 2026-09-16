@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/spf13/cobra"
 
@@ -89,7 +90,7 @@ in "name:subject:version" form (repeatable).
 			}
 
 			if cl.Format() == out.FormatJSON {
-				out.MarshalJSON("registry.schema.register", 1, map[string]any{
+				out.MarshalJSON(cl.Command(), 1, map[string]any{
 					"subject": ss.Subject,
 					"version": ss.Version,
 					"id":      ss.ID,
@@ -97,7 +98,7 @@ in "name:subject:version" form (repeatable).
 				})
 				return nil
 			}
-			tw := out.NewFormattedTable(cl.Format(), "registry.schema.register", 1, "schemas", "SUBJECT", "VERSION", "ID")
+			tw := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "schemas", "SUBJECT", "VERSION", "ID")
 			tw.Row(ss.Subject, ss.Version, ss.ID)
 			tw.Flush()
 			return nil
@@ -129,6 +130,11 @@ defaults to "latest"; pass a version number to fetch an older one.
 By default only the schema text is printed (so it can be piped). Use --meta to
 also print the subject/version/id/type to stderr. In JSON output format the
 full structured schema (including references) is always printed.
+
+--format awk prints one tab separated row: id, version, type, and the schema
+text. A schema spanning lines, a .proto for instance, has its newlines and
+tabs written as \n and \t so that the row stays one line. Version is a dash
+when you fetched by --id.
 
 EXAMPLES:
   kcl registry schema get mytopic-value
@@ -196,7 +202,16 @@ SEE ALSO:
 				if len(schema.References) > 0 {
 					fields["references"] = schema.References
 				}
-				out.MarshalJSON("registry.schema.get", 1, fields)
+				out.MarshalJSON(cl.Command(), 1, fields)
+				return nil
+			}
+
+			if cl.Format() == out.FormatAWK {
+				version := "-"
+				if haveSubjVers {
+					version = strconv.Itoa(outVersion)
+				}
+				fmt.Printf("%d\t%s\t%s\t%s\n", outID, version, schema.Type, awkText(schema.Schema))
 				return nil
 			}
 
@@ -253,7 +268,7 @@ type.`,
 				return dieErr("list schemas", err)
 			}
 
-			tw := out.NewFormattedTable(cl.Format(), "registry.schema.list", 1, "schemas", "SUBJECT", "VERSION", "ID", "TYPE")
+			tw := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "schemas", "SUBJECT", "VERSION", "ID", "TYPE")
 			for _, s := range schemas {
 				tw.Row(s.Subject, s.Version, s.ID, s.Type)
 			}

@@ -226,6 +226,14 @@ func (c *consumption) run(topics []string) error {
 	isGroup := len(c.group) > 0 && !(isConsumerOffsets || isTransactionState)
 	if isGroup {
 		c.cl.AddOpt(kgo.ConsumerGroup(c.group))
+		// Default autocommit commits the poll *before* the last one:
+		// PollFetches records the new offsets as dirty and only promotes
+		// them at the start of the next poll, which is what makes the
+		// default at-least-once. We print every record as we poll it, so
+		// there is no work in flight to lose, and a command that stops on
+		// --num or an interrupt never polls again. We mark what we print
+		// and commit the marks, so what you saw is what is committed.
+		c.cl.AddOpt(kgo.AutoCommitMarks())
 	}
 
 	if c.untilOffset > -1 {
@@ -279,6 +287,7 @@ func (c *consumption) run(topics []string) error {
 		start:               c.start,
 		end:                 c.end,
 		group:               c.group,
+		mark:                isGroup,
 		grepFilters:         grepFilters,
 		printControlRecords: c.printControlRecords,
 		timeout:             c.timeout,
@@ -500,6 +509,7 @@ func (c *consumption) run(topics []string) error {
 	case <-sigs:
 	case <-co.done:
 		// Finished on its own; nothing left to wait for.
+		commitMarks(cl, isGroup)
 		cl.Close()
 		return nil
 	}
@@ -510,6 +520,7 @@ func (c *consumption) run(topics []string) error {
 		atomic.StoreUint32(&co.quit, 1)
 		co.cancel()
 		<-co.done
+		commitMarks(cl, isGroup)
 		cl.Close() // leaves group
 	}()
 	select {
@@ -519,10 +530,24 @@ func (c *consumption) run(topics []string) error {
 	return nil
 }
 
+// commitMarks commits what we consumed before we leave the group. Close
+// commits through kgo's revoke as well, but doing it here lets us say so when
+// it fails rather than losing the failure inside the leave. The context is
+// Background because the consume context is already canceled by now; the
+// request is bounded by retry_timeout.
+func commitMarks(cl *kgo.Client, isGroup bool) {
+	if !isGroup {
+		return
+	}
+	if err := cl.CommitMarkedOffsets(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "unable to commit offsets: %v\n", err)
+	}
+}
+
 func (c *consumption) parseOffset() (kgo.Offset, error) {
 	spec, err := offsetparse.Parse(c.offset, time.Now())
 	if err != nil {
-		return kgo.Offset{}, fmt.Errorf("unable to parse offset %q: %v", c.offset, err)
+		return kgo.Offset{}, out.Errf(out.ExitUsage, "%s (offsets look like %s)", err, offsetparse.Syntax)
 	}
 
 	c.end = -1
@@ -590,6 +615,7 @@ type consumeOutput struct {
 	end   int64 // if exact range
 
 	group string // for filtering __consumer_offsets
+	mark  bool   // group consuming: mark each consumed record for commit
 
 	untilOffset  bool
 	untilOffsets kadm.ListedOffsets
@@ -736,6 +762,7 @@ func (co *consumeOutput) consume() {
 			}
 			fmt.Fprintf(os.Stderr, "fetch error %s[%d]: %v\n", t, p, err)
 		})
+		var marks []*kgo.Record
 		fetches.EachPartition(func(p kgo.FetchTopicPartition) {
 			partEndOffset := int64(-1)
 			if co.untilOffset {
@@ -765,6 +792,15 @@ func (co *consumeOutput) consume() {
 				// The end offset is exclusive.
 				if partEndOffset != -1 && r.Offset >= partEndOffset {
 					return
+				}
+
+				// Past here the record is one we handled: printed, or
+				// dropped on purpose as a control record, a grep miss,
+				// or over --num-per-partition. A record dropped above
+				// because we already hit --num is not, and a rerun
+				// starts on it.
+				if co.mark {
+					marks = append(marks, r)
 				}
 
 				// Control records are kept only so that a partition can
@@ -837,6 +873,12 @@ func (co *consumeOutput) consume() {
 				}
 			}
 		})
+
+		// Marked in one call per poll rather than one per record: each
+		// call takes the group lock and sorts what it is given.
+		if len(marks) > 0 {
+			co.cl.MarkCommitRecords(marks...)
+		}
 
 		// Fix C: re-check here, not only at the top of the loop. Once the
 		// last requested offset is consumed every partition is paused, so

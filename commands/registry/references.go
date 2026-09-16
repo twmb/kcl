@@ -35,7 +35,7 @@ this schema?", which is useful before deleting or evolving it.`,
 			if err != nil {
 				return dieErr("list references", err)
 			}
-			tw := out.NewFormattedTable(cl.Format(), "registry.references", 1, "references", "SUBJECT", "VERSION", "ID")
+			tw := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "references", "SUBJECT", "VERSION", "ID")
 			for _, r := range refs {
 				tw.Row(r.Subject, r.Version, r.ID)
 			}

@@ -77,13 +77,13 @@ EXAMPLES:
 					msg += ": " + *kresp.ErrorMessage
 				}
 				if cl.Format() == "json" {
-					out.DieJSON("cluster.add-controller", err.Error(), msg)
+					out.DieJSON(cl.Command(), err.Error(), msg)
 				}
 				return fmt.Errorf("%s", msg)
 			}
 			switch cl.Format() {
 			case "json":
-				out.MarshalJSON("cluster.add-controller", 1, map[string]any{"status": "ok"})
+				out.MarshalJSON(cl.Command(), 1, map[string]any{"status": "ok"})
 			default:
 				fmt.Println("OK")
 			}
@@ -139,13 +139,13 @@ EXAMPLES:
 					msg += ": " + *kresp.ErrorMessage
 				}
 				if cl.Format() == "json" {
-					out.DieJSON("cluster.remove-controller", err.Error(), msg)
+					out.DieJSON(cl.Command(), err.Error(), msg)
 				}
 				return fmt.Errorf("%s", msg)
 			}
 			switch cl.Format() {
 			case "json":
-				out.MarshalJSON("cluster.remove-controller", 1, map[string]any{"status": "ok"})
+				out.MarshalJSON(cl.Command(), 1, map[string]any{"status": "ok"})
 			default:
 				fmt.Println("OK")
 			}

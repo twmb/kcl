@@ -2,8 +2,12 @@ package consume
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/twmb/kcl/offsetparse"
+	"github.com/twmb/kcl/out"
 )
 
 // testParseOffset creates a consumption with the given offset string,
@@ -258,5 +262,38 @@ func TestParseOffset_TimestampRelativeDuration(t *testing.T) {
 	diff := math.Abs(float64(nowMillis - c.startTimestampMillis - oneHourMillis))
 	if diff > 5000 {
 		t.Errorf("startTimestampMillis is not approximately 1 hour ago: diff from expected = %.0f ms", diff)
+	}
+}
+
+func TestParseOffsetBad(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		offset string
+	}{
+		{"word", "bogus"},
+		{"range end", "1:bogus"},
+		{"relative", "+bogus"},
+		{"empty", ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := &consumption{offset: test.offset}
+			_, err := c.parseOffset()
+			if err == nil {
+				t.Fatal("got nil err, want a parse failure")
+			}
+			if code := out.ExitCode(err); code != out.ExitUsage {
+				t.Errorf("got exit code %d, want %d", code, out.ExitUsage)
+			}
+			msg := err.Error()
+			if strings.Contains(msg, "strconv") {
+				t.Errorf("got %q, want no strconv text", msg)
+			}
+			if strings.Count(msg, "unable to parse offset") > 1 {
+				t.Errorf("got %q, want the reason said once", msg)
+			}
+			if !strings.Contains(msg, offsetparse.Syntax) {
+				t.Errorf("got %q, want it to name the offset syntax", msg)
+			}
+		})
 	}
 }

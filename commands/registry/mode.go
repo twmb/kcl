@@ -40,7 +40,7 @@ func modeGetCommand(cl *client.Client) *cobra.Command {
 				return err
 			}
 			results := scl.Mode(context.Background(), args...)
-			return printMode(cl, "registry.mode.get", results)
+			return printMode(cl, results)
 		},
 	}
 	return cmd
@@ -66,7 +66,7 @@ func modeSetCommand(cl *client.Client) *cobra.Command {
 				ctx = sr.WithParams(ctx, sr.Force)
 			}
 			results := scl.SetMode(ctx, mode, args[1:]...)
-			return printMode(cl, "registry.mode.set", results)
+			return printMode(cl, results)
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "force the mode change (e.g. setting IMPORT on a non-empty registry)")
@@ -75,9 +75,9 @@ func modeSetCommand(cl *client.Client) *cobra.Command {
 
 // printMode prints mode results as a table (or JSON), surfacing any per-subject
 // errors. It returns ErrSilent if any result carried an error.
-func printMode(cl *client.Client, command string, results []sr.ModeResult) error {
+func printMode(cl *client.Client, results []sr.ModeResult) error {
 	var anyErr bool
-	tw := out.NewFormattedTable(cl.Format(), command, 1, "modes", "SUBJECT", "MODE", "ERROR")
+	tw := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "modes", "SUBJECT", "MODE", "ERROR")
 	for _, r := range results {
 		subject := r.Subject
 		if subject == "" {

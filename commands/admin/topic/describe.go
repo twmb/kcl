@@ -40,7 +40,12 @@ func topicDescribeCommand(cl *client.Client) *cobra.Command {
 Describe topics showing summary, partitions, and optionally configs.
 
 By default in text mode, shows all sections. Use --section to select one.
-AWK mode defaults to partitions. JSON always includes all sections.
+JSON always includes all sections.
+
+--format awk prints the partition rows and nothing else: one row per
+partition, no headers, and a dash in a column we have no value for. The
+configs a topic runs with come from "kcl config describe TOPIC -tt", or from
+--section configs here.
 
 Health filters show only partitions matching the condition.
 
@@ -333,7 +338,7 @@ SEE ALSO:
 								tj.Configs = append(tj.Configs, configJSON{
 									Key:       c.Name,
 									Value:     val,
-									Source:    describeConfigSource(c.Source),
+									Source:    c.Source.String(),
 									Sensitive: c.IsSensitive,
 								})
 							}
@@ -341,7 +346,7 @@ SEE ALSO:
 					}
 					topicsOut = append(topicsOut, tj)
 				}
-				out.MarshalJSON("topic.describe", 1, map[string]any{
+				out.MarshalJSON(cl.Command(), 1, map[string]any{
 					"topics": topicsOut,
 				})
 
@@ -366,12 +371,16 @@ SEE ALSO:
 						)
 					case "partitions":
 						for _, p := range d.partitions {
-							errStr := ""
+							// Every column carries a value so that a
+							// row never ends in a tab: a dash is what
+							// the text columns already show for a
+							// value we do not have.
+							errStr := "-"
 							if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
 								errStr = err.Error()
 							}
 							if stable {
-								so := ""
+								so := "-"
 								if m, ok := stableOffsets[topicName]; ok {
 									if v, ok := m[p.Partition]; ok {
 										so = fmt.Sprintf("%d", v)
@@ -413,7 +422,7 @@ SEE ALSO:
 										topicName,
 										c.Name,
 										val,
-										describeConfigSource(c.Source),
+										c.Source.String(),
 										c.IsSensitive,
 									)
 								}
@@ -488,7 +497,7 @@ SEE ALSO:
 								if c.Value != nil {
 									val = *c.Value
 								}
-								source := describeConfigSource(c.Source)
+								source := c.Source.String()
 								configTw.Print(c.Name, val, source, c.IsSensitive)
 							}
 							configTw.Flush()
@@ -564,27 +573,6 @@ func int32sToString(vals []int32) string {
 		strs[i] = strconv.FormatInt(int64(v), 10)
 	}
 	return "[" + strings.Join(strs, ",") + "]"
-}
-
-func describeConfigSource(source kmsg.ConfigSource) string {
-	switch source {
-	case 0:
-		return "UNKNOWN"
-	case 1:
-		return "DYNAMIC_TOPIC"
-	case 2:
-		return "DYNAMIC_BROKER"
-	case 3:
-		return "DYNAMIC_DEFAULT_BROKER"
-	case 4:
-		return "STATIC_BROKER"
-	case 5:
-		return "DEFAULT"
-	case 6:
-		return "DYNAMIC_BROKER_LOGGER"
-	default:
-		return fmt.Sprintf("SOURCE(%d)", source)
-	}
 }
 
 func strval(s *string) string {

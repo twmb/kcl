@@ -82,7 +82,7 @@ topic and 1,2,3 are partition numbers.
 
 Use --dry-run to preview without applying.
 `,
-		Example: "elect-leaders foo:1,2,3 bar:9",
+		Example: "kcl cluster elect-leaders foo:1,2,3 bar:9",
 		RunE: func(_ *cobra.Command, topicParts []string) error {
 			tps, err := flagutil.ParseTopicPartitions(topicParts)
 			if err != nil {
@@ -92,7 +92,7 @@ Use --dry-run to preview without applying.
 				if cl.Format() == out.FormatText {
 					fmt.Fprintln(os.Stderr, "Dry run: would elect leaders for the following partitions:")
 				}
-				table := out.NewFormattedTable(cl.Format(), "cluster.elect-leaders", 1, "partitions", "TOPIC", "PARTITION")
+				table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "partitions", "TOPIC", "PARTITION")
 				for _, topic := range slices.Sorted(maps.Keys(tps)) {
 					for _, p := range tps[topic] {
 						table.Row(topic, p)
@@ -133,7 +133,7 @@ Use --dry-run to preview without applying.
 				return fmt.Errorf("%v", err)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "cluster.elect-leaders", 1, "results",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
 				"TOPIC", "PARTITION", "ERROR", "MESSAGE")
 			for _, topic := range resp.Topics {
 				for _, partition := range topic.Partitions {
@@ -205,7 +205,7 @@ partitions, use "kcl cluster metadata", which issues Metadata instead.
 					if resp.ErrorMessage != nil {
 						msg += ": " + *resp.ErrorMessage
 					}
-					out.DieJSON("cluster.describe", err.Error(), msg)
+					out.DieJSON(cl.Command(), err.Error(), msg)
 				}
 				additional := ""
 				if resp.ErrorMessage != nil {
@@ -237,7 +237,7 @@ partitions, use "kcl cluster metadata", which issues Metadata instead.
 				if includeAuthorizedOps {
 					fields["authorized_operations"] = resp.ClusterAuthorizedOperations
 				}
-				out.MarshalJSON("cluster.describe", 1, fields)
+				out.MarshalJSON(cl.Command(), 1, fields)
 
 			case "awk":
 				awkSection := section
@@ -369,7 +369,7 @@ and observers.
 						parts = append(parts, pj)
 					}
 				}
-				out.MarshalJSON("cluster.describe-quorum", 1, map[string]any{"partitions": parts})
+				out.MarshalJSON(cl.Command(), 1, map[string]any{"partitions": parts})
 
 			case "awk":
 				for _, topic := range resp.Topics {

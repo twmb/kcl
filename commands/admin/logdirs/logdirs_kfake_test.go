@@ -68,9 +68,9 @@ func TestDescribeVolumeColumns(t *testing.T) {
 		Command string `json:"_command"`
 		Dirs    []struct {
 			Topic    string `json:"topic"`
-			Size     string `json:"size"`
-			Total    string `json:"total"`
-			Usable   string `json:"usable"`
+			Size     *int64 `json:"size"`
+			Total    *int64 `json:"total"`
+			Usable   *int64 `json:"usable"`
 			Cordoned bool   `json:"cordoned"`
 		} `json:"dirs"`
 	}
@@ -87,14 +87,17 @@ func TestDescribeVolumeColumns(t *testing.T) {
 		if d.Topic != "logdirs-topic" {
 			continue
 		}
-		if d.Total == "" || d.Total == "-" {
-			t.Errorf("total = %q, want a size", d.Total)
+		if d.Total == nil || d.Size == nil || d.Usable == nil {
+			t.Fatalf("a volume column is null, want numbers\n%s", b)
 		}
-		if d.Total != d.Size {
-			t.Errorf("total = %q, size = %q; kfake counts only what it holds", d.Total, d.Size)
+		if *d.Total <= 0 {
+			t.Errorf("total = %d, want a size", *d.Total)
 		}
-		if d.Usable != "34359738368" {
-			t.Errorf("usable = %q, want kfake's 32GiB", d.Usable)
+		if *d.Total != *d.Size {
+			t.Errorf("total = %d, size = %d; kfake counts only what it holds", *d.Total, *d.Size)
+		}
+		if *d.Usable != 34359738368 {
+			t.Errorf("usable = %d, want kfake's 32GiB", *d.Usable)
 		}
 		if d.Cordoned {
 			t.Error("kfake cordons nothing")

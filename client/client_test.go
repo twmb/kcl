@@ -884,3 +884,43 @@ func TestDieFormat(t *testing.T) {
 		})
 	}
 }
+
+// TestXExampleMatchesDocumentedDefault pins that a key whose description
+// names a default uses that default as its example. -X list printed
+// dial_timeout=2s while -X help said "Default 10s", so the two halves of the
+// same help disagreed about the same key.
+func TestXExampleMatchesDocumentedDefault(t *testing.T) {
+	documented := func(desc string) string {
+		_, rest, ok := strings.Cut(desc, "Default ")
+		if !ok {
+			return ""
+		}
+		return strings.TrimRight(strings.Fields(rest)[0], ".,")
+	}
+	var checked int
+	for _, k := range CfgKeys() {
+		want := documented(k.Desc)
+		if want == "" {
+			continue
+		}
+		checked++
+		if k.Example != want {
+			t.Errorf("%s: example is %q, its description says the default is %q", k.Name, k.Example, want)
+		}
+	}
+	if checked == 0 {
+		t.Error("no key documents a default; the check found nothing to compare")
+	}
+}
+
+// TestXListSaysTheValuesAreExamples pins the header that tells a reader the
+// value after the = is an example rather than a setting in effect.
+func TestXListSaysTheValuesAreExamples(t *testing.T) {
+	list := XList()
+	if !strings.HasPrefix(list, "KEY=EXAMPLE") {
+		t.Errorf("-X list does not open by labeling the column: %.60q", list)
+	}
+	if !strings.Contains(XHelp(), "is an example of its shape") {
+		t.Error("-X help does not say the value with each key is an example")
+	}
+}

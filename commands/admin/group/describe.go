@@ -95,7 +95,7 @@ SEE ALSO:
 			if err != nil {
 				return err
 			}
-			if err := printDescribed(cl.Format(), described, fetchedOffsets, listedOffsets, section); err != nil {
+			if err := printDescribed(cl.Format(), cl.Command(), described, fetchedOffsets, listedOffsets, section); err != nil {
 				return err
 			}
 			// A group the broker could not describe, GROUP_ID_NOT_FOUND above
@@ -368,7 +368,7 @@ func describeConsumerGroups(cl *client.Client, groups []string, readCommitted bo
 				"error":       errStr,
 			})
 		}
-		out.MarshalJSON("group.describe", 1, map[string]any{
+		out.MarshalJSON(cl.Command(), 1, map[string]any{
 			"groups": jsonGroups,
 		})
 
@@ -477,24 +477,24 @@ func describeConsumerGroups(cl *client.Client, groups []string, readCommitted bo
 			}
 
 			if showLag && len(r.rows) > 0 {
-				table := out.NewFormattedTable(format, "group.describe", 1, "lag",
+				table := out.NewFormattedTable(format, cl.Command(), 1, "lag",
 					"TOPIC", "PARTITION", "CURRENT-OFFSET", "LOG-END-OFFSET", "LAG", "MEMBER-ID", "CLIENT-ID", "HOST")
 				for _, row := range r.rows {
-					curStr := strconv.FormatInt(row.currentOffset, 10)
+					cur := out.Num(row.currentOffset)
 					if row.currentOffset < 0 {
-						curStr = "-"
+						cur = out.NoNum
 					}
-					lagStr := strconv.FormatInt(row.lag, 10)
+					lag := out.Num(row.lag)
 					if !row.lagValid {
-						lagStr = "-"
+						lag = out.NoNum
 					}
-					table.Row(row.topic, row.partition, curStr, row.logEndOffset, lagStr, row.memberID, row.clientID, row.host)
+					table.Row(row.topic, row.partition, cur, row.logEndOffset, lag, row.memberID, row.clientID, row.host)
 				}
 				table.Flush()
 			}
 
 			if showMembers && len(r.group.Members) > 0 {
-				table := out.NewFormattedTable(format, "group.describe-consumer", 1, "members",
+				table := out.NewFormattedTable(format, cl.Command(), 1, "members",
 					"MEMBER-ID", "CLIENT-ID", "HOST", "MEMBER-EPOCH", "SUBSCRIBED-TOPICS", "ASSIGNMENT", "TARGET-ASSIGNMENT")
 				for _, member := range r.group.Members {
 					var extras []string
@@ -751,6 +751,7 @@ type describeRow struct {
 
 func printDescribed(
 	format string,
+	command string,
 	groups []describedGroup,
 	fetched map[string]map[int32]offset,
 	listed map[string]map[int32]offset,
@@ -934,7 +935,7 @@ func printDescribed(
 				"error":       errStr,
 			})
 		}
-		out.MarshalJSON("group.describe", 1, map[string]any{
+		out.MarshalJSON(command, 1, map[string]any{
 			"groups": jsonGroups,
 		})
 
@@ -1047,25 +1048,25 @@ func printDescribed(
 
 			// Lag section.
 			if showLag && len(rows) > 0 {
-				table := out.NewFormattedTable(format, "group.describe", 1, "lag",
+				table := out.NewFormattedTable(format, command, 1, "lag",
 					"TOPIC", "PARTITION", "CURRENT-OFFSET", "LOG-END-OFFSET", "LAG", "MEMBER-ID", "CLIENT-ID", "HOST")
 				for _, r := range rows {
-					curStr := strconv.FormatInt(r.currentOffset, 10)
+					cur := out.Num(r.currentOffset)
 					if r.currentOffset < 0 {
-						curStr = "-"
+						cur = out.NoNum
 					}
-					lagStr := strconv.FormatInt(r.lag, 10)
+					lag := out.Num(r.lag)
 					if !r.lagValid {
-						lagStr = "-"
+						lag = out.NoNum
 					}
-					table.Row(r.topic, r.partition, curStr, r.logEndOffset, lagStr, r.memberID, r.clientID, r.host)
+					table.Row(r.topic, r.partition, cur, r.logEndOffset, lag, r.memberID, r.clientID, r.host)
 				}
 				table.Flush()
 			}
 
 			// Members section.
 			if showMembers && len(group.Members) > 0 {
-				table := out.NewFormattedTable(format, "group.describe", 1, "members",
+				table := out.NewFormattedTable(format, command, 1, "members",
 					"MEMBER-ID", "CLIENT-ID", "HOST", "ASSIGNMENT")
 				for _, member := range group.Members {
 					host := member.ClientHost

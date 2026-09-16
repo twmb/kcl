@@ -194,7 +194,7 @@ func TestXCompletionRegistered(t *testing.T) {
 		t.Fatal("no completion registered for -X")
 	}
 	got, _ := f(root, nil, "")
-	if len(got) == 0 || got[0] != "broker_timeout=\t5s" || !slices.Contains(got, "seed_brokers=\thost1:9092,host2:9092") {
+	if len(got) == 0 || got[0] != "broker_timeout=\t5s" || !slices.Contains(got, "seed_brokers=\tlocalhost:9092") {
 		t.Errorf("completions = %v", got)
 	}
 }
@@ -205,9 +205,9 @@ func TestCommandName(t *testing.T) {
 	list := &cobra.Command{Use: "list", Run: func(*cobra.Command, []string) {}}
 	topic.AddCommand(list)
 	root.AddCommand(topic)
-	for cmd, want := range map[*cobra.Command]string{root: "", topic: "topic", list: "topic.list", nil: ""} {
-		if got := commandName(cmd); got != want {
-			t.Errorf("commandName = %q, want %q", got, want)
+	for cmd, want := range map[*cobra.Command]string{root: "", topic: "topic", list: "topic.list"} {
+		if got := out.CommandName(cmd.CommandPath()); got != want {
+			t.Errorf("CommandName(%q) = %q, want %q", cmd.CommandPath(), got, want)
 		}
 	}
 }
@@ -268,5 +268,74 @@ func TestTreeShorthandsAndUsage(t *testing.T) {
 		if got := byPath[path].Use; got != use {
 			t.Errorf("%s Use = %q, want %q", path, got, use)
 		}
+	}
+}
+
+// TestGroupsNameAnUnknownSubcommand pins that every command group answers a
+// typo by naming it. Cobra validates arguments before RunE, so a group that
+// sets Args of its own reports an argument count instead: "kcl acl zzz" said
+// "accepts 0 arg(s), received 1" while the other thirteen groups said
+// `unknown command "zzz" for "kcl acl"`.
+func TestGroupsNameAnUnknownSubcommand(t *testing.T) {
+	root, _ := buildRoot()
+	allCommands(root, func(cmd *cobra.Command) {
+		if !cmd.HasParent() || !cmd.HasSubCommands() {
+			return
+		}
+		// kcl fake is a cluster you run, not only a group, so a stray
+		// argument to it really is an argument error.
+		if strings.HasPrefix(cmd.CommandPath(), "kcl fake") {
+			return
+		}
+		if err := cmd.ValidateArgs([]string{"zzz"}); err != nil {
+			t.Errorf("%s: %v; a group must let the argument through so the run can name it", cmd.CommandPath(), err)
+			return
+		}
+		err := cmd.RunE(cmd, []string{"zzz"})
+		want := `unknown command "zzz" for "` + cmd.CommandPath() + `"`
+		var ce *out.ExitCodeError
+		if err == nil || !errors.As(err, &ce) || ce.Code != out.ExitUsage || err.Error() != want {
+			t.Errorf("%s: err = %v, want exit 2 and %q", cmd.CommandPath(), err, want)
+		}
+	})
+}
+
+// TestExamplesArePasteable pins that every Example line is a command you can
+// paste. buildRoot used to rewrite the Example field, replacing the bare
+// command name with the full path, which doubled a path that was already
+// full ("kcl acl kcl acl delete --topic foo") and mangled any prose that
+// happened to contain the word ("kcl logdirs describes all").
+func TestExamplesArePasteable(t *testing.T) {
+	root, _ := buildRoot()
+	var checked int
+	var hidden func(*cobra.Command) bool
+	hidden = func(cmd *cobra.Command) bool {
+		return cmd.Hidden || cmd.HasParent() && hidden(cmd.Parent())
+	}
+	allCommands(root, func(cmd *cobra.Command) {
+		if cmd.Example == "" {
+			return
+		}
+		path := cmd.CommandPath()
+		for _, line := range strings.Split(cmd.Example, "\n") {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			checked++
+			if line != strings.TrimLeft(line, " \t") {
+				t.Errorf("%s: example is indented, so it does not paste: %q", path, line)
+			}
+			if !strings.HasPrefix(line, "kcl ") {
+				t.Errorf("%s: example does not start with kcl: %q", path, line)
+			}
+			// A hidden deprecated mirror carries the primary command's
+			// examples on purpose, and its deprecation notice names it.
+			if !hidden(cmd) && !strings.HasPrefix(line, path+" ") && line != path {
+				t.Errorf("%s: example is for another command: %q", path, line)
+			}
+		}
+	})
+	if checked == 0 {
+		t.Error("no examples found; the walk is not reaching them")
 	}
 }

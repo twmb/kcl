@@ -13,8 +13,8 @@ func TestErrorDocAndExitCode(t *testing.T) {
 		wantCode int
 		wantKeys []string
 	}{
-		{name: "plain error", err: errors.New("boom"), wantCode: ExitError, wantKeys: []string{"error", "code"}},
-		{name: "usage error", err: Errf(ExitUsage, "bad flag"), wantCode: ExitUsage, wantKeys: []string{"error", "code"}},
+		{name: "plain error", err: errors.New("boom"), wantCode: ExitError, wantKeys: []string{"error", "code", "_version"}},
+		{name: "usage error", err: Errf(ExitUsage, "bad flag"), wantCode: ExitUsage, wantKeys: []string{"error", "code", "_version"}},
 		{name: "with a command", err: errors.New("boom"), command: "topic.list", wantCode: ExitError, wantKeys: []string{"error", "code", "_command", "_version"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -32,6 +32,25 @@ func TestErrorDocAndExitCode(t *testing.T) {
 			}
 			if doc["code"] != test.wantCode || doc["error"] != test.err.Error() {
 				t.Errorf("doc = %v", doc)
+			}
+		})
+	}
+}
+
+func TestCommandName(t *testing.T) {
+	for _, test := range []struct {
+		path string
+		exp  string
+	}{
+		{"kcl", ""},
+		{"kcl topic", "topic"},
+		{"kcl topic list", "topic.list"},
+		{"kcl registry schema get", "registry.schema.get"},
+		{"", ""},
+	} {
+		t.Run(test.path, func(t *testing.T) {
+			if got := CommandName(test.path); got != test.exp {
+				t.Errorf("CommandName(%q) = %q != exp %q", test.path, got, test.exp)
 			}
 		})
 	}

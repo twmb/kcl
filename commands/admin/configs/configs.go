@@ -2,8 +2,11 @@
 package configs
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strconv"
@@ -130,13 +133,13 @@ causes the broker to reload its password files and allows for setting password
 fields.
 `,
 
-		Example: `alter foo -s cleanup.policy=compact --delete preallocate
+		Example: `kcl config alter foo -s cleanup.policy=compact --delete preallocate
 
-alter foo --dry-run --type topic --set preallocate=true --delete cleanup.policy
+kcl config alter foo --dry-run --type topic --set preallocate=true --delete cleanup.policy
 
-alter my-share-group -tg -s share.auto.offset.reset=earliest
+kcl config alter my-share-group -tg -s share.auto.offset.reset=earliest
 
-alter my-subscription -tcm -s match=[client_software_name=kcl]`,
+kcl config alter my-subscription -tcm -s match=[client_software_name=kcl]`,
 
 		RunE: func(_ *cobra.Command, args []string) error {
 			return cfger.alter(args)
@@ -285,16 +288,20 @@ func (c *cfger) alterIncremental() error {
 	}
 	resp := kresp.(*kmsg.IncrementalAlterConfigsResponse)
 
-	table := out.NewFormattedTable(c.cl.Format(), "config.alter", 1, "results",
+	table := out.NewFormattedTable(c.cl.Format(), c.cl.Command(), 1, "results",
 		"RESOURCE", "ERROR", "ERROR-MESSAGE")
+	anyErr := false
 	for _, resource := range resp.Resources {
-		errMsg := ""
-		if resource.ErrorMessage != nil {
-			errMsg = *resource.ErrorMessage
+		errName, errMsg := alterError(resource.ErrorCode, resource.ErrorMessage)
+		if resource.ErrorCode != 0 {
+			anyErr = true
 		}
-		table.Row(resource.ResourceName, resource.ErrorCode, errMsg)
+		table.Row(resource.ResourceName, errName, errMsg)
 	}
 	table.Flush()
+	if anyErr {
+		return out.ErrSilent
+	}
 	return nil
 }
 
@@ -326,17 +333,37 @@ func (c *cfger) alterOld() error {
 	}
 	resp := kresp.(*kmsg.AlterConfigsResponse)
 
-	table := out.NewFormattedTable(c.cl.Format(), "config.alter", 1, "results",
+	table := out.NewFormattedTable(c.cl.Format(), c.cl.Command(), 1, "results",
 		"RESOURCE", "ERROR", "ERROR-MESSAGE")
+	anyErr := false
 	for _, resource := range resp.Resources {
-		errMsg := ""
-		if resource.ErrorMessage != nil {
-			errMsg = *resource.ErrorMessage
+		errName, errMsg := alterError(resource.ErrorCode, resource.ErrorMessage)
+		if resource.ErrorCode != 0 {
+			anyErr = true
 		}
-		table.Row(resource.ResourceName, resource.ErrorCode, errMsg)
+		table.Row(resource.ResourceName, errName, errMsg)
 	}
 	table.Flush()
+	if anyErr {
+		return out.ErrSilent
+	}
 	return nil
+}
+
+// alterError renders one alter response resource into the ERROR and
+// ERROR-MESSAGE columns. A clean resource is OK, matching topic create. A
+// failed one names the code rather than printing the number, and falls back
+// to the error description when the broker attaches no message of its own.
+func alterError(code int16, brokerMsg *string) (string, string) {
+	if code == 0 {
+		return "OK", ""
+	}
+	e := kerr.TypedErrorForCode(code)
+	msg := e.Description
+	if brokerMsg != nil {
+		msg = *brokerMsg
+	}
+	return e.Message, msg
 }
 
 // confirmAlterLoss prompts for yes or no when issuing alter configs
@@ -384,21 +411,40 @@ func (c *cfger) confirmAlterLoss() error {
 		}
 		fmt.Fprintln(os.Stderr)
 
-		for {
-			fmt.Fprint(os.Stderr, "[y]es|[n]o > ")
-			var s string
-			fmt.Scanf("%s", &s)
-			switch s {
-			case "y", "yes":
-				return nil
-			case "n", "no":
-				return fmt.Errorf("aborting")
-			default:
-				fmt.Fprintf(os.Stderr, "unrecognized input %q, valid options are y, yes, n, no\n", s)
-			}
-		}
+		return promptAlterLoss(os.Stdin, os.Stderr)
 	}
 	return nil
+}
+
+// promptAlterLoss asks whether to proceed, rereading r until the answer is
+// recognized. EOF and a read error both abort: a non-interactive stdin cannot
+// answer, and looping on it spins forever.
+func promptAlterLoss(r io.Reader, w io.Writer) error {
+	br := bufio.NewReader(r)
+	for {
+		fmt.Fprint(w, "[y]es|[n]o > ")
+		line, err := br.ReadString('\n')
+		if err != nil && line == "" {
+			fmt.Fprintln(w, "Aborting.")
+			if errors.Is(err, io.EOF) {
+				return out.ErrSilent
+			}
+			return out.Errf(out.ExitError, "unable to read stdin: %v", err)
+		}
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "y", "yes":
+			return nil
+		case "n", "no":
+			fmt.Fprintln(w, "Aborting.")
+			return out.ErrSilent
+		default:
+			fmt.Fprintf(w, "unrecognized input %q, valid options are y, yes, n, no\n", strings.TrimSpace(line))
+		}
+		if err != nil {
+			fmt.Fprintln(w, "Aborting.")
+			return out.ErrSilent
+		}
+	}
 }
 
 // issues a describe config for a single resource and returns
@@ -450,7 +496,8 @@ func describeCommand(cl *client.Client) *cobra.Command {
 Describe configurations (Kafka 0.11.0+).
 
 This command prints all key/value config values for a given entity. Read only
-keys are suffixed with *.
+keys are suffixed with * in text. In JSON and awk the key is the key and a
+read_only field says whether it is read only.
 
 Describing requires specifying the "entity type":
   t,  topic           topic configuration
@@ -463,15 +510,15 @@ When describing brokers, if no broker ID is used, only dynamic (manually set)
 key/value pairs are printed. If you wish to describe the full config for a
 specific broker, be sure to pass a broker ID.
 `,
-		Example: `describe foo -tt
+		Example: `kcl config describe foo -tt
 
-describe 1 -tb
+kcl config describe 1 -tb
 
-describe --type broker // prints all dynamic broker key/value pairs
+kcl config describe --type broker   # every dynamic broker key/value pair
 
-describe my-share-group -tg
+kcl config describe my-share-group -tg
 
-describe my-subscription -tcm`,
+kcl config describe my-subscription -tcm`,
 
 		RunE: func(_ *cobra.Command, args []string) error {
 			if err := q.parseEntity(args); err != nil {
@@ -488,17 +535,24 @@ describe my-subscription -tcm`,
 				return kvs[i].Name < kvs[j].Name
 			})
 
-			var table *out.FormattedTable
-			if resp.Version >= 3 && withTypes {
-				table = out.NewFormattedTable(cl.Format(), "config.describe", 1, "configs",
-					"KEY", "TYPE", "VALUE", "SOURCE")
-			} else {
-				table = out.NewFormattedTable(cl.Format(), "config.describe", 1, "configs",
-					"KEY", "VALUE", "SOURCE")
+			// Text marks a read only key by suffixing the key with a
+			// star, which is fine to read and awful to match on. JSON
+			// and awk get the key itself and a READ-ONLY column, so
+			// that a script grepping for broker.id finds it.
+			text := cl.Format() == out.FormatText
+			withTypes := withTypes && resp.Version >= 3
+			headers := []string{"KEY"}
+			if withTypes {
+				headers = append(headers, "TYPE")
 			}
+			headers = append(headers, "VALUE", "SOURCE")
+			if !text {
+				headers = append(headers, "READ-ONLY")
+			}
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "configs", headers...)
 			for _, kv := range kvs {
 				key := kv.Name
-				if kv.ReadOnly {
+				if kv.ReadOnly && text {
 					key += "*"
 				}
 				val := "(null)"
@@ -509,11 +563,15 @@ describe my-subscription -tcm`,
 					val = "(sensitive)"
 				}
 
-				if resp.Version >= 3 && withTypes {
-					table.Row(key, kv.ConfigType, val, kv.Source)
-				} else {
-					table.Row(key, val, kv.Source)
+				row := []any{key}
+				if withTypes {
+					row = append(row, kv.ConfigType)
 				}
+				row = append(row, val, kv.Source)
+				if !text {
+					row = append(row, kv.ReadOnly)
+				}
+				table.Row(row...)
 			}
 			table.Flush()
 

@@ -166,6 +166,7 @@ type Client struct {
 	asVersion string
 	asJSON    bool
 	format    string
+	command   string // the running command, for _command on a config error
 
 	// config options parsed and filled on load
 	defaultCfgPath   string
@@ -194,16 +195,27 @@ func (c *Client) dieFormat() string {
 	return out.FormatText
 }
 
+// SetCommand records which command is running, so that a client failure
+// reports the same _command a success from that command would. The client
+// loads lazily, inside the command, so by the time one of these fires we know
+// what was asked for. It stays empty for a failure at the bare root.
+func (c *Client) SetCommand(name string) { c.command = name }
+
+// Command is the dotted command path the running command carries as
+// _command, "topic.list" for "kcl topic list". A command passes this where it
+// prints, so that what it prints on success and what the client prints on
+// failure name the same command.
+func (c *Client) Command() string { return c.command }
+
 // die reports a configuration or client failure in the output format and
-// exits with code. These happen while the client loads, before any command
-// runs, so they carry no _command.
+// exits with code.
 func (c *Client) die(code int, msg string, args ...any) {
 	c.dieErr(out.Errf(code, msg, args...))
 }
 
 // dieErr reports err, exiting with the code err carries, or 1.
 func (c *Client) dieErr(err error) {
-	out.HandleError(err, c.dieFormat(), "")
+	out.HandleError(err, c.dieFormat(), c.command)
 }
 
 // Format returns the output format: "text", "json", or "awk".
@@ -212,7 +224,7 @@ func (c *Client) Format() string {
 	switch c.format {
 	case "text", "json", "awk":
 	default:
-		out.HandleError(out.Errf(out.ExitUsage, "invalid --format %q: must be text, json, or awk", c.format), out.FormatText, "")
+		out.HandleError(out.Errf(out.ExitUsage, "invalid --format %q: must be text, json, or awk", c.format), out.FormatText, c.command)
 	}
 	if c.format != "text" {
 		return c.format
@@ -299,6 +311,23 @@ func New(root *cobra.Command) *Client {
 	root.PersistentFlags().StringVarP(&c.profileName, "profile", "C", "", "use a specific config profile")
 	root.PersistentFlags().BoolVarP(&c.asJSON, "dump-json", "j", false, "dump response as json if supported")
 	root.PersistentFlags().MarkDeprecated("dump-json", "use --format json instead")
+
+	// -X help and -X list are answered here, after cobra has parsed the
+	// flags so that --format applies. The registry group has a persistent
+	// pre-run of its own, and cobra runs only the nearest one unless told
+	// to walk them all.
+	//
+	// Recording the command first matters: a bad -X key dies inside the
+	// client, and it reports the command we know from here rather than an
+	// error document with no _command. Every command reads it back with
+	// Command to name itself in what it prints.
+	cobra.EnableTraverseRunHooks = true
+	root.PersistentPreRun = func(cmd *cobra.Command, _ []string) {
+		c.SetCommand(out.CommandName(cmd.CommandPath()))
+		if c.MaybeXHelp() {
+			os.Exit(0)
+		}
+	}
 
 	return c
 }
@@ -566,10 +595,19 @@ type CfgKey struct {
 	hidden bool // an old name that only errors
 }
 
+// xListHeader labels the column the values are in, which the json and awk
+// forms do with the header EXAMPLE and the text form did not do at all: a
+// reader had no way to tell "dial_timeout=10s" from a setting in effect.
+const xListHeader = `KEY=EXAMPLE, one line per key. The value is an example of the shape the key
+takes; "kcl -X help" describes each key and names its default.
+
+`
+
 // XList renders every key as KEY=EXAMPLE, one per line, the short form of
 // -X help and the source for -X tab completion.
 func XList() string {
 	var b strings.Builder
+	b.WriteString(xListHeader)
 	for _, k := range CfgKeys() {
 		fmt.Fprintf(&b, "%s=%s\n", k.Name, k.Example)
 	}
@@ -594,7 +632,9 @@ A bool given bare is true (-X tls.insecure); =false or an empty value
 (-X sasl.pass=) unsets the key. A value may reference an environment
 variable as ${NAME}.
 
-"-X list" prints all keys and can be used with --format.
+"-X list" prints all keys and can be used with --format. The value printed
+with each key below is an example of its shape, not what kcl uses when you
+leave it unset; a key with a default names it in its description.
 `
 
 const xHelpTimeouts = `TIMEOUTS
@@ -657,7 +697,7 @@ func (c *Client) MaybeXHelp() bool {
 		return false
 	}
 	if c.Format() != out.FormatText {
-		table := out.NewFormattedTable(c.Format(), "keys", 1, "keys", "KEY", "TYPE", "EXAMPLE", "DESCRIPTION")
+		table := out.NewFormattedTable(c.Format(), c.command, 1, "keys", "KEY", "TYPE", "EXAMPLE", "DESCRIPTION")
 		for _, k := range CfgKeys() {
 			table.Row(k.Name, k.Type, k.Example, k.Desc)
 		}
@@ -839,7 +879,7 @@ func tlsKeys(prefix string, t cfgTable, tls func(*Cfg) *CfgTLS, what string) []C
 		str(prefix+".client_key_path", "/etc/kafka/client.key", "Client key, PEM, for mTLS.", t, func(c *Cfg) *string { return &tls(c).ClientKeyPath }),
 		str(prefix+".server_name", "kafka.example.com", "Name to verify the certificate against, if not the host dialed.", t, func(c *Cfg) *string { return &tls(c).ServerName }),
 		boolean(prefix+".insecure", "Skip certificate verification.", t, func(c *Cfg) *bool { return &tls(c).InsecureSkipVerify }),
-		str(prefix+".min_version", "1.3", "1.0, 1.1, 1.2, or 1.3. Default 1.2.", t, func(c *Cfg) *string { return &tls(c).MinVersion }),
+		str(prefix+".min_version", "1.2", "1.0, 1.1, 1.2, or 1.3. Default 1.2.", t, func(c *Cfg) *string { return &tls(c).MinVersion }),
 		list(prefix+".cipher_suites", "TLS_AES_128_GCM_SHA256,TLS_AES_256_GCM_SHA384", "Go cipher suite names, comma separated.", t, func(c *Cfg) *[]string { return &tls(c).CipherSuites }),
 		list(prefix+".curve_preferences", "X25519,P256", "Curve names, comma separated.", t, func(c *Cfg) *[]string { return &tls(c).CurvePreferences }),
 	}
@@ -848,9 +888,9 @@ func tlsKeys(prefix string, t cfgTable, tls func(*Cfg) *CfgTLS, what string) []C
 // cfgKeys is every -X key. CfgKeys sorts them for display.
 var cfgKeys = func() []CfgKey {
 	keys := []CfgKey{
-		list("seed_brokers", "host1:9092,host2:9092", "Brokers, comma separated. Default localhost:9092.", topTable, func(c *Cfg) *[]string { return &c.SeedBrokers }),
+		list("seed_brokers", "localhost:9092", "Brokers, comma separated. Default localhost:9092.", topTable, func(c *Cfg) *[]string { return &c.SeedBrokers }),
 		duration("broker_timeout", "5s", "Wire TimeoutMs on admin requests. Default 5s.", func(c *Cfg) **Duration { return &c.BrokerTimeout }),
-		duration("dial_timeout", "2s", "Bound on one TCP dial. Default 10s.", func(c *Cfg) **Duration { return &c.DialTimeout }),
+		duration("dial_timeout", "10s", "Bound on one TCP dial. Default 10s.", func(c *Cfg) **Duration { return &c.DialTimeout }),
 		duration("retry_timeout", "30s", "Bound on a request and its retries. Default 30s, 45s for group requests.", func(c *Cfg) **Duration { return &c.RetryTimeout }),
 		{Name: "timeout_ms", hidden: true, set: func(*Cfg, string) error {
 			return fmt.Errorf("timeout_ms was renamed to broker_timeout and now takes a Go duration (e.g. -X broker_timeout=5s); please update your config or -X flags")
@@ -877,7 +917,7 @@ var cfgKeys = func() []CfgKey {
 		str("sasl.pass", "${KAFKA_PASS}", "Password.", saslTable, func(c *Cfg) *string { return &c.SASL.Pass }),
 		boolean("sasl.is_token", "The password is a delegation token.", saslTable, func(c *Cfg) *bool { return &c.SASL.IsToken }),
 		table("registry", "Removes every registry.* key.", srTable),
-		list("registry.urls", "http://sr1:8081,http://sr2:8081", "Registry URLs, comma separated. Default http://localhost:8081.", srTable, func(c *Cfg) *[]string { return &c.SR.URLs }),
+		list("registry.urls", "http://localhost:8081", "Registry URLs, comma separated. Default http://localhost:8081.", srTable, func(c *Cfg) *[]string { return &c.SR.URLs }),
 		str("registry.user", "alice", "Basic auth user name.", srTable, func(c *Cfg) *string { return &c.SR.User }),
 		str("registry.pass", "${SR_PASS}", "Basic auth password.", srTable, func(c *Cfg) *string { return &c.SR.Pass }),
 		str("registry.bearer_token", "${SR_TOKEN}", "Bearer token, in place of basic auth.", srTable, func(c *Cfg) *string { return &c.SR.BearerToken }),

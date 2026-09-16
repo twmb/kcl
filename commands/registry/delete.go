@@ -57,7 +57,7 @@ irreversibly deletes the data.
 				if err := scl.DeleteSchema(ctx, subject, version, how); err != nil {
 					return dieErr("delete schema version", err)
 				}
-				tw := out.NewFormattedTable(cl.Format(), "registry.delete", 1, "deleted", "SUBJECT", "VERSION", "PERMANENT")
+				tw := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "deleted", "SUBJECT", "VERSION", "PERMANENT")
 				tw.Row(subject, versionString(version), permanent)
 				tw.Flush()
 				return nil
@@ -68,7 +68,7 @@ irreversibly deletes the data.
 			if err != nil {
 				return dieErr("delete subject", err)
 			}
-			tw := out.NewFormattedTable(cl.Format(), "registry.delete", 1, "deleted", "SUBJECT", "VERSION", "PERMANENT")
+			tw := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "deleted", "SUBJECT", "VERSION", "PERMANENT")
 			for _, v := range versions {
 				tw.Row(subject, v, permanent)
 			}

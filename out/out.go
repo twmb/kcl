@@ -50,8 +50,8 @@ func Errf(code int, format string, args ...any) error {
 var ErrSilent = &ExitCodeError{Code: ExitError, Err: errors.New("")}
 
 // HandleError formats an error for output and calls os.Exit. If format is
-// "json", the error is written as JSON to stdout, with _command and
-// _version as a success document has when command is not empty. Otherwise
+// "json", the error is written as JSON to stdout, carrying _version and, when
+// command is not empty, the _command a success document would have. Otherwise
 // it is written as plain text to stderr. The exit code is extracted from
 // ExitCodeError if present, otherwise defaults to 1. ErrSilent exits
 // non-zero without printing anything.
@@ -78,18 +78,30 @@ func ExitCode(err error) int {
 	return ExitError
 }
 
-// ErrorDoc is the JSON document for err. It carries _command and _version
-// like a success document when command is not empty.
+// ErrorDoc is the JSON document for err. Every error carries _version, and
+// _command as well whenever we know which command was asked for; only a
+// failure at the bare root does not.
 func ErrorDoc(err error, command string) map[string]any {
 	doc := map[string]any{
-		"error": err.Error(),
-		"code":  ExitCode(err),
+		"_version": 1,
+		"error":    err.Error(),
+		"code":     ExitCode(err),
 	}
 	if command != "" {
 		doc["_command"] = command
-		doc["_version"] = 1
 	}
 	return doc
+}
+
+// CommandName is the _command a document carries, the dotted path of the
+// command under kcl: "topic.list" for "kcl topic list", and "" for kcl
+// itself. Pass cobra's CommandPath.
+//
+// Every document names the command it came from this way, rather than each
+// call site typing a name of its own: "kcl topic list" used to say
+// metadata.topics when it worked and topic.list when it failed.
+func CommandName(path string) string {
+	return strings.ReplaceAll(strings.TrimSpace(strings.TrimPrefix(path, "kcl")), " ", ".")
 }
 
 // MaybeDie, if err is non-nil, prints the message and exits with 1.

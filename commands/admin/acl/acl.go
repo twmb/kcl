@@ -130,7 +130,6 @@ Note that if combining with delegation tokens, you do not create ACLs for the
 delegation token ID. The principal of the client using the token is the same
 as the principal of the user that created the token.
 `,
-		Args: cobra.ExactArgs(0),
 	}
 
 	cmd.AddCommand(
@@ -217,7 +216,7 @@ SEE ALSO:
 				return fmt.Errorf("%s%s", err, additional)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "acl.list", 1, "acls",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "acls",
 				"TYPE", "NAME", "PATTERN", "PRINCIPAL", "HOST", "OPERATION", "PERMISSION")
 			for _, resource := range resp.Resources {
 				for _, acl := range resource.ACLs {
@@ -459,13 +458,13 @@ SEE ALSO:
 			if len(resp.Results) != len(req.Creations) {
 				fmt.Fprintf(os.Stderr, "Kafka replied with only %d responses to our %d creations! Dumping response as JSON...",
 					len(resp.Results), len(req.Creations))
-				out.MarshalJSON("acl.create", 1, map[string]any{
+				out.MarshalJSON(cl.Command(), 1, map[string]any{
 					"response": kresp,
 				})
 				return nil
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "acl.create", 1, "results",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
 				"TYPE", "NAME", "PATTERN", "PRINCIPAL", "HOST", "OPERATION", "PERMISSION", "ERROR", "ERROR-MSG")
 			for i, result := range resp.Results {
 				errStr, errMsg := "OK", ""
@@ -493,7 +492,7 @@ SEE ALSO:
 		},
 	}
 
-	// Primary flags — the ergonomic interface.
+	// Primary flags: the ergonomic interface.
 	cmd.Flags().StringArrayVar(&allowPrincipals, "allow-principal", nil, "principal to allow (repeatable)")
 	cmd.Flags().StringArrayVar(&denyPrincipals, "deny-principal", nil, "principal to deny (repeatable)")
 	cmd.Flags().StringArrayVar(&allowHosts, "allow-host", nil, "host to allow from (repeatable; default '*')")
@@ -507,7 +506,7 @@ SEE ALSO:
 	cmd.Flags().StringVar(&pattern, "pattern", "literal", "resource pattern type: literal or prefixed (Kafka 2.0.0+)")
 	cmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "preview ACLs that would be created without creating them")
 
-	// Deprecated flags — hidden, still work.
+	// Deprecated flags: hidden, and they still work.
 	cmd.Flags().StringArrayVar(&oldTypes, "type", nil, "")
 	cmd.Flags().StringArrayVar(&oldNames, "name", nil, "")
 	cmd.Flags().StringArrayVar(&oldPrincipals, "principal", nil, "")
@@ -567,10 +566,10 @@ there, or --yes/-y to skip the prompt entirely.
 For more detailed information about ACLs, read kcl acl --help.
 `,
 
-		Example: `kcl acl delete                                # every ACL, after confirming
-  kcl acl delete --topic foo                     # all ACLs for topic foo
-  kcl acl delete --cluster --principal User:old  # all cluster ACLs for a principal
-  kcl acl delete --topic foo --dry-run           # show the matches, delete nothing`,
+		Example: `kcl acl delete                                 # every ACL, after confirming
+kcl acl delete --topic foo                     # all ACLs for topic foo
+kcl acl delete --cluster --principal User:old  # all cluster ACLs for a principal
+kcl acl delete --topic foo --dry-run           # show the matches, delete nothing`,
 		Args: cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
 			if err := validateFilters(resourceType, resourcePattern, operation, permission); err != nil {
@@ -615,7 +614,7 @@ For more detailed information about ACLs, read kcl acl --help.
 				if cl.Format() != "json" {
 					fmt.Fprintln(os.Stderr, "Dry run: the following ACLs would be deleted:")
 				}
-				table := out.NewFormattedTable(cl.Format(), "acl.delete-dry-run", 1, "acls",
+				table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "acls",
 					"TYPE", "NAME", "PATTERN", "PRINCIPAL", "HOST", "OPERATION", "PERMISSION")
 				for _, resource := range resp.Resources {
 					for _, acl := range resource.ACLs {
@@ -722,7 +721,7 @@ For more detailed information about ACLs, read kcl acl --help.
 				return fmt.Errorf("%s%s", err, additional)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "acl.delete", 1, "deleted",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "deleted",
 				"TYPE", "NAME", "PATTERN", "PRINCIPAL", "HOST", "OPERATION", "PERMISSION", "ERROR", "ERROR-MSG")
 			for _, acl := range result.MatchingACLs {
 				errStr, errMsg := "OK", ""
