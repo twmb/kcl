@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -263,5 +264,70 @@ func TestReadSchemaMissingFile(t *testing.T) {
 	const want = "unable to read schema file NOPE: no such file or directory"
 	if got := err.Error(); got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestAWKText(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		in   string
+		exp  string
+	}{
+		{"one line stays as it is", `{"type":"record"}`, `{"type":"record"}`},
+		{"newlines", "a\nb\n", `a\nb\n`},
+		{"tabs", "a\tb", `a\tb`},
+		{"carriage return", "a\r\nb", `a\r\nb`},
+		{"a backslash first", `a\nb`, `a\\nb`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := awkText(test.in); got != test.exp {
+				t.Errorf("awkText(%q) = %q != exp %q", test.in, got, test.exp)
+			}
+		})
+	}
+}
+
+// TestRegistryAWKShapes pins that awk is one row per command: "schema get"
+// answers the schema's id, version, type, and text rather than the bare blob,
+// and "compatibility test" answers one word rather than a labeled line.
+func TestRegistryAWKShapes(t *testing.T) {
+	reg := srfake.New()
+	t.Cleanup(reg.Close)
+	url := reg.URL()
+
+	multiline := "{\n\t\"type\":\"record\",\n\t\"name\":\"User\",\n\t\"fields\":[{\"name\":\"id\",\"type\":\"string\"}]\n}"
+	schemaFile := writeSchema(t, multiline)
+	if _, err := runJSON(t, url, "schema", "create", "awk-value", "-s", schemaFile); err != nil {
+		t.Fatalf("schema create: %v", err)
+	}
+
+	got, err := runText(t, url, "schema", "get", "awk-value", "--format", "awk")
+	if err != nil {
+		t.Fatalf("schema get: %v", err)
+	}
+	if strings.Count(got, "\n") != 1 {
+		t.Errorf("schema get awk spans lines: %q", got)
+	}
+	fields := strings.Split(strings.TrimSuffix(got, "\n"), "\t")
+	if len(fields) != 4 {
+		t.Fatalf("schema get awk = %d fields, want id, version, type, schema: %q", len(fields), got)
+	}
+	if fields[1] != "1" || fields[2] != "AVRO" {
+		t.Errorf("schema get awk version = %q, type = %q", fields[1], fields[2])
+	}
+	if !strings.Contains(fields[3], `\n`) || strings.Contains(fields[3], "\n") {
+		t.Errorf("schema get awk schema = %q, want the newlines escaped", fields[3])
+	}
+
+	// srfake is permissive, so this is the compatible answer.
+	got, err = runText(t, url, "compatibility", "test", "awk-value", "-s", schemaFile, "--format", "awk")
+	if err != nil {
+		t.Fatalf("compatibility test: %v", err)
+	}
+	if got != "true\n" {
+		t.Errorf("compatibility test awk = %q, want %q", got, "true\n")
+	}
+	if text, _ := runText(t, url, "compatibility", "test", "awk-value", "-s", schemaFile); text != "compatible: true\n" {
+		t.Errorf("compatibility test text = %q", text)
 	}
 }

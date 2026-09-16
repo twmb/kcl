@@ -5,6 +5,70 @@ output is for people and may change between releases without an entry here;
 `--format awk` is the stable scripting contract. Entries cover `--format
 json` and any `text` change worth calling out.
 
+## `--format awk` is one shape per command
+
+Three commands answered `--format awk` with something other than TSV rows.
+
+`topic describe` ended every partition row with a tab, because the ERROR
+column was empty and last. It now writes a dash there, and a dash in the
+`--stable` column for a partition with no stable offset, which is what the
+text column already showed. The column count is unchanged: 8, or 9 with
+`--stable`.
+
+Before:
+
+```
+$ kcl topic describe demo-avro --format awk | cat -A
+demo-avro^I0^I0^I0^I[0]^I[0]^I[]^I$
+```
+
+After:
+
+```
+$ kcl topic describe demo-avro --format awk | cat -A
+demo-avro^I0^I0^I0^I[0]^I[0]^I[]^I-$
+```
+
+`registry compatibility test` printed `compatible: true`, a label and a
+value. awk is the word alone, so that `[ "$(kcl ... --format awk)" = true ]`
+reads. `text` still prints the labeled line.
+
+Before:
+
+```
+$ kcl registry compatibility test demo-avro-value -s new.avsc --format awk
+compatible: true
+```
+
+After:
+
+```
+$ kcl registry compatibility test demo-avro-value -s new.avsc --format awk
+true
+```
+
+`registry schema get` printed the schema text alone, the same bytes `text`
+prints. awk is one row: id, version, type, schema text. A schema spanning
+lines, a .proto for instance, has its newlines, tabs, and backslashes written
+as `\n`, `\t` and `\\`, so the row stays one line. Version is a dash when you
+fetched by `--id`. Piping the schema itself is what `text` is for.
+
+Before:
+
+```
+$ kcl registry schema get demo-avro-value --format awk
+{"type":"record","name":"Demo","fields":[...]}
+```
+
+After:
+
+```
+$ kcl registry schema get demo-avro-value --format awk
+1	1	AVRO	{"type":"record","name":"Demo","fields":[...]}
+$ kcl registry schema get demo-avro-value            # unchanged
+{"type":"record","name":"Demo","fields":[...]}
+```
+
 ## Numbers in `--format json` are JSON numbers
 
 Some columns reached JSON as the string of a number, so one document carried

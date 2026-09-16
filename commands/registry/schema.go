@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/spf13/cobra"
 
@@ -130,6 +131,11 @@ By default only the schema text is printed (so it can be piped). Use --meta to
 also print the subject/version/id/type to stderr. In JSON output format the
 full structured schema (including references) is always printed.
 
+--format awk prints one tab separated row: id, version, type, and the schema
+text. A schema spanning lines, a .proto for instance, has its newlines and
+tabs written as \n and \t so that the row stays one line. Version is a dash
+when you fetched by --id.
+
 EXAMPLES:
   kcl registry schema get mytopic-value
   kcl registry schema get mytopic-value -v 2 --meta
@@ -197,6 +203,15 @@ SEE ALSO:
 					fields["references"] = schema.References
 				}
 				out.MarshalJSON("registry.schema.get", 1, fields)
+				return nil
+			}
+
+			if cl.Format() == out.FormatAWK {
+				version := "-"
+				if haveSubjVers {
+					version = strconv.Itoa(outVersion)
+				}
+				fmt.Printf("%d\t%s\t%s\t%s\n", outID, version, schema.Type, awkText(schema.Schema))
 				return nil
 			}
 

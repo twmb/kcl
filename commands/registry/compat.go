@@ -92,7 +92,20 @@ Test whether a candidate schema is compatible with an existing subject version.
 The candidate schema is read from -s/--schema or stdin. --version selects which
 existing version to check against ("latest" by default, or "all" to check
 against every version). Exits non-zero if the schema is not compatible; pass
---verbose to have the registry explain why.`,
+--verbose to have the registry explain why.
+
+--format awk prints one word, true or false, and nothing else. The exit code
+says the same thing, so a script can read either.
+
+EXAMPLES:
+  kcl registry compatibility test foo-value -s new.avsc          # check the latest version
+  kcl registry compatibility test foo-value -s new.avsc -v all   # check every version
+  kcl registry compatibility test foo-value -s new.avsc --format awk
+
+SEE ALSO:
+  kcl registry compatibility get    the level a subject is checked at
+  kcl registry compatibility set    change that level
+`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			subject := args[0]
@@ -137,14 +150,22 @@ against every version). Exits non-zero if the schema is not compatible; pass
 				return dieErr("test compatibility", err)
 			}
 
-			if cl.Format() == out.FormatJSON {
+			switch cl.Format() {
+			case out.FormatJSON:
 				out.MarshalJSON("registry.compatibility.test", 1, map[string]any{
 					"subject":    subject,
 					"version":    versionString(version),
 					"compatible": res.Is,
 					"messages":   res.Messages,
 				})
-			} else {
+			case out.FormatAWK:
+				// One word, so that "if [ $(kcl ... --format awk) =
+				// true ]" reads. The label belongs to text.
+				fmt.Printf("%v\n", res.Is)
+				for _, m := range res.Messages {
+					fmt.Fprintln(os.Stderr, m)
+				}
+			default:
 				fmt.Printf("compatible: %v\n", res.Is)
 				for _, m := range res.Messages {
 					fmt.Fprintln(os.Stderr, m)

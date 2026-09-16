@@ -40,7 +40,12 @@ func topicDescribeCommand(cl *client.Client) *cobra.Command {
 Describe topics showing summary, partitions, and optionally configs.
 
 By default in text mode, shows all sections. Use --section to select one.
-AWK mode defaults to partitions. JSON always includes all sections.
+JSON always includes all sections.
+
+--format awk prints the partition rows and nothing else: one row per
+partition, no headers, and a dash in a column we have no value for. The
+configs a topic runs with come from "kcl config describe TOPIC -tt", or from
+--section configs here.
 
 Health filters show only partitions matching the condition.
 
@@ -366,12 +371,16 @@ SEE ALSO:
 						)
 					case "partitions":
 						for _, p := range d.partitions {
-							errStr := ""
+							// Every column carries a value so that a
+							// row never ends in a tab: a dash is what
+							// the text columns already show for a
+							// value we do not have.
+							errStr := "-"
 							if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
 								errStr = err.Error()
 							}
 							if stable {
-								so := ""
+								so := "-"
 								if m, ok := stableOffsets[topicName]; ok {
 									if v, ok := m[p.Partition]; ok {
 										so = fmt.Sprintf("%d", v)
