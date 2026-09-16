@@ -194,7 +194,7 @@ func TestXCompletionRegistered(t *testing.T) {
 		t.Fatal("no completion registered for -X")
 	}
 	got, _ := f(root, nil, "")
-	if len(got) == 0 || got[0] != "broker_timeout=\t5s" || !slices.Contains(got, "seed_brokers=\thost1:9092,host2:9092") {
+	if len(got) == 0 || got[0] != "broker_timeout=\t5s" || !slices.Contains(got, "seed_brokers=\tlocalhost:9092") {
 		t.Errorf("completions = %v", got)
 	}
 }
