@@ -97,7 +97,8 @@ method's own return value rather than kcl's output.
 
 A method that takes a context, WaitGroupStable being one, gets the request's
 context from the endpoint rather than an argument from you, so it blocks
-until what it waits for happens; --timeout bounds how long that is.
+until what it waits for happens; --timeout bounds how long that is, and
+--timeout 0 waits as long as it takes.
 
 EXAMPLES:
   kcl fake control call ShufflePartitionLeaders
@@ -147,7 +148,7 @@ SEE ALSO:
 	// as pflag is concerned, and "unknown shorthand flag: '1' in -1" does
 	// not tell you what to do about it. We add that, then hand the error to
 	// whoever handles ours, which is what gives it exit code 2.
-	cmd.Flags().DurationVar(&timeout, "timeout", 0, "how long to wait for a method that takes a context (default: no limit)")
+	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Second, "how long to wait for a method that takes a context (0 is no limit)")
 	cmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
 		err = dashArgHint(err)
 		if p := c.Parent(); p != nil {
