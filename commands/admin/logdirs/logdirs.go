@@ -110,11 +110,11 @@ which allows you to control whether you are asking for information about
 replicas vs. the leader.
 `,
 
-		Example: `describe foo:1,2,3 bar:3,4,5
+		Example: `kcl logdirs describe foo:1,2,3 bar:3,4,5
 
-describe foo
+kcl logdirs describe foo
 
-describe // describes all`,
+kcl logdirs describe   # describes all`,
 
 		RunE: func(_ *cobra.Command, topics []string) error {
 			var req kmsg.DescribeLogDirsRequest
@@ -314,7 +314,7 @@ You can direct this request to specific brokers with the --broker argument,
 which allows you to alter replicas.
 `,
 
-		Example: `alter foo:1,2,3=/dir bar:6=/dir2 baz:9=/dir`,
+		Example: `kcl logdirs alter foo:1,2,3=/dir bar:6=/dir2 baz:9=/dir`,
 
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, topics []string) error {

@@ -76,7 +76,7 @@ type, the client uses "User", which is the only type that exists in Kafka's
 SimpleAuthorizer.
 `,
 
-		Example: "create -r admin1 -r User:admin2",
+		Example: "kcl dtoken create -r admin1 -r User:admin2",
 		Args:    cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
 			req := &kmsg.CreateDelegationTokenRequest{
@@ -128,7 +128,7 @@ func renewTokenCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "renew",
 		Short:   "Renew a delegation token (Kafka 1.1.0+).",
-		Example: "renew [base64 hmac here]",
+		Example: "kcl dtoken renew [base64 hmac here]",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			decoded, err := base64.StdEncoding.DecodeString(args[0])
@@ -168,7 +168,7 @@ func expireTokenCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "expire",
 		Short:   "Change a delegation token expiry time (Kafka 1.1.0+).",
-		Example: "expire [base64 hmac here]",
+		Example: "kcl dtoken expire [base64 hmac here]",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			decoded, err := base64.StdEncoding.DecodeString(args[0])
@@ -209,9 +209,9 @@ func describeTokensCommand(cl *client.Client) *cobra.Command {
 		Use:     "describe",
 		Aliases: []string{"d"},
 		Short:   "Describe delegation tokens (Kafka 1.1.0+).",
-		Example: ` describe // to display all tokens
+		Example: `kcl dtoken describe                  # every token
 
-describe -o User:admin // to display tokens owned by the admin user`,
+kcl dtoken describe -o User:admin    # tokens the admin user owns`,
 		Args: cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
 			req := new(kmsg.DescribeDelegationTokenRequest)

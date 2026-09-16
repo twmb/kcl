@@ -82,7 +82,7 @@ topic and 1,2,3 are partition numbers.
 
 Use --dry-run to preview without applying.
 `,
-		Example: "elect-leaders foo:1,2,3 bar:9",
+		Example: "kcl cluster elect-leaders foo:1,2,3 bar:9",
 		RunE: func(_ *cobra.Command, topicParts []string) error {
 			tps, err := flagutil.ParseTopicPartitions(topicParts)
 			if err != nil {

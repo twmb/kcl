@@ -56,7 +56,7 @@ The information printed:
   TXN START OFFSET     The first offset of the transaction.
 
 `,
-		Example: "describe-producers foo:1,2,3 bar:0",
+		Example: "kcl txn describe-producers foo:1,2,3 bar:0",
 		Args:    cobra.MinimumNArgs(1),
 
 		RunE: func(_ *cobra.Command, _ []string) error {

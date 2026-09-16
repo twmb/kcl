@@ -133,13 +133,13 @@ causes the broker to reload its password files and allows for setting password
 fields.
 `,
 
-		Example: `alter foo -s cleanup.policy=compact --delete preallocate
+		Example: `kcl config alter foo -s cleanup.policy=compact --delete preallocate
 
-alter foo --dry-run --type topic --set preallocate=true --delete cleanup.policy
+kcl config alter foo --dry-run --type topic --set preallocate=true --delete cleanup.policy
 
-alter my-share-group -tg -s share.auto.offset.reset=earliest
+kcl config alter my-share-group -tg -s share.auto.offset.reset=earliest
 
-alter my-subscription -tcm -s match=[client_software_name=kcl]`,
+kcl config alter my-subscription -tcm -s match=[client_software_name=kcl]`,
 
 		RunE: func(_ *cobra.Command, args []string) error {
 			return cfger.alter(args)
@@ -509,15 +509,15 @@ When describing brokers, if no broker ID is used, only dynamic (manually set)
 key/value pairs are printed. If you wish to describe the full config for a
 specific broker, be sure to pass a broker ID.
 `,
-		Example: `describe foo -tt
+		Example: `kcl config describe foo -tt
 
-describe 1 -tb
+kcl config describe 1 -tb
 
-describe --type broker // prints all dynamic broker key/value pairs
+kcl config describe --type broker   # every dynamic broker key/value pair
 
-describe my-share-group -tg
+kcl config describe my-share-group -tg
 
-describe my-subscription -tcm`,
+kcl config describe my-subscription -tcm`,
 
 		RunE: func(_ *cobra.Command, args []string) error {
 			if err := q.parseEntity(args); err != nil {

@@ -91,7 +91,7 @@ feature. Set VERSION to 0 to delete a feature flag.
 
 Use --dry-run to preview without applying.
 `,
-		Example: "update metadata.version=17",
+		Example: "kcl cluster features update metadata.version=17",
 		Args:    cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			var upgrade int8

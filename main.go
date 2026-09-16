@@ -191,11 +191,6 @@ Command completion is available at:
 		cmd.SilenceErrors = true
 		// We do not want extra [flags] on every command.
 		cmd.DisableFlagsInUseLine = true
-
-		if cmd.HasParent() {
-			name := strings.Split(cmd.Use, " ")[0]
-			cmd.Example = strings.ReplaceAll(cmd.Example, name, cmd.Parent().CommandPath()+" "+name)
-		}
 	})
 
 	root.SetUsageTemplate(usageTmpl)

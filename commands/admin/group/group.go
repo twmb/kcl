@@ -201,7 +201,7 @@ with a JSON file:
 
   [{"topic": "foo", "partition": 1}, {"topic": "bar", "partition": 0}]
 `,
-		Example: "offset-delete mygroup -t foo:1,2,3 -t bar:9",
+		Example: "kcl group offset-delete mygroup -t foo:1,2,3 -t bar:9",
 		Args:    cobra.ExactArgs(1),
 
 		RunE: func(_ *cobra.Command, args []string) error {

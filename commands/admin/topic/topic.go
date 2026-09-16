@@ -397,9 +397,9 @@ in one value is the same as -a 1,2 -a 3,1. Each new partition must have as
 many replicas as the existing ones.
 `,
 
-		Example: `add-partitions foo -n 3                  # three more, broker places replicas
-add-partitions foo --total 12            # up to twelve; nothing to do if already there
-add-partitions foo -a 1,2 -a 3,1 -a 2,3  # three more, on brokers 1+2, 3+1, 2+3`,
+		Example: `kcl topic add-partitions foo -n 3                  # three more, broker places replicas
+kcl topic add-partitions foo --total 12            # up to twelve; nothing to do if already there
+kcl topic add-partitions foo -a 1,2 -a 3,1 -a 2,3  # three more, on brokers 1+2, 3+1, 2+3`,
 
 		Args: cobra.ArbitraryArgs,
 		RunE: func(_ *cobra.Command, args []string) error {

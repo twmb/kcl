@@ -566,10 +566,10 @@ there, or --yes/-y to skip the prompt entirely.
 For more detailed information about ACLs, read kcl acl --help.
 `,
 
-		Example: `kcl acl delete                                # every ACL, after confirming
-  kcl acl delete --topic foo                     # all ACLs for topic foo
-  kcl acl delete --cluster --principal User:old  # all cluster ACLs for a principal
-  kcl acl delete --topic foo --dry-run           # show the matches, delete nothing`,
+		Example: `kcl acl delete                                 # every ACL, after confirming
+kcl acl delete --topic foo                     # all ACLs for topic foo
+kcl acl delete --cluster --principal User:old  # all cluster ACLs for a principal
+kcl acl delete --topic foo --dry-run           # show the matches, delete nothing`,
 		Args: cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
 			if err := validateFilters(resourceType, resourcePattern, operation, permission); err != nil {

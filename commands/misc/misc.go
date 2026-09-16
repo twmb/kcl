@@ -446,7 +446,7 @@ If --with-epochs is true, the start and end offsets will have /### following
 the offset number, where ### corresponds to the broker epoch at that given
 offset.
 `,
-		Example: "list-offsets foo:1,2,3 bar:0",
+		Example: "kcl misc list-offsets foo:1,2,3 bar:0",
 		RunE: func(_ *cobra.Command, topicParts []string) error {
 			tps, err := loadTopicParts(cl, topicParts)
 			if err != nil {
@@ -675,7 +675,7 @@ This is an advanced command strictly for debugging purposes. To discover what
 it does, read the documentation for kmsg.OffsetForLeaderEpochRequest.
 `,
 
-		Example: "offset-for-leader-epoch foo bar biz:0,1,2",
+		Example: "kcl misc offset-for-leader-epoch foo bar biz:0,1,2",
 		RunE: func(_ *cobra.Command, topicParts []string) error {
 			tps, err := loadTopicParts(cl, topicParts)
 			if err != nil {

@@ -25,7 +25,7 @@ Delete share group offsets for topics (KIP-932, Kafka 4.0+).
 The group must be empty (no active consumers). This deletes all offset state
 for the specified topics within the share group.
 `,
-		Example: "offset-delete mygroup -t foo -t bar",
+		Example: "kcl share-group offset-delete mygroup -t foo -t bar",
 		Args:    cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			group := args[0]

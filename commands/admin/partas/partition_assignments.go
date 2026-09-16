@@ -44,7 +44,7 @@ need to quote your input to the flag.
 If a replica list is empty for a specific partition, this cancels any active
 reassignment for that partition.
 `,
-		Example: "alter 'foo:1->1,2,3' 'bar:2->3,4,5;5->3,4,5'",
+		Example: "kcl reassign alter 'foo:1->1,2,3' 'bar:2->3,4,5;5->3,4,5'",
 		RunE: func(_ *cobra.Command, topicPartReplicas []string) error {
 			tprs, err := flagutil.ParseTopicPartitionReplicas(topicPartReplicas)
 			if err != nil {
@@ -121,7 +121,7 @@ which partitions are currently being reassigned.
 At least one topic:partitions must be given; this does not cancel everything at
 once by default.
 `,
-		Example: "cancel 'foo:1,2,3' 'bar:0'",
+		Example: "kcl reassign cancel 'foo:1,2,3' 'bar:0'",
 		Args:    cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, topicParts []string) error {
 			tps, err := flagutil.ParseTopicPartitions(topicParts)

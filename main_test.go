@@ -299,3 +299,43 @@ func TestGroupsNameAnUnknownSubcommand(t *testing.T) {
 		}
 	})
 }
+
+// TestExamplesArePasteable pins that every Example line is a command you can
+// paste. buildRoot used to rewrite the Example field, replacing the bare
+// command name with the full path, which doubled a path that was already
+// full ("kcl acl kcl acl delete --topic foo") and mangled any prose that
+// happened to contain the word ("kcl logdirs describes all").
+func TestExamplesArePasteable(t *testing.T) {
+	root, _ := buildRoot()
+	var checked int
+	var hidden func(*cobra.Command) bool
+	hidden = func(cmd *cobra.Command) bool {
+		return cmd.Hidden || cmd.HasParent() && hidden(cmd.Parent())
+	}
+	allCommands(root, func(cmd *cobra.Command) {
+		if cmd.Example == "" {
+			return
+		}
+		path := cmd.CommandPath()
+		for _, line := range strings.Split(cmd.Example, "\n") {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			checked++
+			if line != strings.TrimLeft(line, " \t") {
+				t.Errorf("%s: example is indented, so it does not paste: %q", path, line)
+			}
+			if !strings.HasPrefix(line, "kcl ") {
+				t.Errorf("%s: example does not start with kcl: %q", path, line)
+			}
+			// A hidden deprecated mirror carries the primary command's
+			// examples on purpose, and its deprecation notice names it.
+			if !hidden(cmd) && !strings.HasPrefix(line, path+" ") && line != path {
+				t.Errorf("%s: example is for another command: %q", path, line)
+			}
+		}
+	})
+	if checked == 0 {
+		t.Error("no examples found; the walk is not reaching them")
+	}
+}
