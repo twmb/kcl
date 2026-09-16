@@ -240,6 +240,30 @@ func TestControlHandler(t *testing.T) {
 		}
 	})
 
+	// A method that answers with a nil pointer found nothing. Handing back
+	// null and exiting 0 reads as success, so it is an error, and not a
+	// usage one: the call was fine.
+	t.Run("nil result", func(t *testing.T) {
+		code, got := call(t, "TopicInfo", "nosuch")
+		if code == http.StatusOK {
+			t.Fatalf("status = %d, want a failure (%v)", code, got)
+		}
+		if want := "TopicInfo nosuch: not found"; got["error"] != want {
+			t.Errorf("error = %v, want %q", got["error"], want)
+		}
+		if got["usage"] != nil {
+			t.Errorf("usage = %v, want unset", got["usage"])
+		}
+
+		code, got = call(t, "GroupInfo", "nosuch")
+		if code == http.StatusOK {
+			t.Fatalf("status = %d, want a failure (%v)", code, got)
+		}
+		if want := "GroupInfo nosuch: not found"; got["error"] != want {
+			t.Errorf("error = %v, want %q", got["error"], want)
+		}
+	})
+
 	t.Run("unknown method", func(t *testing.T) {
 		code, got := call(t, "Nope")
 		if code != http.StatusNotFound {

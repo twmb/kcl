@@ -142,6 +142,12 @@ func (m controlMethod) call(args []string) (any, error) {
 	case 0:
 		return nil, nil
 	case 1:
+		// kfake answers a topic, partition, or group it does not have with
+		// a nil pointer. Printing nothing and exiting 0 hides that, so we
+		// say what was not found and fail.
+		if v := outs[0]; v.Kind() == reflect.Pointer && v.IsNil() {
+			return nil, fmt.Errorf("%s: not found", strings.Join(append([]string{m.Name}, args...), " "))
+		}
 		return res[0], nil
 	default:
 		return res, nil
