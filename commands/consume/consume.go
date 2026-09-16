@@ -760,6 +760,14 @@ func (co *consumeOutput) consume() {
 			if pollDeadline && errors.Is(err, context.DeadlineExceeded) {
 				return
 			}
+			// Neither is our own cancellation. An interrupt, --num, and
+			// --timeout all stop by canceling the context the poll in
+			// flight is using, and that poll then returns the
+			// cancellation. Printing it said "fetch error [-1]: context
+			// canceled" on the way out of every interrupted consume.
+			if errors.Is(err, context.Canceled) && co.ctx.Err() != nil {
+				return
+			}
 			fmt.Fprintf(os.Stderr, "fetch error %s[%d]: %v\n", t, p, err)
 		})
 		var marks []*kgo.Record
