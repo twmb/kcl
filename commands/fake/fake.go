@@ -60,7 +60,9 @@ func Command() *cobra.Command {
 kcl fake runs a kfake cluster in-process and prints the listen addresses
 to stdout. By default it starts three brokers on 127.0.0.1 ports
 9092,9093,9094. Point any Kafka client at the printed addresses; SIGINT
-or SIGTERM exits cleanly.
+or SIGTERM exits cleanly. The addresses print once every listener is bound
+and any seeding is done, so a script can start its client as soon as it
+reads them.
 
 This is NOT a production broker. kfake implements the user-facing Kafka
 protocol surface (produce, fetch, groups, transactions, ACLs, share
@@ -271,10 +273,6 @@ Tune log verbosity for debugging:
 				return fmt.Errorf("unable to start fake cluster: %v", err)
 			}
 
-			for _, addr := range c.ListenAddrs() {
-				fmt.Println(addr)
-			}
-
 			if controlAddr != "" {
 				ln, err := net.Listen("tcp", controlAddr)
 				if err != nil {
@@ -335,6 +333,13 @@ Tune log verbosity for debugging:
 				if err := seedDemo(c.ListenAddrs(), registryURL); err != nil {
 					return fmt.Errorf("unable to seed demo data: %v", err)
 				}
+			}
+
+			// The addresses go out last, once every listener is bound
+			// and any seeding is done, so a script that starts its
+			// client on reading them finds everything ready.
+			for _, addr := range c.ListenAddrs() {
+				fmt.Println(addr)
 			}
 
 			sigs := make(chan os.Signal, 2)

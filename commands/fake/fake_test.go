@@ -1,10 +1,18 @@
 package fake
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json/v2"
+	"net"
+	"net/http"
 	"os"
+	"os/signal"
 	"reflect"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -429,5 +437,141 @@ func TestSASLEnvIndependence(t *testing.T) {
 	}
 	if got[0].user != "u" || got[0].pass != "p" {
 		t.Errorf("env expansion failed: %+v", got[0])
+	}
+}
+
+// freePort returns a port nothing is listening on, so the test knows where
+// the control endpoint and the registry will be before the cluster says so.
+func freePort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
+
+// The addresses on stdout are the signal that the cluster is ready: every
+// listener is bound and the demo data is seeded by the time they print, so
+// everything here runs once, with no retry.
+func TestFakeAddressesPrintLast(t *testing.T) {
+	control := freePort(t)
+	registry := freePort(t)
+
+	// kcl fake exits on an interrupt, and this keeps that interrupt from
+	// ending the test run with it.
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt)
+	defer signal.Stop(quit)
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+	defer func() { os.Stdout = orig }()
+
+	cmd := Command()
+	cmd.SetArgs([]string{
+		"--ports", "0",
+		"--control=127.0.0.1:" + strconv.Itoa(control),
+		"--registry-port", strconv.Itoa(registry),
+		"--seed-demo",
+	})
+	done := make(chan error, 1)
+	go func() { done <- cmd.Execute() }()
+
+	addrs := bufio.NewScanner(r)
+	if !addrs.Scan() {
+		t.Fatal("no address on stdout")
+	}
+	broker := addrs.Text()
+
+	// The control endpoint answers, first try.
+	resp, err := http.Get("http://127.0.0.1:" + strconv.Itoa(control) + "/methods")
+	if err != nil {
+		t.Fatalf("control endpoint at %d: %v", control, err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("control endpoint status %d", resp.StatusCode)
+	}
+
+	// The demo data is already seeded: the records are in the log by the
+	// time the addresses print, so the cluster answers for them at once.
+	body := bytes.NewReader([]byte(`{"args":["demo-plain"]}`))
+	resp, err = http.Post("http://127.0.0.1:"+strconv.Itoa(control)+"/call/PartitionInfos", "application/json", body)
+	if err != nil {
+		t.Fatalf("control endpoint at %d: %v", control, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PartitionInfos demo-plain: status %d", resp.StatusCode)
+	}
+	var infos struct {
+		Result []struct {
+			Partition     int32 `json:"Partition"`
+			HighWatermark int64 `json:"HighWatermark"`
+		} `json:"result"`
+	}
+	if err := json.UnmarshalRead(resp.Body, &infos); err != nil {
+		t.Fatal(err)
+	}
+	if len(infos.Result) == 0 {
+		t.Fatal("demo-plain has no partitions")
+	}
+	var total int64
+	for _, p := range infos.Result {
+		total += p.HighWatermark
+	}
+	if total != seedRecordCount {
+		t.Errorf("demo-plain holds %d records, want %d", total, seedRecordCount)
+	}
+
+	// So does the registry.
+	resp, err = http.Get("http://127.0.0.1:" + strconv.Itoa(registry) + "/subjects")
+	if err != nil {
+		t.Fatalf("registry at %d: %v", registry, err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("registry status %d", resp.StatusCode)
+	}
+
+	// And the demo records are already there.
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(broker),
+		kgo.ConsumeTopics("demo-plain"),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	fs := cl.PollRecords(ctx, 1)
+	if err := fs.Err(); err != nil {
+		t.Fatalf("consuming demo-plain: %v", err)
+	}
+	if fs.NumRecords() != 1 {
+		t.Errorf("consumed %d records from demo-plain, want 1", fs.NumRecords())
+	}
+
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGINT); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("kcl fake: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Error("kcl fake did not exit on an interrupt")
 	}
 }
