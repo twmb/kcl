@@ -26,6 +26,7 @@ func describeCommand(cl *client.Client) *cobra.Command {
 		section             string
 		regex               bool
 		lagExpr             string
+		by                  string
 	)
 
 	cmd := &cobra.Command{
@@ -47,14 +48,30 @@ Use --section to show only a specific part:
 In awk format, every lag row begins with the group it belongs to, so rows
 from several groups can be told apart.
 
-Use --lag to keep only the partitions whose lag matches: '>0' for the
-partitions that are behind, '>=1000' or '1000' for those at least a
-thousand behind, '<10', '<=10', or '=0'. A partition whose lag we could
-not compute, printed as a dash, never matches. A group left with no
-matching partitions is left out entirely, so describing every group with
---lag '>0' lists only the groups that are behind. A group that survives
-prints its summary and members whole, and TOTAL-LAG stays the group's
-full total.
+Use --lag to keep only the rows whose lag matches: '>0' for the rows that
+are behind, '>=1000' or '1000' for those at least a thousand behind,
+'<10', '<=10', or '=0'. A row whose lag we could not compute, printed as
+a dash, never matches. A group left with no matching rows is left out
+entirely, so describing every group with --lag '>0' lists only the
+groups that are behind. A group that survives prints its summary and
+members whole, and TOTAL-LAG stays the group's full total.
+
+Use --by to roll the lag section up. Each view has its own columns, and
+--lag then filters at that grain:
+  --by partition   one row per partition (the default)
+                   TOPIC PARTITION CURRENT-OFFSET LOG-START-OFFSET LOG-END-OFFSET LAG MEMBER-ID CLIENT-ID HOST
+  --by topic       one row per topic
+                   TOPIC PARTITIONS LAG
+  --by member      one row per member; partitions no member owns share a
+                   row with an empty MEMBER-ID
+                   MEMBER-ID PARTITIONS LAG CLIENT-ID HOST
+  --by group       one table with a row per group, across every group
+                   GROUP STATE MEMBERS PARTITIONS LAG
+
+PARTITIONS is how many partitions the row rolls up. LAG is their sum, or a
+dash when none of them has a lag we could compute. --by group prints only
+that table, and --by topic, member, or group cannot be combined with
+--section summary or members, which the view does not change.
 
 EXAMPLES:
   kcl group describe                          # all groups, all sections
@@ -63,6 +80,10 @@ EXAMPLES:
   kcl group describe --section summary        # summary only
   kcl group describe --lag '>0'               # only the groups that are behind
   kcl group describe --lag '>=1000' -r 'prod-.*'  # far behind, by group regex
+  kcl group describe --by group               # one row per group
+  kcl group describe --by group --lag '>0'    # the groups that are behind, one row each
+  kcl group describe g --by member            # lag per member of g
+  kcl group describe g --by topic             # lag per topic of g
   kcl group describe --consumer-protocol      # KIP-848 groups
 
 SEE ALSO:
@@ -74,7 +95,13 @@ SEE ALSO:
 			if err := validateSection(section); err != nil {
 				return err
 			}
-			opts := describeOpts{section: section}
+			if err := validateBy(by, section); err != nil {
+				return err
+			}
+			opts := describeOpts{section: section, by: by}
+			if by == "group" {
+				opts.section = "lag"
+			}
 			if cmd.Flags().Changed("lag") {
 				var err error
 				if opts.lag, err = parseLagFilter(lagExpr); err != nil {
@@ -151,7 +178,8 @@ SEE ALSO:
 	cmd.Flags().BoolVar(&useConsumerDescribe, "consumer-protocol", false, "use ConsumerGroupDescribe API for new consumer group protocol (KIP-848, Kafka 4.0+)")
 	cmd.Flags().StringVar(&section, "section", "", "output section (summary, lag, members; default: all for text, lag for awk)")
 	cmd.Flags().BoolVarP(&regex, "regex", "r", false, "treat group arguments as regular expressions")
-	cmd.Flags().StringVar(&lagExpr, "lag", "", "keep only partitions whose lag matches (>N, >=N, <N, <=N, =N, or N for >=N); a group with none left is dropped")
+	cmd.Flags().StringVar(&lagExpr, "lag", "", "keep only rows whose lag matches (>N, >=N, <N, <=N, =N, or N for >=N); a group with none left is dropped")
+	cmd.Flags().StringVar(&by, "by", "partition", "roll the lag section up by partition, topic, member, or group")
 
 	return cmd
 }
@@ -159,7 +187,22 @@ SEE ALSO:
 // describeOpts are the flags that shape what printGroups prints.
 type describeOpts struct {
 	section string
+	by      string
 	lag     *lagFilter // nil when --lag is not set
+}
+
+// validateBy returns a usage error if by is not a view, or if it is a view
+// that reshapes the lag section while section asks for another one.
+func validateBy(by, section string) error {
+	switch by {
+	case "partition", "topic", "member", "group":
+	default:
+		return out.Errf(out.ExitUsage, "invalid --by %q: must be partition, topic, member, or group", by)
+	}
+	if by != "partition" && (section == "summary" || section == "members") {
+		return out.Errf(out.ExitUsage, "--by %s cannot be combined with --section %s: --by reshapes the lag section only", by, section)
+	}
+	return nil
 }
 
 // lagFilter is a parsed --lag expression: an operator and the number it
@@ -700,6 +743,7 @@ type describeRow struct {
 	instanceID     *string
 	clientID       string
 	host           string
+	partitions     int // how many partitions a topic or member row rolls up
 	err            error
 }
 
@@ -827,7 +871,16 @@ type printGroup struct {
 	memberJSON    []map[string]any
 }
 
-var lagHeaders = []string{"TOPIC", "PARTITION", "CURRENT-OFFSET", "LOG-START-OFFSET", "LOG-END-OFFSET", "LAG", "MEMBER-ID", "CLIENT-ID", "HOST"}
+func lagHeaders(by string) []string {
+	switch by {
+	case "topic":
+		return []string{"TOPIC", "PARTITIONS", "LAG"}
+	case "member":
+		return []string{"MEMBER-ID", "PARTITIONS", "LAG", "CLIENT-ID", "HOST"}
+	default:
+		return []string{"TOPIC", "PARTITION", "CURRENT-OFFSET", "LOG-START-OFFSET", "LOG-END-OFFSET", "LAG", "MEMBER-ID", "CLIENT-ID", "HOST"}
+	}
+}
 
 func offsetNum(o int64) out.Number {
 	if o < 0 {
@@ -843,21 +896,88 @@ func lagNum(r describeRow) out.Number {
 	return out.Num(r.lag)
 }
 
-func lagValues(r describeRow) []any {
-	return []any{r.topic, r.partition, offsetNum(r.currentOffset), offsetNum(r.logStartOffset), offsetNum(r.logEndOffset), lagNum(r), r.memberID, r.clientID, r.host}
+func lagValues(by string, r describeRow) []any {
+	switch by {
+	case "topic":
+		return []any{r.topic, r.partitions, lagNum(r)}
+	case "member":
+		return []any{r.memberID, r.partitions, lagNum(r), r.clientID, r.host}
+	default:
+		return []any{r.topic, r.partition, offsetNum(r.currentOffset), offsetNum(r.logStartOffset), offsetNum(r.logEndOffset), lagNum(r), r.memberID, r.clientID, r.host}
+	}
 }
 
-func lagJSON(r describeRow) map[string]any {
-	return map[string]any{
-		"topic":            r.topic,
-		"partition":        r.partition,
-		"current_offset":   r.currentOffset,
-		"log_start_offset": r.logStartOffset,
-		"log_end_offset":   r.logEndOffset,
-		"lag":              r.lag,
-		"member_id":        r.memberID,
-		"client_id":        r.clientID,
-		"host":             r.host,
+func lagJSON(by string, r describeRow) map[string]any {
+	switch by {
+	case "topic":
+		return map[string]any{
+			"topic":      r.topic,
+			"partitions": r.partitions,
+			"lag":        lagNum(r),
+		}
+	case "member":
+		return map[string]any{
+			"member_id":  r.memberID,
+			"partitions": r.partitions,
+			"lag":        lagNum(r),
+			"client_id":  r.clientID,
+			"host":       r.host,
+		}
+	default:
+		return map[string]any{
+			"topic":            r.topic,
+			"partition":        r.partition,
+			"current_offset":   r.currentOffset,
+			"log_start_offset": r.logStartOffset,
+			"log_end_offset":   r.logEndOffset,
+			"lag":              r.lag,
+			"member_id":        r.memberID,
+			"client_id":        r.clientID,
+			"host":             r.host,
+		}
+	}
+}
+
+// rollup sums partition rows into one row per key, in first-seen order:
+// the partition count, and the lag over the partitions whose lag we know.
+func rollup(rows []describeRow, key func(describeRow) string) []describeRow {
+	var rolled []describeRow
+	idx := make(map[string]int)
+	for _, r := range rows {
+		k := key(r)
+		i, ok := idx[k]
+		if !ok {
+			i = len(rolled)
+			idx[k] = i
+			rolled = append(rolled, describeRow{topic: r.topic, memberID: r.memberID, instanceID: r.instanceID, clientID: r.clientID, host: r.host})
+		}
+		rolled[i].partitions++
+		if r.lagValid {
+			rolled[i].lag += r.lag
+			rolled[i].lagValid = true
+		}
+	}
+	return rolled
+}
+
+// shapeRows is the lag rows in the --by view: the partition rows as they
+// are, one row per topic, or one row per member with the partitions no
+// member owns sharing a row with an empty member last.
+func shapeRows(by string, rows []describeRow) []describeRow {
+	switch by {
+	case "topic":
+		return rollup(rows, func(r describeRow) string { return r.topic })
+	case "member":
+		rolled := rollup(rows, func(r describeRow) string { return r.memberID })
+		sort.SliceStable(rolled, func(i, j int) bool {
+			if (rolled[i].memberID == "") != (rolled[j].memberID == "") {
+				return rolled[j].memberID == ""
+			}
+			return rolled[i].memberID < rolled[j].memberID
+		})
+		return rolled
+	default:
+		return rows
 	}
 }
 
@@ -878,15 +998,24 @@ func totalLag(rows []describeRow) (int64, bool) {
 // section, lag by default, with the group as the first column of every lag
 // row; JSON nests everything per group.
 //
-// With --lag, the lag rows are filtered first, and a group with no row left
-// is dropped from every section, unless the broker could not describe it:
-// that group still prints its error. The summary's TOTAL-LAG is the group's
-// full total, computed before the filter.
+// The lag rows are shaped by --by first and filtered by --lag second, and a
+// group with no row left is dropped from every section, unless the broker
+// could not describe it: that group still prints its error. The summary's
+// TOTAL-LAG is the group's full total, computed before both. --by group is
+// one table across every group rather than sections per group.
 func printGroups(format, command string, opts describeOpts, groups []printGroup) {
+	for i := range groups {
+		groups[i].totalLag, groups[i].totalLagValid = totalLag(groups[i].rows)
+	}
+	if opts.by == "group" {
+		printGroupView(format, command, opts, groups)
+		return
+	}
+
 	section := opts.section
 	var kept []printGroup
 	for _, g := range groups {
-		g.totalLag, g.totalLagValid = totalLag(g.rows)
+		g.rows = shapeRows(opts.by, g.rows)
 		if opts.lag != nil {
 			var rows []describeRow
 			for _, r := range g.rows {
@@ -909,7 +1038,7 @@ func printGroups(format, command string, opts describeOpts, groups []printGroup)
 		for _, g := range groups {
 			lagRows := make([]map[string]any, 0, len(g.rows))
 			for _, r := range g.rows {
-				lagRows = append(lagRows, lagJSON(r))
+				lagRows = append(lagRows, lagJSON(opts.by, r))
 			}
 			jsonGroups = append(jsonGroups, map[string]any{
 				"group":       g.group,
@@ -937,9 +1066,9 @@ func printGroups(format, command string, opts describeOpts, groups []printGroup)
 				fmt.Printf("%s\t%d\t%s\t%s\t%d\t%d\t%s\n",
 					g.group, g.coordinator, g.state, g.balancer, g.nMembers, g.totalLag, g.err)
 			case "lag":
-				table := out.NewFormattedTable(format, command, 1, "lag", append([]string{"GROUP"}, lagHeaders...)...)
+				table := out.NewFormattedTable(format, command, 1, "lag", append([]string{"GROUP"}, lagHeaders(opts.by)...)...)
 				for _, r := range g.rows {
-					table.Row(append([]any{g.group}, lagValues(r)...)...)
+					table.Row(append([]any{g.group}, lagValues(opts.by, r)...)...)
 				}
 				table.Flush()
 			case "members":
@@ -978,9 +1107,9 @@ func printGroups(format, command string, opts describeOpts, groups []printGroup)
 			}
 
 			if showLag && len(g.rows) > 0 {
-				table := out.NewFormattedTable(format, command, 1, "lag", lagHeaders...)
+				table := out.NewFormattedTable(format, command, 1, "lag", lagHeaders(opts.by)...)
 				for _, r := range g.rows {
-					table.Row(lagValues(r)...)
+					table.Row(lagValues(opts.by, r)...)
 				}
 				table.Flush()
 			}
@@ -998,6 +1127,35 @@ func printGroups(format, command string, opts describeOpts, groups []printGroup)
 			}
 		}
 	}
+}
+
+// printGroupView prints the --by group table: one row per group, across
+// every group, filtered by --lag on the group's total. A group the broker
+// could not describe has no row; its error goes to stderr, since the summary
+// that would carry it is not printed. When no row is left, text and awk print
+// nothing and JSON prints an empty list.
+func printGroupView(format, command string, opts describeOpts, groups []printGroup) {
+	table := out.NewFormattedTable(format, command, 1, "groups", "GROUP", "STATE", "MEMBERS", "PARTITIONS", "LAG")
+	var rows int
+	for _, g := range groups {
+		if g.err != "" {
+			fmt.Fprintf(os.Stderr, "unable to describe group %s: %s\n", g.group, g.err)
+			continue
+		}
+		if !opts.lag.matches(g.totalLag, g.totalLagValid) {
+			continue
+		}
+		lag := out.Num(g.totalLag)
+		if !g.totalLagValid {
+			lag = out.NoNum
+		}
+		table.Row(g.group, g.state, g.nMembers, len(g.rows), lag)
+		rows++
+	}
+	if rows == 0 && format != "json" {
+		return
+	}
+	table.Flush()
 }
 
 type describedGroupMember struct {

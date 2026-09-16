@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -442,6 +443,202 @@ func TestDescribeLagFilter(t *testing.T) {
 			if err == nil || out.ExitCode(err) != out.ExitUsage {
 				t.Errorf("--lag %q: err = %v, want a usage error", expr, err)
 			}
+		}
+	})
+}
+
+func TestValidateBy(t *testing.T) {
+	for _, test := range []struct {
+		by, section string
+		bad         bool
+	}{
+		{by: "partition"},
+		{by: "partition", section: "summary"},
+		{by: "partition", section: "members"},
+		{by: "topic"},
+		{by: "topic", section: "lag"},
+		{by: "member"},
+		{by: "group"},
+		{by: "group", section: "lag"},
+		{by: "", bad: true},
+		{by: "Topic", bad: true},
+		{by: "partitions", bad: true},
+		{by: "topic", section: "summary", bad: true},
+		{by: "member", section: "members", bad: true},
+		{by: "group", section: "summary", bad: true},
+		{by: "group", section: "members", bad: true},
+	} {
+		t.Run(test.by+"/"+test.section, func(t *testing.T) {
+			err := validateBy(test.by, test.section)
+			if test.bad {
+				if err == nil {
+					t.Fatal("want a usage error")
+				}
+				if out.ExitCode(err) != out.ExitUsage {
+					t.Errorf("exit code %d, want %d", out.ExitCode(err), out.ExitUsage)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// TestDescribeBy pins the --by views against two groups, on both describe
+// paths. agg has a member owning both partitions of t, lag 2 and 8, and a
+// commit on u that no member owns, lag 0; other has only a commit on u, lag
+// 4. The 848 group is the same as agg but joined with the consumer protocol.
+func TestDescribeBy(t *testing.T) {
+	c, cl := newTestCluster(t)
+	adm := kadm.NewClient(cl)
+	ctx := context.Background()
+
+	if _, err := adm.CreateTopics(ctx, 2, 1, nil, "t", "u"); err != nil {
+		t.Fatal(err)
+	}
+	produceTo(t, c, "t", 10, 0, 1)
+	produceTo(t, c, "u", 5, 0)
+	for _, group := range []string{"agg", "agg848"} {
+		commitAt(t, adm, group, "t", 0, 8)
+		commitAt(t, adm, group, "t", 1, 2)
+		commitAt(t, adm, group, "u", 0, 5)
+	}
+	commitAt(t, adm, "other", "u", 0, 1)
+	joinGroup(t, c, "agg", false, "t")
+	joinGroup(t, c, "agg848", true, "t")
+
+	// Each path describes the groups its API knows: DescribeGroups answers
+	// for the classic groups, ConsumerGroupDescribe for the 848 one.
+	paths := []struct {
+		name   string
+		group  string
+		groups []string
+		args   []string
+	}{
+		{name: "classic", group: "agg", groups: []string{"agg", "other"}},
+		{name: "consumer", group: "agg848", groups: []string{"agg848"}, args: []string{"--consumer-protocol"}},
+	}
+
+	for _, path := range paths {
+		t.Run(path.name, func(t *testing.T) {
+			t.Run("topic sums partitions", func(t *testing.T) {
+				stdout, err := runDescribe(t, c, append([]string{path.group, "--by", "topic", "--format", "awk"}, path.args...)...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rows := awkRows(stdout)
+				want := [][]string{{path.group, "t", "2", "10"}, {path.group, "u", "1", "0"}}
+				if !slices.EqualFunc(rows, want, slices.Equal) {
+					t.Errorf("rows = %q, want %q", rows, want)
+				}
+			})
+
+			t.Run("member rolls unowned partitions into the empty member", func(t *testing.T) {
+				stdout, err := runDescribe(t, c, append([]string{path.group, "--by", "member", "--format", "awk"}, path.args...)...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rows := awkRows(stdout)
+				if len(rows) != 2 {
+					t.Fatalf("got %d rows, want 2:\n%s", len(rows), stdout)
+				}
+				owner, unowned := rows[0], rows[1]
+				if owner[1] == "" || owner[2] != "2" || owner[3] != "10" || owner[4] != "kgo" || owner[5] == "" {
+					t.Errorf("owner row = %q, want a member with 2 partitions, lag 10, client kgo, and a host", owner)
+				}
+				if want := []string{path.group, "", "1", "0", "", ""}; !slices.Equal(unowned, want) {
+					t.Errorf("unowned row = %q, want %q", unowned, want)
+				}
+			})
+
+			t.Run("group is one table", func(t *testing.T) {
+				stdout, err := runDescribe(t, c, append(append([]string{"--by", "group"}, path.groups...), path.args...)...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				lines := strings.Split(strings.TrimSuffix(stdout, "\n"), "\n")
+				if len(lines) != len(path.groups)+1 || strings.Fields(lines[0])[0] != "GROUP" {
+					t.Fatalf("want one header and %d rows:\n%s", len(path.groups), stdout)
+				}
+				if got := strings.Fields(lines[1]); !slices.Equal(got, []string{path.group, "Stable", "1", "3", "10"}) {
+					t.Errorf("row = %q, want %s Stable 1 3 10", got, path.group)
+				}
+				if len(path.groups) > 1 {
+					if got := strings.Fields(lines[2]); !slices.Equal(got, []string{"other", "Empty", "0", "1", "4"}) {
+						t.Errorf("row = %q, want other Empty 0 1 4", got)
+					}
+				}
+			})
+
+			t.Run("group json", func(t *testing.T) {
+				stdout, err := runDescribe(t, c, append([]string{path.group, "--by", "group", "--format", "json"}, path.args...)...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var doc struct {
+					Command string `json:"_command"`
+					Groups  []struct {
+						Group      string `json:"group"`
+						State      string `json:"state"`
+						Members    int    `json:"members"`
+						Partitions int    `json:"partitions"`
+						Lag        int64  `json:"lag"`
+					} `json:"groups"`
+				}
+				if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+					t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+				}
+				if doc.Command != "group.describe" || len(doc.Groups) != 1 {
+					t.Fatalf("unexpected document: %s", stdout)
+				}
+				if g := doc.Groups[0]; g.Group != path.group || g.State != "Stable" || g.Members != 1 || g.Partitions != 3 || g.Lag != 10 {
+					t.Errorf("group = %+v, want %s Stable 1 3 10", g, path.group)
+				}
+			})
+		})
+	}
+
+	t.Run("lag filters at the view's grain", func(t *testing.T) {
+		// By topic, t has lag 10 and u has 0 in agg, and u has 4 in other.
+		stdout, err := runDescribe(t, c, "agg", "other", "--by", "topic", "--lag", ">5", "--format", "awk")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rows, want := awkRows(stdout), [][]string{{"agg", "t", "2", "10"}}; !slices.EqualFunc(rows, want, slices.Equal) {
+			t.Errorf("rows = %q, want %q", rows, want)
+		}
+		// By group, agg totals 10 and other 4.
+		stdout, err = runDescribe(t, c, "agg", "other", "--by", "group", "--lag", "<5", "--format", "awk")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rows, want := awkRows(stdout), [][]string{{"other", "Empty", "0", "1", "4"}}; !slices.EqualFunc(rows, want, slices.Equal) {
+			t.Errorf("rows = %q, want %q", rows, want)
+		}
+		// Nothing left: text prints nothing.
+		stdout, err = runDescribe(t, c, "agg", "other", "--by", "group", "--lag", ">100")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stdout != "" {
+			t.Errorf("want nothing on stdout, got:\n%s", stdout)
+		}
+	})
+
+	t.Run("a missing group has no row and fails", func(t *testing.T) {
+		stdout, err := runDescribe(t, c, "agg", "nope", "--by", "group", "--format", "awk")
+		if err != out.ErrSilent {
+			t.Fatalf("err = %v, want ErrSilent", err)
+		}
+		if rows := awkRows(stdout); len(rows) != 1 || rows[0][0] != "agg" {
+			t.Errorf("want only the agg row, got:\n%s", stdout)
+		}
+	})
+
+	t.Run("by with a section it does not shape", func(t *testing.T) {
+		_, err := runDescribe(t, c, "agg", "--by", "group", "--section", "summary")
+		if err == nil || out.ExitCode(err) != out.ExitUsage {
+			t.Errorf("err = %v, want a usage error", err)
 		}
 	})
 }
