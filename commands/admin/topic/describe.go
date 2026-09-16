@@ -346,7 +346,7 @@ SEE ALSO:
 					}
 					topicsOut = append(topicsOut, tj)
 				}
-				out.MarshalJSON("topic.describe", 1, map[string]any{
+				out.MarshalJSON(cl.Command(), 1, map[string]any{
 					"topics": topicsOut,
 				})
 

@@ -103,7 +103,7 @@ SimpleAuthorizer.
 				return fmt.Errorf("%v", err)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "dtoken.create", 1, "tokens",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "tokens",
 				"FIELD", "VALUE")
 			table.Row("PRINCIPAL", fmt.Sprintf("%s:%s", resp.PrincipalType, resp.PrincipalName))
 			table.Row("ISSUED", millisToStr(resp.IssueTimestamp))
@@ -149,7 +149,7 @@ func renewTokenCommand(cl *client.Client) *cobra.Command {
 				return fmt.Errorf("%v", err)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "dtoken.renew", 1, "results",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
 				"FIELD", "VALUE")
 			table.Row("EXPIRY", millisToStr(resp.ExpiryTimestamp))
 			table.Flush()
@@ -189,7 +189,7 @@ func expireTokenCommand(cl *client.Client) *cobra.Command {
 				return fmt.Errorf("%v", err)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "dtoken.expire", 1, "results",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
 				"FIELD", "VALUE")
 			table.Row("EXPIRY", millisToStr(resp.ExpiryTimestamp))
 			table.Flush()
@@ -236,7 +236,7 @@ kcl dtoken describe -o User:admin    # tokens the admin user owns`,
 				return fmt.Errorf("%v", err)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "dtoken.describe", 1, "tokens",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "tokens",
 				"PRINCIPAL", "ISSUED", "EXPIRY", "MAX AGE", "TOKEN ID", "base64(HMAC)", "RENEWERS")
 			for _, detail := range resp.TokenDetails {
 				var renewers []string

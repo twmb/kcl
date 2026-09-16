@@ -93,6 +93,17 @@ func ErrorDoc(err error, command string) map[string]any {
 	return doc
 }
 
+// CommandName is the _command a document carries, the dotted path of the
+// command under kcl: "topic.list" for "kcl topic list", and "" for kcl
+// itself. Pass cobra's CommandPath.
+//
+// Every document names the command it came from this way, rather than each
+// call site typing a name of its own: "kcl topic list" used to say
+// metadata.topics when it worked and topic.list when it failed.
+func CommandName(path string) string {
+	return strings.ReplaceAll(strings.TrimSpace(strings.TrimPrefix(path, "kcl")), " ", ".")
+}
+
 // MaybeDie, if err is non-nil, prints the message and exits with 1.
 //
 // Deprecated: Commands should return errors instead. This remains for use

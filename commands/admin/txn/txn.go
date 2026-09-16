@@ -99,7 +99,7 @@ The information printed:
 				return fmt.Errorf("unable to describe producers: %v", err)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "txn.describe-producers", 1, "producers",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "producers",
 				"TOPIC", "PARTITION", "ERROR", "ID", "EPOCH", "LAST-SEQUENCE", "LAST-TIMESTAMP", "COORDINATOR-EPOCH", "TXN-START-OFFSET")
 			for _, topic := range resp.Topics {
 				for _, partition := range topic.Partitions {
@@ -156,7 +156,7 @@ transaction state or producer ID.
 				ProducerIDFilters: producerIDFilter,
 			})
 
-			table := out.NewFormattedTable(cl.Format(), "txn.list", 1, "transactions",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "transactions",
 				"BROKER", "TRANSACTIONAL-ID", "PRODUCER-ID", "STATE", "ERROR")
 			for _, kresp := range kresps {
 				if kresp.Err != nil {
@@ -203,7 +203,7 @@ the producer ID, epoch, timeout, and the topics/partitions involved.
 				return fmt.Errorf("unable to describe transactions: %v", err)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "txn.describe", 1, "transactions",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "transactions",
 				"TRANSACTIONAL-ID", "STATE", "PRODUCER-ID", "PRODUCER-EPOCH", "TIMEOUT-MS", "START-TIMESTAMP", "TOPICS", "ERROR")
 			anyErr := false
 			for _, txn := range resp.TransactionStates {

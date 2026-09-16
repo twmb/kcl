@@ -201,6 +201,12 @@ func (c *Client) dieFormat() string {
 // what was asked for. It stays empty for a failure at the bare root.
 func (c *Client) SetCommand(name string) { c.command = name }
 
+// Command is the dotted command path the running command carries as
+// _command, "topic.list" for "kcl topic list". A command passes this where it
+// prints, so that what it prints on success and what the client prints on
+// failure name the same command.
+func (c *Client) Command() string { return c.command }
+
 // die reports a configuration or client failure in the output format and
 // exits with code.
 func (c *Client) die(code int, msg string, args ...any) {
@@ -305,6 +311,23 @@ func New(root *cobra.Command) *Client {
 	root.PersistentFlags().StringVarP(&c.profileName, "profile", "C", "", "use a specific config profile")
 	root.PersistentFlags().BoolVarP(&c.asJSON, "dump-json", "j", false, "dump response as json if supported")
 	root.PersistentFlags().MarkDeprecated("dump-json", "use --format json instead")
+
+	// -X help and -X list are answered here, after cobra has parsed the
+	// flags so that --format applies. The registry group has a persistent
+	// pre-run of its own, and cobra runs only the nearest one unless told
+	// to walk them all.
+	//
+	// Recording the command first matters: a bad -X key dies inside the
+	// client, and it reports the command we know from here rather than an
+	// error document with no _command. Every command reads it back with
+	// Command to name itself in what it prints.
+	cobra.EnableTraverseRunHooks = true
+	root.PersistentPreRun = func(cmd *cobra.Command, _ []string) {
+		c.SetCommand(out.CommandName(cmd.CommandPath()))
+		if c.MaybeXHelp() {
+			os.Exit(0)
+		}
+	}
 
 	return c
 }
@@ -674,7 +697,7 @@ func (c *Client) MaybeXHelp() bool {
 		return false
 	}
 	if c.Format() != out.FormatText {
-		table := out.NewFormattedTable(c.Format(), "keys", 1, "keys", "KEY", "TYPE", "EXAMPLE", "DESCRIPTION")
+		table := out.NewFormattedTable(c.Format(), c.command, 1, "keys", "KEY", "TYPE", "EXAMPLE", "DESCRIPTION")
 		for _, k := range CfgKeys() {
 			table.Row(k.Name, k.Type, k.Example, k.Desc)
 		}

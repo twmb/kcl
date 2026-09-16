@@ -75,11 +75,11 @@ func errcodeCommand() *cobra.Command {
 			}
 			format, _ := cmd.Flags().GetString("format")
 			if code == 0 {
-				printKerr(format, "misc.errcode", 0, "NONE", "", "NONE\n")
+				printKerr(format, out.CommandName(cmd.CommandPath()), 0, "NONE", "", "NONE\n")
 				return nil
 			}
 			kerr := kerr.ErrorForCode(int16(code)).(*kerr.Error)
-			printKerr(format, "misc.errcode", kerr.Code, kerr.Message, kerr.Description, fmt.Sprintf("%s\n%s\n", kerr.Message, kerr.Description))
+			printKerr(format, out.CommandName(cmd.CommandPath()), kerr.Code, kerr.Message, kerr.Description, fmt.Sprintf("%s\n%s\n", kerr.Message, kerr.Description))
 			return nil
 		},
 	}
@@ -108,7 +108,7 @@ func errtextCommand() *cobra.Command {
 
 			var table *out.FormattedTable
 			if list && format != out.FormatText {
-				table = out.NewFormattedTable(format, "misc.errtext", 1, "errors", "NAME", "CODE", "DESCRIPTION")
+				table = out.NewFormattedTable(format, out.CommandName(cmd.CommandPath()), 1, "errors", "NAME", "CODE", "DESCRIPTION")
 				defer table.Flush()
 			}
 			var err error
@@ -128,7 +128,7 @@ func errtextCommand() *cobra.Command {
 					fmt.Fprintf(os.Stderr, "trying %s...\n", kerr.Message)
 				}
 				if client.Strnorm(kerr.Message) == text {
-					printKerr(format, "misc.errtext", kerr.Code, kerr.Message, kerr.Description, fmt.Sprintf("%s (%d)\n%s\n", kerr.Message, kerr.Code, kerr.Description))
+					printKerr(format, out.CommandName(cmd.CommandPath()), kerr.Code, kerr.Message, kerr.Description, fmt.Sprintf("%s (%d)\n%s\n", kerr.Message, kerr.Code, kerr.Description))
 					return nil
 				}
 			}
@@ -214,7 +214,7 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 			}
 
 			if keys {
-				table := out.NewFormattedTable(cl.Format(), "misc.api-versions", 1, "api_versions",
+				table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "api_versions",
 					"NAME", "KEY", "MAX")
 				v.EachMaxKeyVersion(func(k, ver int16) {
 					kind := kmsg.NameForKey(k)
@@ -225,7 +225,7 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 				})
 				table.Flush()
 			} else {
-				table := out.NewFormattedTable(cl.Format(), "misc.api-versions", 1, "api_versions",
+				table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "api_versions",
 					"NAME", "MAX")
 				v.EachMaxKeyVersion(func(k, ver int16) {
 					kind := kmsg.NameForKey(k)
@@ -268,22 +268,22 @@ func probeVersion(cl *client.Client) error {
 		cl.RemakeWithOpts(kgo.MaxVersions(kversion.V0_9_0()))
 		// 0.9.0 has list groups
 		if _, err = cl.Client().SeedBrokers()[0].Request(context.Background(), new(kmsg.ListGroupsRequest)); err == nil {
-			printVersionGuess(cl.Format(), "0.9.0")
+			printVersionGuess(cl.Format(), cl.Command(), "0.9.0")
 			return nil
 		}
 		cl.RemakeWithOpts(kgo.MaxVersions(kversion.V0_8_2()))
 		// 0.8.2 has find coordinator
 		if _, err = cl.Client().SeedBrokers()[0].Request(context.Background(), new(kmsg.FindCoordinatorRequest)); err == nil {
-			printVersionGuess(cl.Format(), "0.8.2")
+			printVersionGuess(cl.Format(), cl.Command(), "0.8.2")
 			return nil
 		}
 		cl.RemakeWithOpts(kgo.MaxVersions(kversion.V0_8_1()))
 		// 0.8.1 has offset fetch
 		if _, err = cl.Client().SeedBrokers()[0].Request(context.Background(), new(kmsg.OffsetFetchRequest)); err == nil {
-			printVersionGuess(cl.Format(), "0.8.1")
+			printVersionGuess(cl.Format(), cl.Command(), "0.8.1")
 			return nil
 		}
-		printVersionGuess(cl.Format(), "0.8.0")
+		printVersionGuess(cl.Format(), cl.Command(), "0.8.0")
 		return nil
 	}
 
@@ -293,7 +293,7 @@ func probeVersion(cl *client.Client) error {
 	}
 
 	v := kversion.FromApiVersionsResponse(resp)
-	printVersionGuess(cl.Format(), v.VersionGuess())
+	printVersionGuess(cl.Format(), cl.Command(), v.VersionGuess())
 	return nil
 }
 
@@ -301,11 +301,11 @@ func probeVersion(cl *client.Client) error {
 // guess is a sentence, "between v1.0 and v1.1" or "at least v4.0" or a bare
 // "v3.7", and that is what text prints. json and awk get the ends of the range
 // it names instead, and an end the guess leaves open is empty.
-func printVersionGuess(format, guess string) {
+func printVersionGuess(format, command, guess string) {
 	min, max := splitVersionGuess(guess)
 	switch format {
 	case out.FormatJSON:
-		out.MarshalJSON("misc.probe-version", 1, map[string]any{
+		out.MarshalJSON(command, 1, map[string]any{
 			"guess": guess,
 			"min":   min,
 			"max":   max,
@@ -409,7 +409,7 @@ The wire version used is:
 			if err != nil {
 				return fmt.Errorf("response error: %v", err)
 			}
-			out.MarshalJSON("misc.raw-req", 1, map[string]any{
+			out.MarshalJSON(cl.Command(), 1, map[string]any{
 				"response": kresp,
 			})
 			return nil
@@ -631,7 +631,7 @@ offset.
 			}
 			sort.Slice(sorted, func(i, j int) bool { return sorted[i].topic < sorted[j].topic })
 
-			table := out.NewFormattedTable(cl.Format(), "misc.list-offsets", 1, "offsets",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "offsets",
 				"BROKER", "TOPIC", "PARTITION", "START", "STABLE", "END", "ERROR")
 
 			for _, topic := range sorted {
@@ -700,7 +700,7 @@ it does, read the documentation for kmsg.OffsetForLeaderEpochRequest.
 			}
 
 			shards := cl.Client().RequestSharded(context.Background(), req)
-			table := out.NewFormattedTable(cl.Format(), "misc.offset-for-leader-epoch", 1, "epochs",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "epochs",
 				"BROKER", "TOPIC", "PARTITION", "LEADER-EPOCH", "END-OFFSET", "ERROR")
 
 			for _, shard := range shards {

@@ -43,7 +43,7 @@ func contextListCommand(cl *client.Client) *cobra.Command {
 			if err != nil {
 				return dieErr("list contexts", err)
 			}
-			tw := out.NewFormattedTable(cl.Format(), "registry.context.list", 1, "contexts", "CONTEXT")
+			tw := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "contexts", "CONTEXT")
 			for _, c := range contexts {
 				tw.Row(c)
 			}
@@ -66,7 +66,7 @@ func contextDeleteCommand(cl *client.Client) *cobra.Command {
 			if err := scl.DeleteContext(context.Background(), args[0]); err != nil {
 				return dieErr("delete context", err)
 			}
-			tw := out.NewFormattedTable(cl.Format(), "registry.context.delete", 1, "deleted", "CONTEXT")
+			tw := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "deleted", "CONTEXT")
 			tw.Row(args[0])
 			tw.Flush()
 			return nil

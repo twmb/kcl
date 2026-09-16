@@ -142,10 +142,10 @@ replicas each. When using --replica-assignment, do not use --num-partitions or
 			resp := kresp.(*kmsg.CreateTopicsResponse)
 			var table *out.FormattedTable
 			if resp.Version >= 7 {
-				table = out.NewFormattedTable(cl.Format(), "topic.create", 1, "topics",
+				table = out.NewFormattedTable(cl.Format(), cl.Command(), 1, "topics",
 					"NAME", "ID", "MESSAGE")
 			} else {
-				table = out.NewFormattedTable(cl.Format(), "topic.create", 1, "topics",
+				table = out.NewFormattedTable(cl.Format(), cl.Command(), 1, "topics",
 					"NAME", "MESSAGE")
 			}
 			anyErr := false
@@ -226,7 +226,7 @@ EXAMPLES:
 				}
 				topics = append(topics, t)
 			}
-			metadata.PrintTopics(cl.Format(), resp.Version, topics, false, detailed)
+			metadata.PrintTopics(cl.Format(), cl.Command(), resp.Version, topics, false, detailed)
 			return nil
 		},
 	}
@@ -342,7 +342,7 @@ SEE ALSO:
 			}
 
 			resps := resp.(*kmsg.DeleteTopicsResponse).Topics
-			table := out.NewFormattedTable(cl.Format(), "topic.delete", 1, "topics",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "topics",
 				"NAME", "MESSAGE")
 			anyErr := false
 			for _, topicResp := range resps {
@@ -507,7 +507,7 @@ kcl topic add-partitions foo -a 1,2 -a 3,1 -a 2,3  # three more, on brokers 1+2,
 			}
 
 			resps := createResp.(*kmsg.CreatePartitionsResponse).Topics
-			table := out.NewFormattedTable(cl.Format(), "topic.add-partitions", 1, "topics",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "topics",
 				"NAME", "STATUS", "MESSAGE")
 			for _, topic := range resps {
 				errKind := "OK"

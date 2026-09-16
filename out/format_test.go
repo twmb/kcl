@@ -363,3 +363,35 @@ func TestNumberInTable(t *testing.T) {
 		t.Errorf("lag = %v (type %T), want null", first["lag"], first["lag"])
 	}
 }
+
+// TestEmptyCommandOmitted pins that a document with no command to name leaves
+// _command out rather than carrying an empty one, the rule ErrorDoc follows.
+// Only the bare root has no command.
+func TestEmptyCommandOmitted(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		output string
+	}{
+		{"table", captureStdout(func() {
+			table := NewFormattedTable("json", "", 1, "keys", "KEY")
+			table.Row("seed_brokers")
+			table.Flush()
+		})},
+		{"MarshalJSON", captureStdout(func() {
+			MarshalJSON("", 1, map[string]any{"profile": ""})
+		})},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var result map[string]any
+			if err := json.Unmarshal([]byte(test.output), &result); err != nil {
+				t.Fatalf("Unmarshal: %v: %s", err, test.output)
+			}
+			if _, ok := result["_command"]; ok {
+				t.Errorf("_command is present: %s", test.output)
+			}
+			if result["_version"] != float64(1) {
+				t.Errorf("_version = %v", result["_version"])
+			}
+		})
+	}
+}

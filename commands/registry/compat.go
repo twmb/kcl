@@ -46,7 +46,7 @@ func compatGetCommand(cl *client.Client) *cobra.Command {
 				return err
 			}
 			results := scl.Compatibility(context.Background(), args...)
-			return printCompat(cl, "registry.compatibility.get", results)
+			return printCompat(cl, results)
 		},
 	}
 	return cmd
@@ -67,7 +67,7 @@ func compatSetCommand(cl *client.Client) *cobra.Command {
 				return err
 			}
 			results := scl.SetCompatibility(context.Background(), sr.SetCompatibility{Level: level}, args[1:]...)
-			return printCompat(cl, "registry.compatibility.set", results)
+			return printCompat(cl, results)
 		},
 	}
 	return cmd
@@ -152,7 +152,7 @@ SEE ALSO:
 
 			switch cl.Format() {
 			case out.FormatJSON:
-				out.MarshalJSON("registry.compatibility.test", 1, map[string]any{
+				out.MarshalJSON(cl.Command(), 1, map[string]any{
 					"subject":    subject,
 					"version":    versionString(version),
 					"compatible": res.Is,
@@ -198,9 +198,9 @@ func parseCheckVersion(s string) (int, error) {
 // printCompat prints compatibility results as a table (or JSON), surfacing any
 // per-subject errors. It returns ErrSilent if any result carried an error so
 // the process exits non-zero.
-func printCompat(cl *client.Client, command string, results []sr.CompatibilityResult) error {
+func printCompat(cl *client.Client, results []sr.CompatibilityResult) error {
 	var anyErr bool
-	tw := out.NewFormattedTable(cl.Format(), command, 1, "compatibility", "SUBJECT", "LEVEL", "ERROR")
+	tw := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "compatibility", "SUBJECT", "LEVEL", "ERROR")
 	for _, r := range results {
 		subject := r.Subject
 		if subject == "" {

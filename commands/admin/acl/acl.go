@@ -216,7 +216,7 @@ SEE ALSO:
 				return fmt.Errorf("%s%s", err, additional)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "acl.list", 1, "acls",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "acls",
 				"TYPE", "NAME", "PATTERN", "PRINCIPAL", "HOST", "OPERATION", "PERMISSION")
 			for _, resource := range resp.Resources {
 				for _, acl := range resource.ACLs {
@@ -458,13 +458,13 @@ SEE ALSO:
 			if len(resp.Results) != len(req.Creations) {
 				fmt.Fprintf(os.Stderr, "Kafka replied with only %d responses to our %d creations! Dumping response as JSON...",
 					len(resp.Results), len(req.Creations))
-				out.MarshalJSON("acl.create", 1, map[string]any{
+				out.MarshalJSON(cl.Command(), 1, map[string]any{
 					"response": kresp,
 				})
 				return nil
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "acl.create", 1, "results",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
 				"TYPE", "NAME", "PATTERN", "PRINCIPAL", "HOST", "OPERATION", "PERMISSION", "ERROR", "ERROR-MSG")
 			for i, result := range resp.Results {
 				errStr, errMsg := "OK", ""
@@ -614,7 +614,7 @@ kcl acl delete --topic foo --dry-run           # show the matches, delete nothin
 				if cl.Format() != "json" {
 					fmt.Fprintln(os.Stderr, "Dry run: the following ACLs would be deleted:")
 				}
-				table := out.NewFormattedTable(cl.Format(), "acl.delete-dry-run", 1, "acls",
+				table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "acls",
 					"TYPE", "NAME", "PATTERN", "PRINCIPAL", "HOST", "OPERATION", "PERMISSION")
 				for _, resource := range resp.Resources {
 					for _, acl := range resource.ACLs {
@@ -721,7 +721,7 @@ kcl acl delete --topic foo --dry-run           # show the matches, delete nothin
 				return fmt.Errorf("%s%s", err, additional)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "acl.delete", 1, "deleted",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "deleted",
 				"TYPE", "NAME", "PATTERN", "PRINCIPAL", "HOST", "OPERATION", "PERMISSION", "ERROR", "ERROR-MSG")
 			for _, acl := range result.MatchingACLs {
 				errStr, errMsg := "OK", ""

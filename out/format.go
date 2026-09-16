@@ -29,10 +29,11 @@ type FormattedTable struct {
 }
 
 // NewFormattedTable creates a table that outputs in the specified format.
-// The jsonKey parameter names the top-level array in JSON output (e.g.,
-// "groups" for group list). Headers are used for text column headers
-// and are lowercased with hyphens/spaces replaced by underscores for
-// JSON keys.
+// The command is the _command the JSON document carries, which every command
+// takes from Client.Command rather than naming itself; see CommandName. The
+// jsonKey parameter names the top-level array in JSON output (e.g., "groups"
+// for group list). Headers are used for text column headers and are
+// lowercased with hyphens/spaces replaced by underscores for JSON keys.
 func NewFormattedTable(format, command string, version int, jsonKey string, headers ...string) *FormattedTable {
 	keys := make([]string, len(headers))
 	for i, h := range headers {
@@ -92,11 +93,14 @@ func (t *FormattedTable) flushJSON() {
 		}
 		data = append(data, m)
 	}
-	writeJSON(map[string]any{
-		"_command": t.command,
+	doc := map[string]any{
 		"_version": t.version,
 		t.jsonKey:  data,
-	})
+	}
+	if t.command != "" {
+		doc["_command"] = t.command
+	}
+	writeJSON(doc)
 }
 
 func (t *FormattedTable) flushAWK() {
@@ -145,10 +149,13 @@ func (n Number) MarshalJSON() ([]byte, error) {
 
 // MarshalJSON outputs structured JSON with _command and _version metadata
 // alongside arbitrary additional fields. Use this for commands with
-// non-tabular or mixed output.
+// non-tabular or mixed output. Like an error document, this leaves _command
+// out when we have no command to name, which is only the bare root.
 func MarshalJSON(command string, version int, fields map[string]any) {
 	output := make(map[string]any, len(fields)+2)
-	output["_command"] = command
+	if command != "" {
+		output["_command"] = command
+	}
 	output["_version"] = version
 	maps.Copy(output, fields)
 	writeJSON(output)

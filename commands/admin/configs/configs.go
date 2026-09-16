@@ -288,7 +288,7 @@ func (c *cfger) alterIncremental() error {
 	}
 	resp := kresp.(*kmsg.IncrementalAlterConfigsResponse)
 
-	table := out.NewFormattedTable(c.cl.Format(), "config.alter", 1, "results",
+	table := out.NewFormattedTable(c.cl.Format(), c.cl.Command(), 1, "results",
 		"RESOURCE", "ERROR", "ERROR-MESSAGE")
 	anyErr := false
 	for _, resource := range resp.Resources {
@@ -333,7 +333,7 @@ func (c *cfger) alterOld() error {
 	}
 	resp := kresp.(*kmsg.AlterConfigsResponse)
 
-	table := out.NewFormattedTable(c.cl.Format(), "config.alter", 1, "results",
+	table := out.NewFormattedTable(c.cl.Format(), c.cl.Command(), 1, "results",
 		"RESOURCE", "ERROR", "ERROR-MESSAGE")
 	anyErr := false
 	for _, resource := range resp.Resources {
@@ -549,7 +549,7 @@ kcl config describe my-subscription -tcm`,
 			if !text {
 				headers = append(headers, "READ-ONLY")
 			}
-			table := out.NewFormattedTable(cl.Format(), "config.describe", 1, "configs", headers...)
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "configs", headers...)
 			for _, kv := range kvs {
 				key := kv.Name
 				if kv.ReadOnly && text {

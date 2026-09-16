@@ -204,20 +204,8 @@ Command completion is available at:
 	// parsing twice doubled every seed broker.
 	usageErrors(root, func() error { _, err := cl.FlagCfg(); return err })
 
-	// -X help and -X list are answered here, after cobra has parsed the flags
-	// so that --format applies. The registry group has a persistent pre-run
-	// of its own, and cobra runs only the nearest one unless told to walk
-	// them all.
-	cobra.EnableTraverseRunHooks = true
-	root.PersistentPreRun = func(cmd *cobra.Command, _ []string) {
-		// Before MaybeXHelp and before the command body: a bad -X key
-		// dies inside the client, and it reports the command we know
-		// from here rather than an error document with no _command.
-		cl.SetCommand(commandName(cmd))
-		if cl.MaybeXHelp() {
-			os.Exit(0)
-		}
-	}
+	// client.New registers the persistent pre-run that records the running
+	// command and answers -X help and -X list.
 	root.RegisterFlagCompletionFunc("config-opt", func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
 		return client.XCompletions(), cobra.ShellCompDirectiveNoFileComp | cobra.ShellCompDirectiveNoSpace
 	})
@@ -237,7 +225,11 @@ func main() {
 	}
 
 	if cmd, err := root.ExecuteC(); err != nil {
-		out.HandleError(asUsageError(err), errFormat(root, cl), commandName(cmd))
+		var path string
+		if cmd != nil {
+			path = cmd.CommandPath()
+		}
+		out.HandleError(asUsageError(err), errFormat(root, cl), out.CommandName(path))
 	}
 }
 
@@ -253,16 +245,6 @@ func errFormat(root *cobra.Command, cl *client.Client) string {
 		}
 	}
 	return cl.Format()
-}
-
-// commandName is the _command a document from cmd carries: the command path
-// under kcl with dots, "topic.list", or "" at the root.
-func commandName(cmd *cobra.Command) string {
-	if cmd == nil {
-		return ""
-	}
-	path := strings.TrimSpace(strings.TrimPrefix(cmd.CommandPath(), "kcl"))
-	return strings.ReplaceAll(path, " ", ".")
 }
 
 // usageErrors wraps every command's argument validator and the flag error

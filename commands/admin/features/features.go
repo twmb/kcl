@@ -51,7 +51,7 @@ version ranges and finalized feature version ranges.
 				return fmt.Errorf("%v", err)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "features.describe", 1, "features",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "features",
 				"KIND", "NAME", "MIN-VERSION", "MAX-VERSION")
 			for _, f := range resp.SupportedFeatures {
 				table.Row("SUPPORTED", f.Name, f.MinVersion, f.MaxVersion)
@@ -140,7 +140,7 @@ Use --dry-run to preview without applying.
 				return fmt.Errorf("%s%s", err, additional)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "features.update", 1, "results",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
 				"FEATURE", "ERROR", "MESSAGE")
 			for _, result := range resp.Results {
 				var errStr, msg string

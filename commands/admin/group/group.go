@@ -72,7 +72,7 @@ the groups listed. This prints all of the information from a ListGroups request.
 				TypesFilter:  typesFilter,
 			})
 
-			table := out.NewFormattedTable(cl.Format(), "group.list", 1, "groups",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "groups",
 				"BROKER", "GROUP-ID", "PROTO-TYPE", "GROUP-TYPE", "STATE", "ERROR")
 			for _, kresp := range kresps {
 				err := kresp.Err
@@ -146,7 +146,7 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 			})
 			// MESSAGE is appended rather than folded into ERROR so that a
 			// script keeps the columns it already indexes.
-			table := out.NewFormattedTable(cl.Format(), "group.delete", 1, "results",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
 				"BROKER", "GROUP", "ERROR", "MESSAGE")
 			anyErr := false
 			for _, brokerResp := range brokerResps {
@@ -252,7 +252,7 @@ with a JSON file:
 				return fmt.Errorf("%s", err.Error())
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "group.offset-delete", 1, "results",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
 				"TOPIC", "PARTITION", "STATUS")
 			for _, topic := range resp.Topics {
 				for _, partition := range topic.Partitions {

@@ -81,7 +81,7 @@ reassignment for that partition.
 				return fmt.Errorf("%s%s", kerr.ErrorForCode(resp.ErrorCode), additional)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "reassign.alter", 1, "results",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
 				"TOPIC", "PARTITION", "STATUS", "DETAIL")
 			for _, topic := range resp.Topics {
 				for _, partition := range topic.Partitions {
@@ -162,7 +162,7 @@ once by default.
 				return fmt.Errorf("%s%s", kerr.ErrorForCode(resp.ErrorCode), additional)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "reassign.cancel", 1, "results",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
 				"TOPIC", "PARTITION", "STATUS", "DETAIL")
 			for _, topic := range resp.Topics {
 				for _, partition := range topic.Partitions {
@@ -233,7 +233,7 @@ If no topics are specified, this lists all active reassignments.
 				return fmt.Errorf("%s%s", kerr.ErrorForCode(resp.ErrorCode), additional)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "reassign.list", 1, "reassignments",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "reassignments",
 				"TOPIC", "PARTITION", "CURRENT-REPLICAS", "ADDING", "REMOVING")
 			for _, topic := range resp.Topics {
 				for _, p := range topic.Partitions {

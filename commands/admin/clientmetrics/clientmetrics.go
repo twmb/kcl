@@ -46,7 +46,7 @@ func listCommand(cl *client.Client) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			table := out.NewFormattedTable(cl.Format(), "client-metrics.list", 1, "subscriptions",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "subscriptions",
 				"NAME")
 			for _, n := range names {
 				table.Row(n)
@@ -119,7 +119,7 @@ func describeCommand(cl *client.Client) *cobra.Command {
 					return fmt.Errorf("%s", msg)
 				}
 
-				table := out.NewFormattedTable(cl.Format(), "client-metrics.describe", 1, "configs",
+				table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "configs",
 					"KEY", "VALUE", "SOURCE")
 				for _, c := range r.Configs {
 					val := ""
@@ -188,7 +188,7 @@ EXAMPLES:
 				return fmt.Errorf("unable to alter client metrics: %v", err)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "client-metrics.alter", 1, "results",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
 				"NAME", "STATUS")
 			for _, r := range kresp.Resources {
 				if err := kerr.ErrorForCode(r.ErrorCode); err != nil {
@@ -250,7 +250,7 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 				return fmt.Errorf("unable to delete client metrics: %v", err)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "client-metrics.delete", 1, "results",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
 				"NAME", "STATUS")
 			for _, res := range alterResp.Resources {
 				if err := kerr.ErrorForCode(res.ErrorCode); err != nil {

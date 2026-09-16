@@ -65,7 +65,7 @@ by issuing a ListGroups request with a type filter of "share".
 				TypesFilter:  []string{"share"},
 			})
 
-			table := out.NewFormattedTable(cl.Format(), "share-group.list", 1, "groups",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "groups",
 				"BROKER", "GROUP-ID", "STATE")
 			for _, kresp := range kresps {
 				err := kresp.Err
@@ -262,7 +262,7 @@ Defaults: text shows all sections, awk shows offsets.
 						jgroups = append(jgroups, jg)
 					}
 				}
-				out.MarshalJSON("share-group.describe", 1, map[string]any{
+				out.MarshalJSON(cl.Command(), 1, map[string]any{
 					"groups": jgroups,
 				})
 			case "awk":
@@ -360,7 +360,7 @@ Defaults: text shows all sections, awk shows offsets.
 							if showSummary {
 								fmt.Println()
 							}
-							printShareGroupMembers(cl.Format(), group)
+							printShareGroupMembers(cl.Format(), cl.Command(), group)
 						}
 
 						if showOffsets && groupErr == nil {
@@ -369,7 +369,7 @@ Defaults: text shows all sections, awk shows offsets.
 								if showSummary || showMembers {
 									fmt.Println()
 								}
-								lagTable := out.NewFormattedTable(cl.Format(), "share-group.describe", 1, "offsets",
+								lagTable := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "offsets",
 									"TOPIC", "PARTITION", "START-OFFSET", "LEADER-EPOCH", "LAG", "ERROR")
 								for _, topic := range offsets.Topics {
 									for _, p := range topic.Partitions {
@@ -446,8 +446,8 @@ func printShareGroupSummary(broker int32, group kmsg.ShareGroupDescribeResponseG
 	tw.Flush()
 }
 
-func printShareGroupMembers(format string, group kmsg.ShareGroupDescribeResponseGroup) {
-	table := out.NewFormattedTable(format, "share-group.describe", 1, "members",
+func printShareGroupMembers(format, command string, group kmsg.ShareGroupDescribeResponseGroup) {
+	table := out.NewFormattedTable(format, command, 1, "members",
 		"MEMBER-ID", "CLIENT-ID", "HOST", "MEMBER-EPOCH", "SUBSCRIBED-TOPICS", "ASSIGNMENT")
 	for _, member := range group.Members {
 		var rack string
@@ -539,7 +539,7 @@ without actually deleting them.
 			})
 			// MESSAGE is appended rather than folded into ERROR so that a
 			// script keeps the columns it already indexes.
-			table := out.NewFormattedTable(cl.Format(), "share-group.delete", 1, "results",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
 				"BROKER", "GROUP", "ERROR", "MESSAGE")
 			anyErr := false
 			for _, brokerResp := range brokerResps {

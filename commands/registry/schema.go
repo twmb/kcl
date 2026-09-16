@@ -90,7 +90,7 @@ in "name:subject:version" form (repeatable).
 			}
 
 			if cl.Format() == out.FormatJSON {
-				out.MarshalJSON("registry.schema.register", 1, map[string]any{
+				out.MarshalJSON(cl.Command(), 1, map[string]any{
 					"subject": ss.Subject,
 					"version": ss.Version,
 					"id":      ss.ID,
@@ -98,7 +98,7 @@ in "name:subject:version" form (repeatable).
 				})
 				return nil
 			}
-			tw := out.NewFormattedTable(cl.Format(), "registry.schema.register", 1, "schemas", "SUBJECT", "VERSION", "ID")
+			tw := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "schemas", "SUBJECT", "VERSION", "ID")
 			tw.Row(ss.Subject, ss.Version, ss.ID)
 			tw.Flush()
 			return nil
@@ -202,7 +202,7 @@ SEE ALSO:
 				if len(schema.References) > 0 {
 					fields["references"] = schema.References
 				}
-				out.MarshalJSON("registry.schema.get", 1, fields)
+				out.MarshalJSON(cl.Command(), 1, fields)
 				return nil
 			}
 
@@ -268,7 +268,7 @@ type.`,
 				return dieErr("list schemas", err)
 			}
 
-			tw := out.NewFormattedTable(cl.Format(), "registry.schema.list", 1, "schemas", "SUBJECT", "VERSION", "ID", "TYPE")
+			tw := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "schemas", "SUBJECT", "VERSION", "ID", "TYPE")
 			for _, s := range schemas {
 				tw.Row(s.Subject, s.Version, s.ID, s.Type)
 			}

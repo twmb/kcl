@@ -145,7 +145,7 @@ use "kcl cluster describe", which issues DescribeCluster instead.
 					topicsJSON = append(topicsJSON, tj)
 				}
 				fields["topics"] = topicsJSON
-				out.MarshalJSON("metadata", 1, fields)
+				out.MarshalJSON(cl.Command(), 1, fields)
 
 			case "awk":
 				awkSection := section
@@ -198,7 +198,7 @@ use "kcl cluster describe", which issues DescribeCluster instead.
 					if includeHeader {
 						fmt.Printf("BROKERS\n=======\n")
 					}
-					printBrokers(cl.Format(), resp.ControllerID, resp.Brokers)
+					printBrokers(cl.Format(), cl.Command(), resp.ControllerID, resp.Brokers)
 					if includeHeader {
 						fmt.Println()
 					}
@@ -208,7 +208,7 @@ use "kcl cluster describe", which issues DescribeCluster instead.
 					if includeHeader {
 						fmt.Printf("TOPICS\n======\n")
 					}
-					PrintTopics(cl.Format(), resp.Version, resp.Topics, pinternal, detailed)
+					PrintTopics(cl.Format(), cl.Command(), resp.Version, resp.Topics, pinternal, detailed)
 				}
 			}
 			return nil
@@ -262,10 +262,10 @@ func sortTopics(topics []kmsg.MetadataResponseTopic) {
 	}
 }
 
-func printBrokers(format string, controllerID int32, brokers []kmsg.MetadataResponseBroker) {
+func printBrokers(format, command string, controllerID int32, brokers []kmsg.MetadataResponseBroker) {
 	sortBrokers(brokers)
 
-	table := out.NewFormattedTable(format, "metadata.brokers", 1, "brokers",
+	table := out.NewFormattedTable(format, command, 1, "brokers",
 		"ID", "HOST", "PORT", "RACK")
 	for _, broker := range brokers {
 		var controllerStar string
@@ -283,7 +283,7 @@ func printBrokers(format string, controllerID int32, brokers []kmsg.MetadataResp
 	table.Flush()
 }
 
-func PrintTopics(format string, version int16, topics []kmsg.MetadataResponseTopic, pinternal, detailed bool) {
+func PrintTopics(format, command string, version int16, topics []kmsg.MetadataResponseTopic, pinternal, detailed bool) {
 	sortTopics(topics)
 
 	hasID := version >= 10
@@ -291,10 +291,10 @@ func PrintTopics(format string, version int16, topics []kmsg.MetadataResponseTop
 	if !detailed {
 		var table *out.FormattedTable
 		if hasID {
-			table = out.NewFormattedTable(format, "metadata.topics", 1, "topics",
+			table = out.NewFormattedTable(format, command, 1, "topics",
 				"NAME", "ID", "PARTITIONS", "REPLICAS")
 		} else {
-			table = out.NewFormattedTable(format, "metadata.topics", 1, "topics",
+			table = out.NewFormattedTable(format, command, 1, "topics",
 				"NAME", "PARTITIONS", "REPLICAS")
 		}
 		for _, topic := range topics {

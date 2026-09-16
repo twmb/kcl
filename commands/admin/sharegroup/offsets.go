@@ -57,7 +57,7 @@ for the specified topics within the share group.
 				return fmt.Errorf("%s", msg)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "share-group.offset-delete", 1, "results",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
 				"TOPIC", "STATUS")
 			for _, topic := range kresp.Topics {
 				errMsg := "OK"

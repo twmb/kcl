@@ -264,7 +264,7 @@ kcl logdirs describe   # describes all`,
 					return entries[i].key < entries[j].key
 				})
 				header := strings.ToUpper(aggregateInto)
-				aggTable := out.NewFormattedTable(cl.Format(), "logdirs.describe", 1, "dirs",
+				aggTable := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "dirs",
 					header, "SIZE")
 				for _, e := range entries {
 					aggTable.Row(e.key, formatSize(e.size, humanReadable))
@@ -276,7 +276,7 @@ kcl logdirs describe   # describes all`,
 			// TOTAL, USABLE, and CORDONED are appended rather than slotted
 			// next to SIZE so that an awk script keeps the columns it
 			// already indexes.
-			table := out.NewFormattedTable(cl.Format(), "logdirs.describe", 1, "dirs",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "dirs",
 				"BROKER", "ERR", "DIR", "TOPIC", "PARTITION", "SIZE", "OFFSET-LAG", "IS-FUTURE", "TOTAL", "USABLE", "CORDONED")
 			for _, r := range rows {
 				if r.err != nil {
@@ -368,7 +368,7 @@ which allows you to alter replicas.
 			}
 
 			resp := kresp.(*kmsg.AlterReplicaLogDirsResponse)
-			table := out.NewFormattedTable(cl.Format(), "logdirs.alter", 1, "results",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
 				"TOPIC", "PARTITION", "ERROR")
 			for _, topic := range resp.Topics {
 				for _, partition := range topic.Partitions {

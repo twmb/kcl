@@ -115,7 +115,7 @@ func listCommand(cl *client.Client) *cobra.Command {
 			}
 
 			if cl.Format() != out.FormatText {
-				table := out.NewFormattedTable(cl.Format(), "profile.list", 1, "profiles", "NAME", "CURRENT")
+				table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "profiles", "NAME", "CURRENT")
 				for _, n := range profileNames(cfgFile) {
 					table.Row(n, n == cfgFile.CurrentProfile)
 				}
@@ -180,7 +180,7 @@ func currentCommand(cl *client.Client) *cobra.Command {
 			}
 			switch cl.Format() {
 			case out.FormatJSON:
-				out.MarshalJSON("profile.current", 1, map[string]any{"profile": name})
+				out.MarshalJSON(cl.Command(), 1, map[string]any{"profile": name})
 			case out.FormatAWK:
 				fmt.Println(name)
 			default:
@@ -480,7 +480,7 @@ func dumpCommand(cl *client.Client) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				out.MarshalJSON("profile.dump", 1, m)
+				out.MarshalJSON(cl.Command(), 1, m)
 			case out.FormatAWK:
 				m, err := cfgMap(cfg)
 				if err != nil {

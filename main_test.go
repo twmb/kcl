@@ -205,9 +205,9 @@ func TestCommandName(t *testing.T) {
 	list := &cobra.Command{Use: "list", Run: func(*cobra.Command, []string) {}}
 	topic.AddCommand(list)
 	root.AddCommand(topic)
-	for cmd, want := range map[*cobra.Command]string{root: "", topic: "topic", list: "topic.list", nil: ""} {
-		if got := commandName(cmd); got != want {
-			t.Errorf("commandName = %q, want %q", got, want)
+	for cmd, want := range map[*cobra.Command]string{root: "", topic: "topic", list: "topic.list"} {
+		if got := out.CommandName(cmd.CommandPath()); got != want {
+			t.Errorf("CommandName(%q) = %q, want %q", cmd.CommandPath(), got, want)
 		}
 	}
 }

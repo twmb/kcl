@@ -36,3 +36,22 @@ func TestErrorDocAndExitCode(t *testing.T) {
 		})
 	}
 }
+
+func TestCommandName(t *testing.T) {
+	for _, test := range []struct {
+		path string
+		exp  string
+	}{
+		{"kcl", ""},
+		{"kcl topic", "topic"},
+		{"kcl topic list", "topic.list"},
+		{"kcl registry schema get", "registry.schema.get"},
+		{"", ""},
+	} {
+		t.Run(test.path, func(t *testing.T) {
+			if got := CommandName(test.path); got != test.exp {
+				t.Errorf("CommandName(%q) = %q != exp %q", test.path, got, test.exp)
+			}
+		})
+	}
+}

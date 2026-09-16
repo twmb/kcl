@@ -92,7 +92,7 @@ Requires Kafka 2.7.0+.
 				return fmt.Errorf("%s%s", kerr.ErrorForCode(resp.ErrorCode), additional)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), "user.list", 1, "credentials",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "credentials",
 				"USER", "MECHANISM", "ITERATIONS", "ERROR")
 			for _, res := range resp.Results {
 				if res.ErrorCode != 0 {
@@ -282,7 +282,7 @@ Both --set and --del can be specified many times.
 			}
 			resp := kresp.(*kmsg.AlterUserSCRAMCredentialsResponse)
 
-			table := out.NewFormattedTable(cl.Format(), "user.alter", 1, "results",
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
 				"USER", "ERROR")
 			for _, res := range resp.Results {
 				table.Row(res.User, kerr.ErrorForCode(res.ErrorCode))
