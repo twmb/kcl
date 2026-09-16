@@ -18,7 +18,7 @@ import (
 func Command(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "logdirs",
-		Short: "Alter or describe partition log directores.",
+		Short: "Alter or describe partition log directories.",
 	}
 	cmd.AddCommand(describeCommand(cl))
 	cmd.AddCommand(alterReplicasCommand(cl))
