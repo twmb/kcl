@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -204,9 +205,11 @@ the producer ID, epoch, timeout, and the topics/partitions involved.
 
 			table := out.NewFormattedTable(cl.Format(), "txn.describe", 1, "transactions",
 				"TRANSACTIONAL-ID", "STATE", "PRODUCER-ID", "PRODUCER-EPOCH", "TIMEOUT-MS", "START-TIMESTAMP", "TOPICS", "ERROR")
+			anyErr := false
 			for _, txn := range resp.TransactionStates {
 				if err := kerr.ErrorForCode(txn.ErrorCode); err != nil {
-					table.Row(txn.TransactionalID, "", "", "", "", "", "", err)
+					anyErr = true
+					table.Row(txn.TransactionalID, "", noNum, noNum, noNum, noTime, "", err.Error())
 					continue
 				}
 				var topics []string
@@ -217,16 +220,71 @@ the producer ID, epoch, timeout, and the topics/partitions involved.
 				table.Row(
 					txn.TransactionalID,
 					txn.State,
-					txn.ProducerID,
-					txn.ProducerEpoch,
-					txn.TimeoutMillis,
-					time.Unix(0, txn.StartTimestamp*1e6).UTC().Format("2006-01-02 15:04:05.999"),
+					num(int64(txn.ProducerID)),
+					num(int64(txn.ProducerEpoch)),
+					num(int64(txn.TimeoutMillis)),
+					millis(txn.StartTimestamp),
 					strings.Join(topics, ", "),
 					"",
 				)
 			}
 			table.Flush()
+			if anyErr {
+				return out.ErrSilent
+			}
 			return nil
 		},
 	}
+}
+
+// A row that failed carries no numbers, but the table renders one value into
+// all three formats, so the column types have to travel with the value. num
+// and millis print what a person reads and encode what a script parses: an
+// empty cell in text and awk, a JSON number or null.
+var (
+	noNum  = optNum{}
+	noTime = optMillis{}
+)
+
+func num(v int64) optNum       { return optNum{v: v, ok: true} }
+func millis(v int64) optMillis { return optMillis{v: v, ok: true} }
+
+type optNum struct {
+	v  int64
+	ok bool
+}
+
+func (o optNum) String() string {
+	if !o.ok {
+		return ""
+	}
+	return strconv.FormatInt(o.v, 10)
+}
+
+func (o optNum) MarshalJSON() ([]byte, error) {
+	if !o.ok {
+		return []byte("null"), nil
+	}
+	return strconv.AppendInt(nil, o.v, 10), nil
+}
+
+// optMillis is a unix millisecond timestamp. Text and awk get the UTC time,
+// JSON gets the milliseconds themselves.
+type optMillis struct {
+	v  int64
+	ok bool
+}
+
+func (o optMillis) String() string {
+	if !o.ok {
+		return ""
+	}
+	return time.Unix(0, o.v*1e6).UTC().Format("2006-01-02 15:04:05.999")
+}
+
+func (o optMillis) MarshalJSON() ([]byte, error) {
+	if !o.ok {
+		return []byte("null"), nil
+	}
+	return strconv.AppendInt(nil, o.v, 10), nil
 }

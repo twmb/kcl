@@ -5,6 +5,34 @@ output is for people and may change between releases without an entry here;
 `--format awk` is the stable scripting contract. Entries cover `--format
 json` and any `text` change worth calling out.
 
+## `txn describe` types its JSON fields
+
+`producer_id`, `producer_epoch`, `timeout_ms` and `start_timestamp` were
+strings, and `error` was a Go struct with exported field names. The command
+also exited 0 when a transactional ID was not found.
+
+Before:
+
+```
+$ kcl txn describe nosuchtxn --format json
+{"_command":"txn.describe","_version":1,"transactions":[{"error":{"Message":"TRANSACTIONAL_ID_NOT_FOUND","Code":105,"Retriable":false,"Description":"The transactionalId could not be found."},"producer_epoch":"","producer_id":"","start_timestamp":"","state":"","timeout_ms":"","topics":"","transactional_id":"nosuchtxn"}]}
+[exit 0]
+```
+
+After:
+
+```
+$ kcl txn describe nosuchtxn --format json
+{"_command":"txn.describe","_version":1,"transactions":[{"error":"TRANSACTIONAL_ID_NOT_FOUND: The transactionalId could not be found.","producer_epoch":null,"producer_id":null,"start_timestamp":null,"state":"","timeout_ms":null,"topics":"","transactional_id":"nosuchtxn"}]}
+[exit 1]
+```
+
+The four fields are JSON numbers when the transaction exists and `null` when
+it does not, `start_timestamp` in unix milliseconds rather than a formatted
+date, and `error` is the string every other command puts there. The old
+shapes are gone: a script reading `.error.Message` reads `.error` now, and
+one comparing `.producer_id` to `""` compares it to `null`.
+
 ## `--format json` prints one line
 
 Applies to every command that emits JSON, including `--format json` errors.
