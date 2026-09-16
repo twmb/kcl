@@ -795,7 +795,7 @@ func TestMaybeXHelp(t *testing.T) {
 		{name: "nothing", flags: []string{"sasl.user=me"}, format: "text"},
 		{name: "help", flags: []string{"help"}, format: "text", want: "\nsasl.pass=${KAFKA_PASS}\n  Password.", wantOK: true},
 		{name: "list", flags: []string{"sasl.user=me", "list"}, format: "text", want: "sasl.user=alice\n", wantOK: true},
-		{name: "help as json", flags: []string{"help"}, format: "json", want: `"key": "tls.insecure"`, wantOK: true},
+		{name: "help as json", flags: []string{"help"}, format: "json", want: `"key":"tls.insecure"`, wantOK: true},
 		{name: "list as awk", flags: []string{"list"}, format: "awk", want: "tls.insecure\tbool\ttrue\t", wantOK: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {

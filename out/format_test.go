@@ -89,6 +89,33 @@ func TestFormattedTableJSON(t *testing.T) {
 	}
 }
 
+// JSON output is a single line so it pipes into jq and line tools.
+func TestJSONIsOneLine(t *testing.T) {
+	outputs := []string{
+		captureStdout(func() {
+			table := NewFormattedTable("json", "test.cmd", 1, "items", "NAME", "COUNT")
+			table.Row("a", 1)
+			table.Row("b", 2)
+			table.Flush()
+		}),
+		captureStdout(func() {
+			MarshalJSON("test.cmd", 1, map[string]any{"nested": map[string]any{"a": []int{1, 2}}})
+		}),
+	}
+	for _, output := range outputs {
+		if n := strings.Count(output, "\n"); n != 1 {
+			t.Errorf("output has %d newlines, want 1 (trailing):\n%s", n, output)
+		}
+		if strings.Contains(output, "\n  ") {
+			t.Errorf("output is indented:\n%s", output)
+		}
+		var v any
+		if err := json.Unmarshal([]byte(output), &v); err != nil {
+			t.Errorf("output is not valid JSON: %v\n%s", err, output)
+		}
+	}
+}
+
 func TestFormattedTableAWK(t *testing.T) {
 	output := captureStdout(func() {
 		table := NewFormattedTable("awk", "test.cmd", 1, "items",

@@ -3,12 +3,15 @@
 package fake
 
 import (
+	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -16,6 +19,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/twmb/franz-go/pkg/kfake"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kversion"
 	"github.com/twmb/franz-go/pkg/sr/srfake"
 
@@ -24,6 +28,9 @@ import (
 
 // defaultRegistryPort is the conventional Confluent Schema Registry port.
 const defaultRegistryPort = 8081
+
+// defaultBrokerPort is where kcl looks for a broker with nothing configured.
+const defaultBrokerPort = 9092
 
 // Command returns the `kcl fake` cobra command.
 func Command() *cobra.Command {
@@ -39,9 +46,13 @@ func Command() *cobra.Command {
 		acls         bool
 		saslUsers    []string
 		pprofAddr    string
+		controlAddr  string
 		registry     bool
 		registryPort int
 		seedDemoFlag bool
+		blackhole    bool
+		synthetic    bool
+		syntheticFmt string
 	)
 
 	cmd := &cobra.Command{
@@ -52,7 +63,9 @@ func Command() *cobra.Command {
 kcl fake runs a kfake cluster in-process and prints the listen addresses
 to stdout. By default it starts three brokers on 127.0.0.1 ports
 9092,9093,9094. Point any Kafka client at the printed addresses; SIGINT
-or SIGTERM exits cleanly.
+or SIGTERM exits cleanly. The addresses print once every listener is bound
+and any seeding is done, so a script can start its client as soon as it
+reads them.
 
 This is NOT a production broker. kfake implements the user-facing Kafka
 protocol surface (produce, fetch, groups, transactions, ACLs, share
@@ -87,6 +100,15 @@ Seed topics at startup:
 
   kcl fake --seed-topic foo:10 --seed-topic bar:3
 
+Producer benchmarks, taking records and dropping them:
+
+  kcl fake --blackhole-produce
+
+Consumer benchmarks, answering every fetch from one canned batch:
+
+  kcl fake --synthetic-fetch
+  kcl fake --synthetic-fetch --synthetic-batch records=1000,bytes=100,random=0.5,compression=lz4
+
 Custom broker config (repeatable):
 
   kcl fake -c group.consumer.heartbeat.interval.ms=500 \
@@ -112,11 +134,28 @@ same {id, count} shape and a few records each:
   kcl consume demo-avro -o start --decode=value
   kcl consume demo-plain -o start
 
+Serve a control endpoint so another process can drive the cluster (move
+leaders, add and remove brokers, shuffle leadership), driven by kcl fake
+control:
+
+  kcl fake --control              # 127.0.0.1:9099
+  kcl fake --control=19099        # a port, or HOST:PORT
+
 Tune log verbosity for debugging:
 
   kcl fake -l debug
 `,
-		Args: cobra.ExactArgs(0),
+		Args: func(_ *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return nil
+			}
+			// --control has an optional value, so pflag only takes it with
+			// an equals sign; "--control ADDR" leaves ADDR sitting here.
+			if _, err := strconv.Atoi(args[0]); err == nil || strings.Contains(args[0], ":") {
+				return out.Errf(out.ExitUsage, "unexpected argument %q: --control takes its address with an equals sign, as --control=%s", args[0], args[0])
+			}
+			return out.Errf(out.ExitUsage, "unexpected argument %q: kcl fake takes no positional arguments", args[0])
+		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			level, err := parseLogLevel(logLevel)
 			if err != nil {
@@ -126,13 +165,40 @@ Tune log verbosity for debugging:
 			if err != nil {
 				return out.Errf(out.ExitUsage, "%v", err)
 			}
-			seeds, err := parseSeedTopics(seedTopics)
+			seeds, err := parseSeedTopics(cmd.Flags().Changed("seed-topic"), seedTopics)
 			if err != nil {
 				return out.Errf(out.ExitUsage, "%v", err)
 			}
 			supers, err := parseSASLUsers(saslUsers)
 			if err != nil {
 				return out.Errf(out.ExitUsage, "%v", err)
+			}
+			if err := checkFlagPairs(blackhole, seedDemoFlag, synthetic, cmd.Flags().Changed("synthetic-batch")); err != nil {
+				return out.Errf(out.ExitUsage, "%v", err)
+			}
+			batch, err := parseSyntheticBatch(syntheticFmt)
+			if err != nil {
+				return out.Errf(out.ExitUsage, "%v", err)
+			}
+
+			// Normalize --control before anything binds, so a port clash
+			// with a broker is a usage error rather than a bind failure
+			// after the cluster is already up.
+			if controlAddr != "" {
+				if !strings.Contains(controlAddr, ":") {
+					controlAddr = "127.0.0.1:" + controlAddr
+				}
+				_, sport, err := net.SplitHostPort(controlAddr)
+				if err != nil {
+					return out.Errf(out.ExitUsage, "invalid --control address %q: %v", controlAddr, err)
+				}
+				port, err := strconv.Atoi(sport)
+				if err != nil {
+					return out.Errf(out.ExitUsage, "invalid --control port %q: %v", sport, err)
+				}
+				if slices.Contains(ports, port) {
+					return out.Errf(out.ExitUsage, "--control port %d is also a broker port", port)
+				}
 			}
 
 			numBrokers := len(ports)
@@ -161,6 +227,12 @@ Tune log verbosity for debugging:
 			}
 			if allowAuto {
 				opts = append(opts, kfake.AllowAutoTopicCreation())
+			}
+			if blackhole {
+				opts = append(opts, kfake.BlackholeProduce())
+			}
+			if synthetic {
+				opts = append(opts, kfake.SyntheticFetch(batch))
 			}
 			if acls {
 				opts = append(opts, kfake.EnableACLs())
@@ -204,8 +276,19 @@ Tune log verbosity for debugging:
 				return fmt.Errorf("unable to start fake cluster: %v", err)
 			}
 
-			for _, addr := range c.ListenAddrs() {
-				fmt.Println(addr)
+			if controlAddr != "" {
+				ln, err := net.Listen("tcp", controlAddr)
+				if err != nil {
+					return fmt.Errorf("unable to listen for the control endpoint on %s: %v", controlAddr, err)
+				}
+				srv := &http.Server{Handler: controlHandler(c)}
+				defer srv.Close()
+				go func() {
+					if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+						fmt.Fprintf(os.Stderr, "control endpoint failed: %v\n", err)
+					}
+				}()
+				fmt.Fprintf(os.Stderr, "control endpoint listening on %s\n", ln.Addr())
 			}
 
 			// Serve an in-memory Schema Registry (srfake) so the same
@@ -255,6 +338,13 @@ Tune log verbosity for debugging:
 				}
 			}
 
+			// The addresses go out last, once every listener is bound
+			// and any seeding is done, so a script that starts its
+			// client on reading them finds everything ready.
+			for _, addr := range c.ListenAddrs() {
+				fmt.Println(addr)
+			}
+
 			sigs := make(chan os.Signal, 2)
 			signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
 			<-sigs
@@ -280,7 +370,7 @@ Tune log verbosity for debugging:
 		},
 	}
 
-	cmd.Flags().IntSliceVar(&ports, "ports", []int{9092, 9093, 9094}, "ports for brokers (comma-separated; broker count = number of ports)")
+	cmd.Flags().IntSliceVar(&ports, "ports", []int{9092, 9093, 9094}, "ports for brokers (repeatable and/or comma-separated; broker count = number of ports)")
 	cmd.Flags().StringVarP(&logLevel, "log-level", "l", "none", "kfake log level: none, error, warn, info, debug")
 	cmd.Flags().StringVarP(&dataDir, "data-dir", "d", "", "persist state under this directory across restarts (default: in-memory only)")
 	cmd.Flags().BoolVar(&syncWrites, "sync", false, "fsync every write for immediate durability (slower)")
@@ -288,14 +378,103 @@ Tune log verbosity for debugging:
 	cmd.Flags().StringArrayVarP(&brokerCfgs, "broker-config", "c", nil, "broker config key=value (repeatable; applied at startup)")
 	cmd.Flags().StringSliceVar(&seedTopics, "seed-topic", nil, "seed topics at startup as NAME:PARTITIONS (repeatable and/or comma-separated)")
 	cmd.Flags().BoolVar(&allowAuto, "allow-auto-topic-creation", false, "allow producers/consumers to auto-create topics")
+	cmd.Flags().BoolVar(&blackhole, "blackhole-produce", false, "accept produce and discard the records (offsets still advance; nothing can be consumed)")
+	cmd.Flags().BoolVar(&synthetic, "synthetic-fetch", false, "answer every fetch of an existing partition from one canned batch, served from any offset with no end (consume benchmarks)")
+	cmd.Flags().StringVar(&syntheticFmt, "synthetic-batch", "", "shape the batch --synthetic-fetch serves, as KEY=VAL,...: records, bytes, random, compression")
 	cmd.Flags().BoolVar(&acls, "acls", false, "enable ACL enforcement (requires --sasl superusers to get through the deny-by-default)")
 	cmd.Flags().StringArrayVar(&saslUsers, "sasl", nil, "add a SASL superuser as MECHANISM:USER:PASS (repeatable; enables SASL). Mechanisms: plain, scram-sha-256, scram-sha-512")
 	cmd.Flags().StringVar(&pprofAddr, "pprof", "", "if set, serve pprof on this addr (e.g. :6060 or 127.0.0.1:6060)")
+	cmd.Flags().StringVar(&controlAddr, "control", "", "serve a control endpoint for driving the cluster remotely (bare --control uses "+defaultControlAddr+", or --control=ADDR)")
+	cmd.Flags().Lookup("control").NoOptDefVal = defaultControlAddr
 	cmd.Flags().BoolVar(&registry, "registry", true, "serve an in-memory Schema Registry (srfake) for schema-aware produce/consume (disable with --registry=false)")
 	cmd.Flags().IntVar(&registryPort, "registry-port", defaultRegistryPort, "port for the fake schema registry")
 	cmd.Flags().BoolVar(&seedDemoFlag, "seed-demo", false, "seed demo-avro/demo-proto/demo-json (schema-encoded) and demo-plain topics with sample records (implies --registry)")
 
+	cmd.AddCommand(controlCommand())
+
 	return cmd
+}
+
+// checkFlagPairs reports flags that cannot run together. We check before
+// anything binds, as with the --control port clash, so a pair that cannot
+// work fails at the prompt rather than after the brokers are listening.
+func checkFlagPairs(blackhole, seedDemo, syntheticFetch, syntheticBatch bool) error {
+	if blackhole && seedDemo {
+		return errors.New("--seed-demo produces records, which --blackhole-produce would drop")
+	}
+	if syntheticBatch && !syntheticFetch {
+		return errors.New("--synthetic-batch shapes the batch --synthetic-fetch serves; give --synthetic-fetch too")
+	}
+	return nil
+}
+
+// syntheticCodecs are the codecs we can compress a canned batch with, by the
+// names kcl takes everywhere else.
+var syntheticCodecs = map[string]kgo.CompressionCodec{
+	"none":   kgo.NoCompression(),
+	"gzip":   kgo.GzipCompression(),
+	"snappy": kgo.SnappyCompression(),
+	"lz4":    kgo.Lz4Compression(),
+	"zstd":   kgo.ZstdCompression(),
+}
+
+// parseSyntheticBatch parses KEY=VAL entries shaping the batch a
+// --synthetic-fetch cluster serves. An empty string leaves kfake its own
+// default, one megabyte of uncompressed 100 byte values.
+func parseSyntheticBatch(s string) (kfake.SyntheticBatch, error) {
+	var b kfake.SyntheticBatch
+	if s == "" {
+		return b, nil
+	}
+	for _, kv := range strings.Split(s, ",") {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			return b, fmt.Errorf("invalid --synthetic-batch %q: want KEY=VALUE", kv)
+		}
+		var err error
+		switch k {
+		case "records":
+			b.Records, err = atLeastZero(v)
+		case "bytes":
+			b.RecordBytes, err = atLeastZero(v)
+		case "random":
+			f, ferr := strconv.ParseFloat(v, 64)
+			switch {
+			case ferr != nil:
+				err = ferr
+			case math.IsNaN(f) || f < 0 || f > 1:
+				err = errors.New("must be in [0,1]")
+			default:
+				b.RandomFrac = f
+			}
+		case "compression":
+			codec, ok := syntheticCodecs[strings.ToLower(v)]
+			if !ok {
+				err = errors.New("must be none, gzip, snappy, lz4, or zstd")
+				break
+			}
+			b.Compression = codec
+		default:
+			return b, fmt.Errorf("invalid --synthetic-batch key %q: want records, bytes, random, compression", k)
+		}
+		if err != nil {
+			return b, fmt.Errorf("invalid --synthetic-batch %q: %v", kv, err)
+		}
+	}
+	return b, nil
+}
+
+// atLeastZero parses a count. kfake rejects a negative one when the cluster
+// starts; we say so while you are still typing.
+func atLeastZero(v string) (int, error) {
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, err
+	}
+	if n < 0 {
+		return 0, errors.New("must be >= 0")
+	}
+	return n, nil
 }
 
 func parseLogLevel(s string) (kfake.LogLevel, error) {
@@ -335,10 +514,20 @@ type seedTopic struct {
 	partitions int32
 }
 
-func parseSeedTopics(list []string) ([]seedTopic, error) {
+// parseSeedTopics parses NAME:PARTITIONS entries. given says whether the flag
+// was set at all: pflag splits the value with a csv reader, and a csv reader
+// reads "" as no records, so --seed-topic '' arrives here as an empty list
+// rather than as one empty entry.
+func parseSeedTopics(given bool, list []string) ([]seedTopic, error) {
+	if given && len(list) == 0 {
+		return nil, fmt.Errorf(`invalid --seed-topic "": empty`)
+	}
 	var out []seedTopic
 	for _, s := range list {
 		name, parts, ok := strings.Cut(s, ":")
+		if name == "" {
+			return nil, fmt.Errorf("invalid --seed-topic %q: empty", s)
+		}
 		if !ok {
 			out = append(out, seedTopic{topic: s, partitions: -1})
 			continue

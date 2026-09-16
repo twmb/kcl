@@ -1,3 +1,22 @@
+v0.20.0 (unreleased)
+===
+
+### CHANGED
+
+* `--format json` prints one line rather than an indented document. The
+  structure is unchanged; pipe to jq for the old shape. See MIGRATION.md.
+
+### NEW
+
+* `kcl fake --control` serves an endpoint for driving a running fake
+  cluster; `kcl fake control` drives it.
+* `kcl fake control fault add|list|rm|wait` installs kfake faults, which
+  fail matching requests with an error before the cluster acts on them.
+* `kcl fake control call METHOD [ARGS...]` calls a kfake `Cluster` method;
+  `kcl fake control methods` lists what it can call.
+* Topic ID flags accept the dashed, uppercase, `urn:uuid:`, and braced
+  forms alongside bare hex.
+
 v0.19.0
 ===
 

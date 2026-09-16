@@ -75,6 +75,36 @@ func TestWantsHelpJSON(t *testing.T) {
 	}
 }
 
+func TestFormatFromArgs(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"absent", []string{"topic", "list"}, ""},
+		{"nil", nil, ""},
+		{"space", []string{"topic", "list", "--format", "json"}, "json"},
+		{"equals", []string{"--format=awk", "topic", "list"}, "awk"},
+		// --format has no shorthand; -f is --filter on group list and the
+		// record format on consume, so it must not be picked up here.
+		{"no shorthand", []string{"group", "list", "-f", "json"}, ""},
+		{"invalid value", []string{"--format", "yaml"}, ""},
+		{"invalid equals", []string{"--format=yaml"}, ""},
+		{"no value", []string{"topic", "list", "--format"}, ""},
+		{"value is a flag", []string{"--format", "--nosuchflag"}, ""},
+		{"last wins", []string{"--format=json", "--format", "awk"}, "awk"},
+		{"last wins invalid", []string{"--format=json", "--format", "yaml"}, ""},
+		{"after a bare dash dash", []string{"produce", "foo", "--", "--format", "json"}, ""},
+		{"text", []string{"--format", "text"}, "text"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := formatFromArgs(test.args); got != test.want {
+				t.Errorf("formatFromArgs(%q) = %q, want %q", test.args, got, test.want)
+			}
+		})
+	}
+}
+
 func TestUsageErrorsExitTwo(t *testing.T) {
 	for _, test := range []struct {
 		name    string
