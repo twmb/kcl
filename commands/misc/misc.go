@@ -634,6 +634,15 @@ offset.
 			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "offsets",
 				"BROKER", "TOPIC", "PARTITION", "START", "STABLE", "END", "ERROR")
 
+			// ERROR is the last column and is usually empty, which
+			// ended every awk row in a tab. A dash there is what
+			// "topic describe" writes, and it keeps the column count
+			// where it was. Text and JSON keep the empty string.
+			noErr := ""
+			if cl.Format() == out.FormatAWK {
+				noErr = "-"
+			}
+
 			for _, topic := range sorted {
 				for _, part := range topic.parts {
 					if part.err != nil {
@@ -648,7 +657,7 @@ offset.
 						start = fmt.Sprintf("%d/%d", part.startOffset, part.startLeaderEpoch)
 						end = fmt.Sprintf("%d/%d", part.endOffset, part.endLeaderEpoch)
 					}
-					table.Row(part.broker, topic.topic, part.part, start, part.stableOffset, end, "")
+					table.Row(part.broker, topic.topic, part.part, start, part.stableOffset, end, noErr)
 				}
 			}
 			table.Flush()

@@ -94,6 +94,10 @@ $ kcl topic describe demo-avro --format awk | cat -A
 demo-avro^I0^I0^I0^I[0]^I[0]^I[]^I-$
 ```
 
+`misc list-offsets` ended every awk row in a tab for the same reason, and
+writes the same dash in its empty `ERROR` column. `text` and `json` keep the
+empty string.
+
 `registry compatibility test` printed `compatible: true`, a label and a
 value. awk is the word alone, so that `[ "$(kcl ... --format awk)" = true ]`
 reads. `text` still prints the labeled line.
