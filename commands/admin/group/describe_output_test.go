@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/out"
 )
 
 // runDescribe runs kcl group describe against the cluster with the given
@@ -61,6 +63,24 @@ func produceN(t *testing.T, cl *kgo.Client, topic string, n int) {
 	for range n {
 		if res := cl.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte("v")}); res.FirstErr() != nil {
 			t.Fatal(res.FirstErr())
+		}
+	}
+}
+
+// produceTo produces n records to each named partition of topic.
+func produceTo(t *testing.T, c *kfake.Cluster, topic string, n int, partitions ...int32) {
+	t.Helper()
+	cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...), kgo.RecordPartitioner(kgo.ManualPartitioner()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	ctx := context.Background()
+	for _, p := range partitions {
+		for range n {
+			if res := cl.ProduceSync(ctx, &kgo.Record{Topic: topic, Partition: p, Value: []byte("v")}); res.FirstErr() != nil {
+				t.Fatal(res.FirstErr())
+			}
 		}
 	}
 }
@@ -128,8 +148,8 @@ func TestDescribeLogStartOffset(t *testing.T) {
 		t.Fatal(err)
 	}
 	commitAt(t, adm, "trim-committed", "t", 0, 6)
-	joinGroup(t, c, "trim-classic", false, false, "t")
-	joinGroup(t, c, "trim-consumer", true, false, "t")
+	joinGroup(t, c, "trim-classic", false, "t")
+	joinGroup(t, c, "trim-consumer", true, "t")
 
 	for _, test := range []struct {
 		group   string
@@ -181,18 +201,23 @@ func TestDescribeLogStartOffset(t *testing.T) {
 	}
 }
 
-// joinGroup joins group as a member consuming topics from the start and
-// polls once, so that the group has a member with an assignment. With
-// consumer set, the member speaks the KIP-848 protocol. Nothing is committed
-// unless commit is set.
-func joinGroup(t *testing.T, c *kfake.Cluster, group string, consumer, commit bool, topics ...string) *kgo.Client {
+// joinGroup joins group as a member of topics and returns once the member
+// holds an assignment, so that describe sees it. The member commits nothing
+// and stays in the group until the test ends. With consumer set, the member
+// speaks the KIP-848 protocol.
+func joinGroup(t *testing.T, c *kfake.Cluster, group string, consumer bool, topics ...string) {
 	t.Helper()
+	assigned := make(chan struct{})
+	var once sync.Once
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(c.ListenAddrs()...),
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeTopics(topics...),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 		kgo.DisableAutoCommit(),
+		kgo.OnPartitionsAssigned(func(context.Context, *kgo.Client, map[string][]int32) {
+			once.Do(func() { close(assigned) })
+		}),
 	}
 	if consumer {
 		ctx := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true)
@@ -203,18 +228,22 @@ func joinGroup(t *testing.T, c *kfake.Cluster, group string, consumer, commit bo
 		t.Fatal(err)
 	}
 	t.Cleanup(m.Close)
+
+	// The first poll joins the group.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	fs := m.PollFetches(ctx)
-	if err := fs.Err(); err != nil {
-		t.Fatalf("poll: %v", err)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.PollFetches(ctx)
+	}()
+	select {
+	case <-assigned:
+	case <-ctx.Done():
+		t.Fatalf("group %s: no assignment within 5s", group)
 	}
-	if commit {
-		if err := m.CommitUncommittedOffsets(ctx); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return m
+	cancel()
+	<-done
 }
 
 // TestDescribeConsumerProtocolNamesTopics pins that a KIP-848 group whose
@@ -230,7 +259,7 @@ func TestDescribeConsumerProtocolNamesTopics(t *testing.T) {
 		t.Fatal(err)
 	}
 	produceN(t, cl, "t", 10)
-	joinGroup(t, c, "g848", true, true, "t")
+	joinGroup(t, c, "g848", true, "t")
 
 	stdout, err := runDescribe(t, c, "g848", "--consumer-protocol", "--format", "awk")
 	if err != nil {
@@ -253,4 +282,166 @@ func TestDescribeConsumerProtocolNamesTopics(t *testing.T) {
 	if !strings.Contains(stdout, "\tt:") {
 		t.Errorf("members section does not name the assigned topic:\n%s", stdout)
 	}
+}
+
+func TestParseLagFilter(t *testing.T) {
+	for _, test := range []struct {
+		expr string
+		op   string
+		n    int64
+		bad  bool
+	}{
+		{expr: ">0", op: ">", n: 0},
+		{expr: ">=10", op: ">=", n: 10},
+		{expr: "<5", op: "<", n: 5},
+		{expr: "<=5", op: "<=", n: 5},
+		{expr: "=0", op: "=", n: 0},
+		{expr: "7", op: ">=", n: 7},
+		{expr: " > 3 ", op: ">", n: 3},
+		{expr: ">=\t100", op: ">=", n: 100},
+		{expr: "", bad: true},
+		{expr: ">", bad: true},
+		{expr: "foo", bad: true},
+		{expr: "5x", bad: true},
+		{expr: "==5", bad: true},
+		{expr: "!=5", bad: true},
+		{expr: "99999999999999999999", bad: true},
+	} {
+		t.Run(test.expr, func(t *testing.T) {
+			f, err := parseLagFilter(test.expr)
+			if test.bad {
+				if err == nil {
+					t.Fatalf("parsed %+v, want an error", f)
+				}
+				if out.ExitCode(err) != out.ExitUsage {
+					t.Errorf("exit code %d, want %d", out.ExitCode(err), out.ExitUsage)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if f.op != test.op || f.n != test.n {
+				t.Errorf("parsed %s %d, want %s %d", f.op, f.n, test.op, test.n)
+			}
+		})
+	}
+}
+
+// TestDescribeLagFilter pins --lag: a group with no partition left is dropped
+// from every format, a surviving group keeps its full TOTAL-LAG, a partition
+// whose lag is unknown never matches, and dropping every group prints
+// nothing in text and an empty groups list in JSON.
+func TestDescribeLagFilter(t *testing.T) {
+	c, cl := newTestCluster(t)
+	adm := kadm.NewClient(cl)
+	ctx := context.Background()
+
+	if _, err := adm.CreateTopics(ctx, 2, 1, nil, "t", "empty"); err != nil {
+		t.Fatal(err)
+	}
+	produceTo(t, c, "t", 10, 0, 1)
+	// behind: lag 2 on partition 0 and 8 on partition 1, 10 in total.
+	commitAt(t, adm, "behind", "t", 0, 8)
+	commitAt(t, adm, "behind", "t", 1, 2)
+	// caught-up: lag 0 on both.
+	commitAt(t, adm, "caught-up", "t", 0, 10)
+	commitAt(t, adm, "caught-up", "t", 1, 10)
+	// unknown: a member on an empty topic with nothing committed, so no
+	// lag can be computed.
+	joinGroup(t, c, "unknown", false, "empty")
+
+	all := []string{"behind", "caught-up", "unknown"}
+
+	t.Run("text keeps the behind group whole", func(t *testing.T) {
+		stdout, err := runDescribe(t, c, append(all, "--lag", ">5")...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Count(stdout, "GROUP ") != 1 || !strings.Contains(stdout, "GROUP        behind\n") {
+			t.Errorf("want only the behind group:\n%s", stdout)
+		}
+		if !strings.Contains(stdout, "TOTAL-LAG    10\n") {
+			t.Errorf("TOTAL-LAG should be the full 10, not the filtered 8:\n%s", stdout)
+		}
+		if strings.Count(stdout, "\nt  ") != 1 {
+			t.Errorf("want one partition row, the one with lag 8:\n%s", stdout)
+		}
+	})
+
+	t.Run("awk rows of the surviving group only", func(t *testing.T) {
+		stdout, err := runDescribe(t, c, append(all, "--lag", ">=2", "--format", "awk")...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows := awkRows(stdout)
+		if len(rows) != 2 || rows[0][0] != "behind" || rows[1][0] != "behind" || rows[0][6] != "2" || rows[1][6] != "8" {
+			t.Errorf("want the two behind rows with lag 2 and 8, got:\n%s", stdout)
+		}
+	})
+
+	t.Run("unknown lag never matches", func(t *testing.T) {
+		stdout, err := runDescribe(t, c, "unknown", "--lag", "<=1000000")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stdout != "" {
+			t.Errorf("want nothing on stdout, got:\n%s", stdout)
+		}
+	})
+
+	t.Run("every group dropped", func(t *testing.T) {
+		for _, format := range []string{"text", "awk"} {
+			stdout, err := runDescribe(t, c, append(all, "--lag", ">100", "--format", format)...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stdout != "" {
+				t.Errorf("%s: want nothing on stdout, got:\n%s", format, stdout)
+			}
+		}
+		stdout, err := runDescribe(t, c, append(all, "--lag", ">100", "--format", "json")...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Command string           `json:"_command"`
+			Version int              `json:"_version"`
+			Groups  []map[string]any `json:"groups"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+			t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+		}
+		if doc.Command != "group.describe" || doc.Version != 1 || doc.Groups == nil || len(doc.Groups) != 0 {
+			t.Errorf("want an empty groups list under _command and _version, got: %s", stdout)
+		}
+	})
+
+	t.Run("json keeps the caught-up group at =0", func(t *testing.T) {
+		stdout, err := runDescribe(t, c, append(all, "--lag", "=0", "--format", "json")...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Groups []struct {
+				Group string           `json:"group"`
+				Lag   []map[string]any `json:"lag"`
+			} `json:"groups"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+			t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+		}
+		if len(doc.Groups) != 1 || doc.Groups[0].Group != "caught-up" || len(doc.Groups[0].Lag) != 2 {
+			t.Errorf("want caught-up with two rows, got: %s", stdout)
+		}
+	})
+
+	t.Run("bad expression", func(t *testing.T) {
+		for _, expr := range []string{"foo", ""} {
+			_, err := runDescribe(t, c, "behind", "--lag", expr)
+			if err == nil || out.ExitCode(err) != out.ExitUsage {
+				t.Errorf("--lag %q: err = %v, want a usage error", expr, err)
+			}
+		}
+	})
 }

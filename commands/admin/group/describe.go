@@ -6,6 +6,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -24,6 +25,7 @@ func describeCommand(cl *client.Client) *cobra.Command {
 		useConsumerDescribe bool
 		section             string
 		regex               bool
+		lagExpr             string
 	)
 
 	cmd := &cobra.Command{
@@ -45,11 +47,22 @@ Use --section to show only a specific part:
 In awk format, every lag row begins with the group it belongs to, so rows
 from several groups can be told apart.
 
+Use --lag to keep only the partitions whose lag matches: '>0' for the
+partitions that are behind, '>=1000' or '1000' for those at least a
+thousand behind, '<10', '<=10', or '=0'. A partition whose lag we could
+not compute, printed as a dash, never matches. A group left with no
+matching partitions is left out entirely, so describing every group with
+--lag '>0' lists only the groups that are behind. A group that survives
+prints its summary and members whole, and TOTAL-LAG stays the group's
+full total.
+
 EXAMPLES:
   kcl group describe                          # all groups, all sections
   kcl group describe mygroup                  # specific group
   kcl group describe --section lag            # lag only
   kcl group describe --section summary        # summary only
+  kcl group describe --lag '>0'               # only the groups that are behind
+  kcl group describe --lag '>=1000' -r 'prod-.*'  # far behind, by group regex
   kcl group describe --consumer-protocol      # KIP-848 groups
 
 SEE ALSO:
@@ -57,9 +70,16 @@ SEE ALSO:
   kcl group seek       reset group offsets
   kcl consume -g       consume as a group member
 `,
-		RunE: func(_ *cobra.Command, groups []string) error {
+		RunE: func(cmd *cobra.Command, groups []string) error {
 			if err := validateSection(section); err != nil {
 				return err
+			}
+			opts := describeOpts{section: section}
+			if cmd.Flags().Changed("lag") {
+				var err error
+				if opts.lag, err = parseLagFilter(lagExpr); err != nil {
+					return err
+				}
 			}
 
 			if regex {
@@ -71,7 +91,7 @@ SEE ALSO:
 			}
 
 			if useConsumerDescribe {
-				return describeConsumerGroups(cl, groups, readCommitted, section)
+				return describeConsumerGroups(cl, groups, readCommitted, opts)
 			}
 
 			if len(groups) == 0 {
@@ -113,7 +133,7 @@ SEE ALSO:
 			for _, group := range described {
 				printed = append(printed, classicPrintGroup(group, fetchedOffsets[group.Group], starts, ends))
 			}
-			printGroups(cl.Format(), cl.Command(), section, printed)
+			printGroups(cl.Format(), cl.Command(), opts, printed)
 
 			// A group the broker could not describe, GROUP_ID_NOT_FOUND above
 			// all, is printed with its error and is a failure, as a missing
@@ -131,8 +151,63 @@ SEE ALSO:
 	cmd.Flags().BoolVar(&useConsumerDescribe, "consumer-protocol", false, "use ConsumerGroupDescribe API for new consumer group protocol (KIP-848, Kafka 4.0+)")
 	cmd.Flags().StringVar(&section, "section", "", "output section (summary, lag, members; default: all for text, lag for awk)")
 	cmd.Flags().BoolVarP(&regex, "regex", "r", false, "treat group arguments as regular expressions")
+	cmd.Flags().StringVar(&lagExpr, "lag", "", "keep only partitions whose lag matches (>N, >=N, <N, <=N, =N, or N for >=N); a group with none left is dropped")
 
 	return cmd
+}
+
+// describeOpts are the flags that shape what printGroups prints.
+type describeOpts struct {
+	section string
+	lag     *lagFilter // nil when --lag is not set
+}
+
+// lagFilter is a parsed --lag expression: an operator and the number it
+// compares lag against.
+type lagFilter struct {
+	op string
+	n  int64
+}
+
+var lagExprRe = regexp.MustCompile(`^\s*(>=|<=|>|<|=)?\s*(-?\d+)\s*$`)
+
+func parseLagFilter(expr string) (*lagFilter, error) {
+	m := lagExprRe.FindStringSubmatch(expr)
+	if m == nil {
+		return nil, out.Errf(out.ExitUsage, "invalid --lag %q: want >N, >=N, <N, <=N, =N, or N alone for >=N", expr)
+	}
+	n, err := strconv.ParseInt(m[2], 10, 64)
+	if err != nil {
+		return nil, out.Errf(out.ExitUsage, "invalid --lag %q: %v", expr, err)
+	}
+	op := m[1]
+	if op == "" {
+		op = ">="
+	}
+	return &lagFilter{op: op, n: n}, nil
+}
+
+// matches is whether a row with this lag survives the filter. A nil filter
+// keeps every row; an invalid lag matches nothing.
+func (f *lagFilter) matches(lag int64, valid bool) bool {
+	if f == nil {
+		return true
+	}
+	if !valid {
+		return false
+	}
+	switch f.op {
+	case ">":
+		return lag > f.n
+	case ">=":
+		return lag >= f.n
+	case "<":
+		return lag < f.n
+	case "<=":
+		return lag <= f.n
+	default:
+		return lag == f.n
+	}
 }
 
 // validateSection returns an error if section is not a recognized value.
@@ -217,7 +292,7 @@ func classicPrintGroup(group describedGroup, fetched, starts, ends map[string]ma
 	return pg
 }
 
-func describeConsumerGroups(cl *client.Client, groups []string, readCommitted bool, section string) error {
+func describeConsumerGroups(cl *client.Client, groups []string, readCommitted bool, opts describeOpts) error {
 	if len(groups) == 0 {
 		var err error
 		groups, err = listGroupsByType(cl, []string{"consumer"})
@@ -352,7 +427,7 @@ func describeConsumerGroups(cl *client.Client, groups []string, readCommitted bo
 		printed = append(printed, pg)
 	}
 
-	printGroups(cl.Format(), cl.Command(), section, printed)
+	printGroups(cl.Format(), cl.Command(), opts, printed)
 
 	for _, g := range allGroups {
 		if g.group.ErrorCode != 0 {
@@ -741,6 +816,11 @@ type printGroup struct {
 	nMembers    int
 	rows        []describeRow
 
+	// The group's lag over every row, set by printGroups before --lag
+	// filters the rows.
+	totalLag      int64
+	totalLagValid bool
+
 	memberHeaders []string
 	memberRows    [][]any
 	awkMemberRows [][]any
@@ -797,12 +877,36 @@ func totalLag(rows []describeRow) (int64, bool) {
 // prints the sections of each group under a GROUP line; awk prints the one
 // section, lag by default, with the group as the first column of every lag
 // row; JSON nests everything per group.
-func printGroups(format, command, section string, groups []printGroup) {
+//
+// With --lag, the lag rows are filtered first, and a group with no row left
+// is dropped from every section, unless the broker could not describe it:
+// that group still prints its error. The summary's TOTAL-LAG is the group's
+// full total, computed before the filter.
+func printGroups(format, command string, opts describeOpts, groups []printGroup) {
+	section := opts.section
+	var kept []printGroup
+	for _, g := range groups {
+		g.totalLag, g.totalLagValid = totalLag(g.rows)
+		if opts.lag != nil {
+			var rows []describeRow
+			for _, r := range g.rows {
+				if opts.lag.matches(r.lag, r.lagValid) {
+					rows = append(rows, r)
+				}
+			}
+			g.rows = rows
+			if len(rows) == 0 && g.err == "" {
+				continue
+			}
+		}
+		kept = append(kept, g)
+	}
+	groups = kept
+
 	switch format {
 	case "json":
 		jsonGroups := make([]map[string]any, 0, len(groups))
 		for _, g := range groups {
-			total, _ := totalLag(g.rows)
 			lagRows := make([]map[string]any, 0, len(g.rows))
 			for _, r := range g.rows {
 				lagRows = append(lagRows, lagJSON(r))
@@ -813,7 +917,7 @@ func printGroups(format, command, section string, groups []printGroup) {
 				"state":       g.state,
 				"balancer":    g.balancer,
 				"members":     g.memberJSON,
-				"total_lag":   total,
+				"total_lag":   g.totalLag,
 				"lag":         lagRows,
 				"error":       g.err,
 			})
@@ -830,9 +934,8 @@ func printGroups(format, command, section string, groups []printGroup) {
 		for _, g := range groups {
 			switch sect {
 			case "summary":
-				total, _ := totalLag(g.rows)
 				fmt.Printf("%s\t%d\t%s\t%s\t%d\t%d\t%s\n",
-					g.group, g.coordinator, g.state, g.balancer, g.nMembers, total, g.err)
+					g.group, g.coordinator, g.state, g.balancer, g.nMembers, g.totalLag, g.err)
 			case "lag":
 				table := out.NewFormattedTable(format, command, 1, "lag", append([]string{"GROUP"}, lagHeaders...)...)
 				for _, r := range g.rows {
@@ -868,8 +971,8 @@ func printGroups(format, command, section string, groups []printGroup) {
 				fmt.Fprintf(tw, "STATE\t%s\n", g.state)
 				fmt.Fprintf(tw, "BALANCER\t%s\n", g.balancer)
 				fmt.Fprintf(tw, "MEMBERS\t%d\n", g.nMembers)
-				if total, valid := totalLag(g.rows); valid {
-					fmt.Fprintf(tw, "TOTAL-LAG\t%d\n", total)
+				if g.totalLagValid {
+					fmt.Fprintf(tw, "TOTAL-LAG\t%d\n", g.totalLag)
 				}
 				tw.Flush()
 			}
