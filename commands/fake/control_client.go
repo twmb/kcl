@@ -40,6 +40,7 @@ SEE ALSO:
   kcl fake               start the cluster
   kcl fake control call  call a cluster method
   kcl fake control fault install and inspect faults
+  kcl fake control group wait on a group's shape
 `,
 	}
 	cmd.PersistentFlags().StringVar(&addr, "addr", addr, "control endpoint address")
@@ -47,6 +48,7 @@ SEE ALSO:
 		controlMethodsCommand(&addr),
 		controlCallCommand(&addr),
 		faultCommand(&addr),
+		groupCommand(&addr),
 	)
 	return cmd
 }
