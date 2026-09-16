@@ -71,7 +71,7 @@ func controlMethodsCommand(addr *string) *cobra.Command {
 }
 
 func controlCallCommand(addr *string) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "call METHOD [ARGS...]",
 		Short: "Call a kfake Cluster method on a running fake cluster.",
 		Long: `Call a kfake Cluster method on a running fake cluster.
@@ -82,7 +82,8 @@ what this cluster can call.
 
 Arguments are positional and match the method's parameters. A string is
 taken as written, a topic ID is a uuid in any usual form, and anything else
-is JSON.
+is JSON. An argument that starts with a dash, a -1 offset, goes after --,
+which is where flag parsing stops.
 
 Results print as one line of JSON, so pipe to jq if you want it wide. This
 is the one control output --format does not touch: what comes back is the
@@ -92,6 +93,7 @@ EXAMPLES:
   kcl fake control call ShufflePartitionLeaders
   kcl fake control call MoveTopicPartition foo 0 2
   kcl fake control call SetFollowers foo 0 [1,2]
+  kcl fake control call -- DeleteRecords foo 0 -1   # -1 is an argument
   kcl fake control call TopicInfo foo | jq -r .TopicID
 
 SEE ALSO:
@@ -119,6 +121,30 @@ SEE ALSO:
 			return nil
 		},
 	}
+	// An argument like the -1 offset DeleteRecords takes is a flag as far
+	// as pflag is concerned, and "unknown shorthand flag: '1' in -1" does
+	// not tell you what to do about it. We add that, then hand the error to
+	// whoever handles ours, which is what gives it exit code 2.
+	cmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
+		err = dashArgHint(err)
+		if p := c.Parent(); p != nil {
+			return p.FlagErrorFunc()(c, err)
+		}
+		return err
+	})
+	return cmd
+}
+
+// dashArgHint says how to pass an argument that starts with a dash, when the
+// flag pflag could not find is a digit: only a number written as an argument
+// looks like that. pflag builds the error with fmt.Errorf, so its text is all
+// we have to go on.
+func dashArgHint(err error) error {
+	rest, ok := strings.CutPrefix(err.Error(), "unknown shorthand flag: '")
+	if !ok || len(rest) == 0 || rest[0] < '0' || rest[0] > '9' {
+		return err
+	}
+	return fmt.Errorf("%v; put -- before METHOD to pass an argument that starts with -", err)
 }
 
 // controlFormat is --format, which kcl registers as a persistent flag on the

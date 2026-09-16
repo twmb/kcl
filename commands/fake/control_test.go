@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/twmb/franz-go/pkg/kfake"
 
 	"github.com/twmb/kcl/out"
@@ -344,4 +346,93 @@ func TestControlDoExitCodes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestControlCall drives the call command the way main.go wires it: --format
+// is a persistent flag on the root, and the root turns a flag error into exit
+// 2.
+func TestControlCall(t *testing.T) {
+	var gotPath string
+	var gotArgs []string
+	status := http.StatusOK
+	body := `{"result":null}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		var req struct {
+			Args []string `json:"args"`
+		}
+		if err := json.UnmarshalRead(r.Body, &req); err != nil {
+			t.Error(err)
+		}
+		gotArgs = req.Args
+		w.WriteHeader(status)
+		io.WriteString(w, body) //nolint:errcheck // the test client is right here
+	}))
+	defer srv.Close()
+	addr := srv.Listener.Addr().String()
+
+	run := func(args ...string) error {
+		gotPath, gotArgs = "", nil
+		root := &cobra.Command{Use: "kcl", SilenceUsage: true, SilenceErrors: true}
+		root.PersistentFlags().String("format", out.FormatText, "output format")
+		root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+			return out.Errf(out.ExitUsage, "%v", err)
+		})
+		root.AddCommand(controlCallCommand(&addr))
+		root.SetOut(io.Discard)
+		root.SetErr(io.Discard)
+		root.SetArgs(args)
+		return root.Execute()
+	}
+
+	// -- is how an argument that starts with a dash reaches the method.
+	t.Run("dash argument after --", func(t *testing.T) {
+		if err := run("call", "--", "DeleteRecords", "foo", "0", "-1"); err != nil {
+			t.Fatalf("call: %v", err)
+		}
+		if want := "/call/DeleteRecords"; gotPath != want {
+			t.Errorf("path = %q, want %q", gotPath, want)
+		}
+		if want := []string{"foo", "0", "-1"}; !reflect.DeepEqual(gotArgs, want) {
+			t.Errorf("args = %q, want %q", gotArgs, want)
+		}
+	})
+
+	// Without it, pflag reads -1 as a flag; the error says what to do.
+	t.Run("dash argument without --", func(t *testing.T) {
+		err := run("call", "DeleteRecords", "foo", "0", "-1")
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		want := "unknown shorthand flag: '1' in -1; put -- before METHOD to pass an argument that starts with -"
+		if err.Error() != want {
+			t.Errorf("error = %q, want %q", err, want)
+		}
+		if got := out.ExitCode(err); got != out.ExitUsage {
+			t.Errorf("exit code = %d, want %d", got, out.ExitUsage)
+		}
+	})
+
+	// A flag after the arguments is still a flag, as everywhere else in kcl.
+	t.Run("flag after the arguments", func(t *testing.T) {
+		status, body = http.StatusBadRequest, `{"error":"TopicInfo nosuch: not found"}`
+		defer func() { status, body = http.StatusOK, `{"result":null}` }()
+		err := run("call", "TopicInfo", "nosuch", "--format", "json")
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if want := "TopicInfo nosuch: not found"; err.Error() != want {
+			t.Errorf("error = %q, want %q", err, want)
+		}
+		if got := out.ExitCode(err); got != out.ExitError {
+			t.Errorf("exit code = %d, want %d", got, out.ExitError)
+		}
+		if want := []string{"nosuch"}; !reflect.DeepEqual(gotArgs, want) {
+			t.Errorf("args = %q, want %q", gotArgs, want)
+		}
+		doc := out.ErrorDoc(err, "fake.control.call")
+		if doc["code"] != out.ExitError || doc["error"] != "TopicInfo nosuch: not found" {
+			t.Errorf("error doc = %v", doc)
+		}
+	})
 }
