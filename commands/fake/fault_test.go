@@ -525,3 +525,27 @@ func captureStdout(t *testing.T, fn func()) string {
 	r.Close()
 	return string(b)
 }
+
+// TestFaultAddEmptyRule pins that an empty --rule says what is wrong. It used
+// to reach the json parser and report "--rule : jsontext: unexpected EOF".
+func TestFaultAddEmptyRule(t *testing.T) {
+	for _, rule := range []string{"", "   ", "\n"} {
+		t.Run(strconv.Quote(rule), func(t *testing.T) {
+			addr := "127.0.0.1:1" // never dialed: we fail before the request
+			cmd := faultAddCommand(&addr)
+			cmd.SetOut(io.Discard)
+			cmd.SetErr(io.Discard)
+			cmd.SetArgs([]string{"--rule", rule})
+			err := cmd.Execute()
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if want := "--rule: empty rule"; err.Error() != want {
+				t.Errorf("error = %q, want %q", err, want)
+			}
+			if got := out.ExitCode(err); got != out.ExitUsage {
+				t.Errorf("exit code = %d, want %d", got, out.ExitUsage)
+			}
+		})
+	}
+}

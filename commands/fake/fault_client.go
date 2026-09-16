@@ -45,6 +45,10 @@ Rules are JSON, matching kfake's Fault type:
   error       error name or code, default UNKNOWN_SERVER_ERROR
   count       requests to fault, default 1, -1 until removed
 
+EXAMPLES:
+  kcl fake control fault add --rule '{"topic":"foo","error":"NOT_LEADER_OR_FOLLOWER"}'
+  kcl fake control fault list                   # the fault and what it has hit
+
 SEE ALSO:
   kcl fake control fault add   install a fault
   kcl fake control fault list  what is installed and what it has hit
@@ -72,7 +76,7 @@ them. Each --rule is a JSON object, or @FILE to read one from a file (@- for
 stdin) holding either an object or an array of them.
 
 EXAMPLES:
-  kcl fake control fault add --rule '{"topic_id":"4286fc61...","error":"UNKNOWN_TOPIC_ID","count":3}'
+  kcl fake control fault add --rule '{"topic_id":"4286fc61-8d3e-4b4a-9d3e-1a2b3c4d5e6f","error":"UNKNOWN_TOPIC_ID","count":3}'
   kcl fake control fault add --rule '{"keys":["fetch"],"nodes":[1],"topic":"foo","error":"NOT_LEADER_OR_FOLLOWER","count":-1}'
   kcl fake control fault add --rule @faults.json
 
@@ -87,6 +91,9 @@ SEE ALSO:
 			}
 			var all []Rule
 			for _, raw := range rules {
+				if strings.TrimSpace(raw) == "" {
+					return out.Errf(out.ExitUsage, "--rule: empty rule")
+				}
 				parsed, err := parseRules(raw)
 				if err != nil {
 					return out.Errf(out.ExitUsage, "--rule %s: %v", elide(raw), err)
@@ -156,6 +163,18 @@ func faultRmCommand(addr *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "rm ID...",
 		Short: "Remove faults by ID, or all of them.",
+		Long: `Remove faults by ID, or all of them.
+
+Removing an ID removes every rule installed under it, and prints how many
+faults went away.
+
+EXAMPLES:
+  kcl fake control fault rm 1
+  kcl fake control fault rm --all
+
+SEE ALSO:
+  kcl fake control fault list  what is installed
+`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if all == (len(args) > 0) {
 				return out.Errf(out.ExitUsage, "give either fault IDs or --all")
