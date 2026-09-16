@@ -12,6 +12,7 @@ import (
 	"github.com/twmb/franz-go/pkg/sr/srfake"
 
 	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/out"
 )
 
 // --- pure-function helpers ---
@@ -249,4 +250,18 @@ func rowHas(v any, key, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestReadSchemaMissingFile(t *testing.T) {
+	_, err := readSchema("NOPE")
+	if err == nil {
+		t.Fatal("got nil err, want a read failure")
+	}
+	if code := out.ExitCode(err); code != out.ExitUsage {
+		t.Errorf("got exit code %d, want %d", code, out.ExitUsage)
+	}
+	const want = "unable to read schema file NOPE: no such file or directory"
+	if got := err.Error(); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
 }

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"strconv"
 	"strings"
@@ -128,7 +129,15 @@ func readSchema(path string) (string, error) {
 	} else {
 		b, err = os.ReadFile(path)
 		if err != nil {
-			return "", out.Errf(out.ExitError, "unable to read schema file %q: %v", path, err)
+			// os.ReadFile wraps the reason in a PathError that repeats
+			// the path, so the unwrapped reason is what we print: the
+			// path is already in the sentence, once, unquoted.
+			reason := err
+			var pe *fs.PathError
+			if errors.As(err, &pe) {
+				reason = pe.Err
+			}
+			return "", out.Errf(out.ExitUsage, "unable to read schema file %s: %v", path, reason)
 		}
 	}
 	if len(b) == 0 {
