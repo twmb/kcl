@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -22,6 +24,21 @@ const (
 	demoJSONSchema  = `{"type":"object","properties":{"id":{"type":"string"},"count":{"type":"integer"}},"required":["id","count"]}`
 	demoProtoSchema = "syntax = \"proto3\";\nmessage Demo {\n  string id = 1;\n  int32 count = 2;\n}\n"
 )
+
+// seedHintFlags are the flags a hint needs to reach this cluster. kcl with
+// nothing configured talks to a broker on 9092 and a registry on 8081, so a
+// cluster on those needs no flags and one on any other port does; the hint
+// is there to paste, and a hint that dials the wrong cluster is worse than
+// no hint. The registry flag goes only on a hint that decodes.
+func seedHintFlags(brokerAddrs []string, registryURL string) (broker, registry string) {
+	if len(brokerAddrs) > 0 && !strings.HasSuffix(brokerAddrs[0], ":"+strconv.Itoa(defaultBrokerPort)) {
+		broker = " -B " + brokerAddrs[0]
+	}
+	if registryURL != "" && !strings.HasSuffix(registryURL, ":"+strconv.Itoa(defaultRegistryPort)) {
+		registry = " -R " + registryURL
+	}
+	return broker, registry
+}
 
 // seedDemo creates demo topics, registers a schema of each type, and produces
 // records: SR-encoded for the avro/proto/json topics, and plain JSON (no
@@ -64,6 +81,8 @@ func seedDemo(brokerAddrs []string, registryURL string) error {
 		return fmt.Errorf("unable to create demo topics: %v", err)
 	}
 
+	brokerFlag, registryFlag := seedHintFlags(brokerAddrs, registryURL)
+
 	fmt.Fprintln(os.Stderr, "seeded demo data:")
 	for _, d := range demos {
 		var (
@@ -98,10 +117,10 @@ func seedDemo(brokerAddrs []string, registryURL string) error {
 
 		if d.schema != "" {
 			fmt.Fprintf(os.Stderr, "  %-10s %d records, %s schema id %d (subject %s-value)\n", d.topic, seedRecordCount, d.typ, id, d.topic)
-			fmt.Fprintf(os.Stderr, "             kcl consume %s -o start --decode=value\n", d.topic)
+			fmt.Fprintf(os.Stderr, "             kcl%s%s consume %s -o start --decode=value\n", brokerFlag, registryFlag, d.topic)
 		} else {
 			fmt.Fprintf(os.Stderr, "  %-10s %d records, plain JSON (no schema)\n", d.topic, seedRecordCount)
-			fmt.Fprintf(os.Stderr, "             kcl consume %s -o start\n", d.topic)
+			fmt.Fprintf(os.Stderr, "             kcl%s consume %s -o start\n", brokerFlag, d.topic)
 		}
 	}
 	return nil

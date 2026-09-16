@@ -29,6 +29,9 @@ import (
 // defaultRegistryPort is the conventional Confluent Schema Registry port.
 const defaultRegistryPort = 8081
 
+// defaultBrokerPort is where kcl looks for a broker with nothing configured.
+const defaultBrokerPort = 9092
+
 // Command returns the `kcl fake` cobra command.
 func Command() *cobra.Command {
 	var (

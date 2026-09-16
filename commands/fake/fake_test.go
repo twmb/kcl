@@ -575,3 +575,32 @@ func TestFakeAddressesPrintLast(t *testing.T) {
 		t.Error("kcl fake did not exit on an interrupt")
 	}
 }
+
+// A hint is there to paste, so it carries the flags that reach the cluster
+// it was printed by, and nothing more.
+func TestSeedHintFlags(t *testing.T) {
+	tests := []struct {
+		name         string
+		addrs        []string
+		registryURL  string
+		wantBroker   string
+		wantRegistry string
+	}{
+		{"defaults", []string{"127.0.0.1:9092"}, "http://127.0.0.1:8081", "", ""},
+		{"default ports, three brokers", []string{"127.0.0.1:9092", "127.0.0.1:9093", "127.0.0.1:9094"}, "http://127.0.0.1:8081", "", ""},
+		{"other broker port", []string{"127.0.0.1:19192"}, "http://127.0.0.1:8081", " -B 127.0.0.1:19192", ""},
+		{"other registry port", []string{"127.0.0.1:9092"}, "http://127.0.0.1:18181", "", " -R http://127.0.0.1:18181"},
+		{"both", []string{"127.0.0.1:19192"}, "http://127.0.0.1:18181", " -B 127.0.0.1:19192", " -R http://127.0.0.1:18181"},
+		{"first broker wins", []string{"127.0.0.1:19192", "127.0.0.1:19193"}, "", " -B 127.0.0.1:19192", ""},
+		{"no registry", []string{"127.0.0.1:9092"}, "", "", ""},
+		{"no brokers", nil, "http://127.0.0.1:8081", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			broker, registry := seedHintFlags(tt.addrs, tt.registryURL)
+			if broker != tt.wantBroker || registry != tt.wantRegistry {
+				t.Errorf("seedHintFlags(%q, %q) = (%q, %q), want (%q, %q)", tt.addrs, tt.registryURL, broker, registry, tt.wantBroker, tt.wantRegistry)
+			}
+		})
+	}
+}
