@@ -3,6 +3,7 @@
 package fake
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -44,6 +45,7 @@ func Command() *cobra.Command {
 		registry     bool
 		registryPort int
 		seedDemoFlag bool
+		blackhole    bool
 	)
 
 	cmd := &cobra.Command{
@@ -88,6 +90,10 @@ Pretend to be Kafka 3.9 (caps advertised API versions):
 Seed topics at startup:
 
   kcl fake --seed-topic foo:10 --seed-topic bar:3
+
+Producer benchmarks, taking records and dropping them:
+
+  kcl fake --blackhole-produce
 
 Custom broker config (repeatable):
 
@@ -153,6 +159,9 @@ Tune log verbosity for debugging:
 			if err != nil {
 				return out.Errf(out.ExitUsage, "%v", err)
 			}
+			if err := checkFlagPairs(blackhole, seedDemoFlag); err != nil {
+				return out.Errf(out.ExitUsage, "%v", err)
+			}
 
 			// Normalize --control before anything binds, so a port clash
 			// with a broker is a usage error rather than a bind failure
@@ -200,6 +209,9 @@ Tune log verbosity for debugging:
 			}
 			if allowAuto {
 				opts = append(opts, kfake.AllowAutoTopicCreation())
+			}
+			if blackhole {
+				opts = append(opts, kfake.BlackholeProduce())
 			}
 			if acls {
 				opts = append(opts, kfake.EnableACLs())
@@ -342,6 +354,7 @@ Tune log verbosity for debugging:
 	cmd.Flags().StringArrayVarP(&brokerCfgs, "broker-config", "c", nil, "broker config key=value (repeatable; applied at startup)")
 	cmd.Flags().StringSliceVar(&seedTopics, "seed-topic", nil, "seed topics at startup as NAME:PARTITIONS (repeatable and/or comma-separated)")
 	cmd.Flags().BoolVar(&allowAuto, "allow-auto-topic-creation", false, "allow producers/consumers to auto-create topics")
+	cmd.Flags().BoolVar(&blackhole, "blackhole-produce", false, "accept produce and discard the records (offsets still advance; nothing can be consumed)")
 	cmd.Flags().BoolVar(&acls, "acls", false, "enable ACL enforcement (requires --sasl superusers to get through the deny-by-default)")
 	cmd.Flags().StringArrayVar(&saslUsers, "sasl", nil, "add a SASL superuser as MECHANISM:USER:PASS (repeatable; enables SASL). Mechanisms: plain, scram-sha-256, scram-sha-512")
 	cmd.Flags().StringVar(&pprofAddr, "pprof", "", "if set, serve pprof on this addr (e.g. :6060 or 127.0.0.1:6060)")
@@ -354,6 +367,16 @@ Tune log verbosity for debugging:
 	cmd.AddCommand(controlCommand())
 
 	return cmd
+}
+
+// checkFlagPairs reports flags that cannot run together. We check before
+// anything binds, as with the --control port clash, so a pair that cannot
+// work fails at the prompt rather than after the brokers are listening.
+func checkFlagPairs(blackhole, seedDemo bool) error {
+	if blackhole && seedDemo {
+		return errors.New("--seed-demo produces records, which --blackhole-produce would drop")
+	}
+	return nil
 }
 
 func parseLogLevel(s string) (kfake.LogLevel, error) {

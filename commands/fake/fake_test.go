@@ -1,12 +1,16 @@
 package fake
 
 import (
+	"context"
 	"os"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kfake"
+	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 func TestParseLogLevel(t *testing.T) {
@@ -120,6 +124,94 @@ func TestParseSeedTopics(t *testing.T) {
 				t.Errorf("got %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCheckFlagPairs(t *testing.T) {
+	tests := []struct {
+		name      string
+		blackhole bool
+		seedDemo  bool
+		err       string
+	}{
+		{"neither", false, false, ""},
+		{"blackhole alone", true, false, ""},
+		{"seed demo alone", false, true, ""},
+		{"both", true, true, "--seed-demo produces records, which --blackhole-produce would drop"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkFlagPairs(tt.blackhole, tt.seedDemo)
+			if tt.err == "" {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || err.Error() != tt.err {
+				t.Errorf("error = %v, want %q", err, tt.err)
+			}
+		})
+	}
+}
+
+// A blackholed cluster answers a produce the way a cluster that stored the
+// records would: the offsets advance, so ListOffsets ends at what we sent,
+// and there is nothing to fetch back.
+func TestBlackholeProduce(t *testing.T) {
+	c, err := kfake.NewCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "foo"), kfake.BlackholeProduce())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	const n = 5
+	cl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	ctx := context.Background()
+
+	for i := range n {
+		r := &kgo.Record{Topic: "foo", Value: []byte(strings.Repeat("x", i+1))}
+		if err := cl.ProduceSync(ctx, r).FirstErr(); err != nil {
+			t.Fatalf("produce %d: %v", i, err)
+		}
+	}
+
+	req := kmsg.NewPtrListOffsetsRequest()
+	rt := kmsg.NewListOffsetsRequestTopic()
+	rt.Topic = "foo"
+	rp := kmsg.NewListOffsetsRequestTopicPartition()
+	rp.Partition = 0
+	rp.Timestamp = -1 // the end offset
+	rt.Partitions = append(rt.Partitions, rp)
+	req.Topics = append(req.Topics, rt)
+	resp, err := req.RequestWith(ctx, cl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
+		t.Fatalf("unexpected response shape %+v", resp)
+	}
+	if got := resp.Topics[0].Partitions[0].Offset; got != n {
+		t.Errorf("end offset = %d, want %d", got, n)
+	}
+
+	ccl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics("foo"),
+		kgo.ConsumeResetOffset(kgo.NewOffset().At(0)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ccl.Close()
+	pctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	if fs := ccl.PollFetches(pctx); fs.NumRecords() != 0 {
+		t.Errorf("fetched %d records from a blackholed cluster, want 0", fs.NumRecords())
 	}
 }
 
