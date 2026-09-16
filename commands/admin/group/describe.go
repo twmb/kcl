@@ -188,12 +188,14 @@ func describeConsumerGroups(cl *client.Client, groups []string, readCommitted bo
 	}
 
 	// Also include partitions from committed offsets.
-	for topic, parts := range fetchedOffsets {
-		if tps[topic] == nil {
-			tps[topic] = make(map[int32]struct{})
-		}
-		for p := range parts {
-			tps[topic][p] = struct{}{}
+	for _, groupOffsets := range fetchedOffsets {
+		for topic, parts := range groupOffsets {
+			if tps[topic] == nil {
+				tps[topic] = make(map[int32]struct{})
+			}
+			for p := range parts {
+				tps[topic][p] = struct{}{}
+			}
 		}
 	}
 
@@ -229,6 +231,7 @@ func describeConsumerGroups(cl *client.Client, groups []string, readCommitted bo
 	}
 	var results []groupResult
 	for _, gi := range allGroups {
+		fetched := fetchedOffsets[gi.group.Group]
 		assigned := make(map[string]map[int32]*describeRow)
 		for _, member := range gi.group.Members {
 			for _, tp := range member.Assignment.TopicPartitions {
@@ -237,7 +240,7 @@ func describeConsumerGroups(cl *client.Client, groups []string, readCommitted bo
 					topic = fmt.Sprintf("%x", tp.TopicID)
 				}
 				for _, p := range tp.Partitions {
-					committed := lookup(fetchedOffsets, topic, p)
+					committed := lookup(fetched, topic, p)
 					end := lookup(listedOffsets, topic, p)
 					row := &describeRow{
 						topic:         topic,
@@ -267,7 +270,7 @@ func describeConsumerGroups(cl *client.Client, groups []string, readCommitted bo
 			}
 		}
 		// Add committed-but-unassigned partitions.
-		for topic, parts := range fetchedOffsets {
+		for topic, parts := range fetched {
 			for p, committed := range parts {
 				if assigned[topic] != nil {
 					if _, ok := assigned[topic][p]; ok {
@@ -617,24 +620,28 @@ type offset struct {
 	err error
 }
 
-func fetchOffsets(cl *client.Client, groups []string) (map[string]map[int32]offset, error) {
-	fetched := make(map[string]map[int32]offset)
+// fetchOffsets fetches the committed offsets of each group, keyed by group,
+// then topic, then partition.
+func fetchOffsets(cl *client.Client, groups []string) (map[string]map[string]map[int32]offset, error) {
+	fetched := make(map[string]map[string]map[int32]offset)
 	var failures int
-	for i := range groups {
+	for _, group := range groups {
 		req := kmsg.NewPtrOffsetFetchRequest()
-		req.Group = groups[i]
+		req.Group = group
 		resp, err := req.RequestWith(context.Background(), cl.Client())
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "unable to issue OffsetFetch: %v\n", err)
+			fmt.Fprintf(os.Stderr, "unable to issue OffsetFetch for group %s: %v\n", group, err)
 			failures++
 			continue
 		}
 
+		groupOffsets := make(map[string]map[int32]offset)
+		fetched[group] = groupOffsets
 		for _, topic := range resp.Topics {
-			topicOffsets := fetched[topic.Topic]
+			topicOffsets := groupOffsets[topic.Topic]
 			if topicOffsets == nil {
 				topicOffsets = make(map[int32]offset)
-				fetched[topic.Topic] = topicOffsets
+				groupOffsets[topic.Topic] = topicOffsets
 			}
 			for _, partition := range topic.Partitions {
 				topicOffsets[partition.Partition] = offset{
@@ -652,7 +659,7 @@ func fetchOffsets(cl *client.Client, groups []string) (map[string]map[int32]offs
 
 // listOffsets lists end offsets for all topic-partitions that have committed
 // offsets or member assignments.
-func listOffsets(cl *client.Client, described []describedGroup, fetched map[string]map[int32]offset, readCommitted bool) (map[string]map[int32]offset, error) {
+func listOffsets(cl *client.Client, described []describedGroup, fetched map[string]map[string]map[int32]offset, readCommitted bool) (map[string]map[int32]offset, error) {
 	tps := make(map[string]map[int32]struct{})
 
 	// Include partitions from member assignments.
@@ -671,12 +678,14 @@ func listOffsets(cl *client.Client, described []describedGroup, fetched map[stri
 
 	// Also include partitions from committed offsets (may include
 	// partitions no longer assigned to any member).
-	for topic, parts := range fetched {
-		if tps[topic] == nil {
-			tps[topic] = make(map[int32]struct{})
-		}
-		for p := range parts {
-			tps[topic][p] = struct{}{}
+	for _, groupOffsets := range fetched {
+		for topic, parts := range groupOffsets {
+			if tps[topic] == nil {
+				tps[topic] = make(map[int32]struct{})
+			}
+			for p := range parts {
+				tps[topic][p] = struct{}{}
+			}
 		}
 	}
 
@@ -753,7 +762,7 @@ func printDescribed(
 	format string,
 	command string,
 	groups []describedGroup,
-	fetched map[string]map[int32]offset,
+	fetchedByGroup map[string]map[string]map[int32]offset,
 	listed map[string]map[int32]offset,
 	section string,
 ) error {
@@ -780,6 +789,7 @@ func printDescribed(
 	}
 	var allResults []groupRows
 	for _, group := range groups {
+		fetched := fetchedByGroup[group.Group]
 		// Build rows from member assignments.
 		assigned := make(map[string]map[int32]*describeRow) // topic -> partition -> row
 		for _, member := range group.Members {
