@@ -266,10 +266,14 @@ func TestControlHandler(t *testing.T) {
 		}
 	})
 
+	// The hint names the command you run, not the route it rides on.
 	t.Run("unknown method", func(t *testing.T) {
 		code, got := call(t, "Nope")
 		if code != http.StatusNotFound {
 			t.Fatalf("status = %d, want 404 (%v)", code, got)
+		}
+		if want := `unknown method "Nope"; kcl fake control methods lists what we can call`; got["error"] != want {
+			t.Errorf("error = %v, want %q", got["error"], want)
 		}
 		if got["usage"] != true {
 			t.Errorf("usage = %v, want true", got["usage"])

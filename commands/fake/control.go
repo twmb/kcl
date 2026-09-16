@@ -170,7 +170,7 @@ func controlHandler(c *kfake.Cluster) http.Handler {
 		name := r.PathValue("method")
 		m, ok := byName[name]
 		if !ok {
-			controlWriteErr(w, http.StatusNotFound, usagef("unknown method %q, GET /methods lists what we can call", name))
+			controlWriteErr(w, http.StatusNotFound, usagef("unknown method %q; kcl fake control methods lists what we can call", name))
 			return
 		}
 		var req struct {
