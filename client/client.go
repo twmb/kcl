@@ -166,6 +166,7 @@ type Client struct {
 	asVersion string
 	asJSON    bool
 	format    string
+	command   string // the running command, for _command on a config error
 
 	// config options parsed and filled on load
 	defaultCfgPath   string
@@ -194,16 +195,21 @@ func (c *Client) dieFormat() string {
 	return out.FormatText
 }
 
+// SetCommand records which command is running, so that a client failure
+// reports the same _command a success from that command would. The client
+// loads lazily, inside the command, so by the time one of these fires we know
+// what was asked for. It stays empty for a failure at the bare root.
+func (c *Client) SetCommand(name string) { c.command = name }
+
 // die reports a configuration or client failure in the output format and
-// exits with code. These happen while the client loads, before any command
-// runs, so they carry no _command.
+// exits with code.
 func (c *Client) die(code int, msg string, args ...any) {
 	c.dieErr(out.Errf(code, msg, args...))
 }
 
 // dieErr reports err, exiting with the code err carries, or 1.
 func (c *Client) dieErr(err error) {
-	out.HandleError(err, c.dieFormat(), "")
+	out.HandleError(err, c.dieFormat(), c.command)
 }
 
 // Format returns the output format: "text", "json", or "awk".
@@ -212,7 +218,7 @@ func (c *Client) Format() string {
 	switch c.format {
 	case "text", "json", "awk":
 	default:
-		out.HandleError(out.Errf(out.ExitUsage, "invalid --format %q: must be text, json, or awk", c.format), out.FormatText, "")
+		out.HandleError(out.Errf(out.ExitUsage, "invalid --format %q: must be text, json, or awk", c.format), out.FormatText, c.command)
 	}
 	if c.format != "text" {
 		return c.format

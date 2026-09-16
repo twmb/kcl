@@ -214,7 +214,11 @@ Command completion is available at:
 	// of its own, and cobra runs only the nearest one unless told to walk
 	// them all.
 	cobra.EnableTraverseRunHooks = true
-	root.PersistentPreRun = func(*cobra.Command, []string) {
+	root.PersistentPreRun = func(cmd *cobra.Command, _ []string) {
+		// Before MaybeXHelp and before the command body: a bad -X key
+		// dies inside the client, and it reports the command we know
+		// from here rather than an error document with no _command.
+		cl.SetCommand(commandName(cmd))
 		if cl.MaybeXHelp() {
 			os.Exit(0)
 		}
