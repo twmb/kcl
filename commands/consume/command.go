@@ -15,8 +15,9 @@ func (c *consumption) command() *cobra.Command {
 		Use:   "consume [TOPICS...]",
 		Short: "Consume topic records.",
 		Long:  help,
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			topics := append(args, topicFlags...)
+			c.fetchMaxWaitSet = cmd.Flags().Changed("fetch-max-wait")
 			if len(topics) == 0 {
 				return out.Errf(out.ExitUsage, "at least one topic is required (positional or --topic/-t)")
 			}
@@ -36,7 +37,7 @@ func (c *consumption) command() *cobra.Command {
 	cmd.Flags().StringVarP(&c.format, "format", "f", `%v\n`, "record output format; the bare word 'json' prints each record as a JSON object")
 	cmd.Flags().BoolVarP(&c.regex, "regex", "r", false, "parse topics as regex; consume any topic that matches any expression")
 	cmd.Flags().Int32Var(&c.fetchMaxBytes, "fetch-max-bytes", 1<<20, "maximum amount of bytes per fetch request per broker")
-	cmd.Flags().DurationVar(&c.fetchMaxWait, "fetch-max-wait", 5*time.Second, "maximum amount of time to wait when fetching from a broker before the broker replies")
+	cmd.Flags().DurationVar(&c.fetchMaxWait, "fetch-max-wait", 5*time.Second, "maximum amount of time to wait when fetching from a broker before the broker replies; with --share-group the default is 500ms")
 	cmd.Flags().StringVar(&c.rack, "rack", "", "the rack to use for fetch requests; setting this opts in to nearest replica fetching (Kafka 2.2.0+)")
 	cmd.Flags().BoolVar(&c.readCommitted, "read-committed", false, "opt in to reading only committed records; the default reads uncommitted, matching the Java client, librdkafka, rpk, and kcat")
 	cmd.Flags().BoolVar(&c.readUncommitted, "read-uncommitted", false, "deprecated no-op: reading uncommitted is now the default")

@@ -50,6 +50,7 @@ type consumption struct {
 	fetchMaxBytes          int32
 	fetchMaxPartitionBytes int32
 	fetchMaxWait           time.Duration
+	fetchMaxWaitSet        bool // --fetch-max-wait was given
 
 	start int64 // if exact range
 	end   int64 // if exact range
@@ -215,6 +216,12 @@ func (c *consumption) run(topics []string) error {
 	c.cl.AddOpt(kgo.FetchMaxBytes(c.fetchMaxBytes))
 	if c.fetchMaxPartitionBytes > 0 {
 		c.cl.AddOpt(kgo.FetchMaxPartitionBytes(c.fetchMaxPartitionBytes))
+	}
+	// A share fetch round waits for every broker to answer, so one broker
+	// holding records waits on the empty brokers' MaxWait. 5s per round is
+	// too long at a prompt; a short wait keeps records flowing.
+	if c.shareGroup != "" && !c.fetchMaxWaitSet {
+		c.fetchMaxWait = 500 * time.Millisecond
 	}
 	c.cl.AddOpt(kgo.FetchMaxWait(c.fetchMaxWait))
 	c.cl.AddOpt(kgo.Rack(c.rack))

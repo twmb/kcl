@@ -176,6 +176,7 @@ func DieJSON(command string, errCode string, message string) {
 // pretty printed value does. Pipe to jq if you want it wide.
 func writeJSON(v any) {
 	enc := json.NewEncoder(os.Stdout)
+	enc.SetEscapeHTML(false) // topic names and error text are data, not HTML
 	if err := enc.Encode(v); err != nil {
 		Die("unable to marshal JSON: %v", err)
 	}
