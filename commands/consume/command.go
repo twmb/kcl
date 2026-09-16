@@ -24,7 +24,7 @@ func (c *consumption) command() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringArrayVarP(&topicFlags, "topic", "t", nil, "topic to consume (repeatable; alternative to positional args)")
-	cmd.Flags().StringVarP(&c.group, "group", "g", "", "consumer group to assign")
+	cmd.Flags().StringVarP(&c.group, "group", "g", "", "consumer group to assign; offsets for what is printed are committed while consuming and again on exit, so a rerun picks up where this one stopped")
 	cmd.Flags().StringVar(&c.shareGroup, "share-group", "", "share group to consume from (Kafka 4.0+, mutually exclusive with --group)")
 	cmd.Flags().StringVar(&c.shareAckType, "share-ack-type", "accept", "share group ack type: accept (mark processed), release (peek, return to pool for redelivery), reject (drain permanently, bumps delivery count); only with --share-group")
 	cmd.Flags().StringVar(&c.groupAlg, "balancer", "cooperative-sticky", "group balancer to use if group consuming (range, roundrobin, sticky, cooperative-sticky)")
