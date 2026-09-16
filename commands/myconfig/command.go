@@ -109,8 +109,9 @@ func listCommand(cl *client.Client) *cobra.Command {
 			cfgPath := cl.CfgFilePath()
 
 			var cfgFile client.CfgFile
-			if _, err := toml.DecodeFile(cfgPath, &cfgFile); err != nil {
-				return fmt.Errorf("unable to read config: %v", err)
+			missing, err := readCfgFile(cfgPath, &cfgFile)
+			if err != nil {
+				return err
 			}
 
 			if cl.Format() != out.FormatText {
@@ -122,7 +123,12 @@ func listCommand(cl *client.Client) *cobra.Command {
 				return nil
 			}
 			if len(cfgFile.Profiles) == 0 {
-				fmt.Fprintln(os.Stderr, "No profiles configured. Config uses flat format.")
+				if missing {
+					fmt.Fprintf(os.Stderr, "No profiles configured; there is no config file at %s.\n", cfgPath)
+				} else {
+					fmt.Fprintf(os.Stderr, "No profiles configured; kcl reads the keys at the top level of %s.\n", cfgPath)
+				}
+				fmt.Fprintln(os.Stderr, "Create one with: kcl profile create NAME -B host:9092")
 				return nil
 			}
 
@@ -138,6 +144,19 @@ func listCommand(cl *client.Client) *cobra.Command {
 	}
 }
 
+// readCfgFile decodes the config file at path, reporting whether there is no
+// file there. A first run has no file, and the commands that only report what
+// is configured answer that with an empty config rather than an error.
+func readCfgFile(path string, cfgFile *client.CfgFile) (missing bool, err error) {
+	if _, err := toml.DecodeFile(path, cfgFile); err != nil {
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		return false, fmt.Errorf("unable to read config: %v", err)
+	}
+	return false, nil
+}
+
 func currentCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "current",
@@ -147,8 +166,8 @@ func currentCommand(cl *client.Client) *cobra.Command {
 			cfgPath := cl.CfgFilePath()
 
 			var cfgFile client.CfgFile
-			if _, err := toml.DecodeFile(cfgPath, &cfgFile); err != nil {
-				return fmt.Errorf("unable to read config: %v", err)
+			if _, err := readCfgFile(cfgPath, &cfgFile); err != nil {
+				return err
 			}
 
 			name := cl.ProfileName()
