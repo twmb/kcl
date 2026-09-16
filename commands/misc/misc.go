@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -250,14 +251,14 @@ func probeVersionCommand(cl *client.Client) *cobra.Command {
 		Use:   "probe-version",
 		Short: "Probe and print the version of Kafka running (incompatible with --as-version).",
 		Args:  cobra.ExactArgs(0),
-		Run: func(_ *cobra.Command, _ []string) {
-			probeVersion(cl)
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return probeVersion(cl)
 		},
 	}
 }
 
 // probeVersion prints what version of Kafka the client is interacting with.
-func probeVersion(cl *client.Client) {
+func probeVersion(cl *client.Client) error {
 	// If we request against a Kafka older than ApiVersions,
 	// Kafka will close the connection. ErrConnDead is
 	// retried automatically, so we must stop that.
@@ -267,32 +268,74 @@ func probeVersion(cl *client.Client) {
 		cl.RemakeWithOpts(kgo.MaxVersions(kversion.V0_9_0()))
 		// 0.9.0 has list groups
 		if _, err = cl.Client().SeedBrokers()[0].Request(context.Background(), new(kmsg.ListGroupsRequest)); err == nil {
-			fmt.Println("Kafka 0.9.0")
-			return
+			printVersionGuess(cl.Format(), "0.9.0")
+			return nil
 		}
 		cl.RemakeWithOpts(kgo.MaxVersions(kversion.V0_8_2()))
 		// 0.8.2 has find coordinator
 		if _, err = cl.Client().SeedBrokers()[0].Request(context.Background(), new(kmsg.FindCoordinatorRequest)); err == nil {
-			fmt.Println("Kafka 0.8.2")
-			return
+			printVersionGuess(cl.Format(), "0.8.2")
+			return nil
 		}
 		cl.RemakeWithOpts(kgo.MaxVersions(kversion.V0_8_1()))
 		// 0.8.1 has offset fetch
 		if _, err = cl.Client().SeedBrokers()[0].Request(context.Background(), new(kmsg.OffsetFetchRequest)); err == nil {
-			fmt.Println("Kafka 0.8.1")
-			return
+			printVersionGuess(cl.Format(), "0.8.1")
+			return nil
 		}
-		fmt.Println("Kafka 0.8.0")
-		return
+		printVersionGuess(cl.Format(), "0.8.0")
+		return nil
 	}
 
 	resp := kresp.(*kmsg.ApiVersionsResponse)
 	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-		out.Die("ApiVersions request failed: %v", err)
+		return fmt.Errorf("ApiVersions request failed: %v", err)
 	}
 
 	v := kversion.FromApiVersionsResponse(resp)
-	fmt.Println("Kafka " + v.VersionGuess())
+	printVersionGuess(cl.Format(), v.VersionGuess())
+	return nil
+}
+
+// printVersionGuess prints kversion's guess in the requested format. The
+// guess is a sentence, "between v1.0 and v1.1" or "at least v4.0" or a bare
+// "v3.7", and that is what text prints. json and awk get the ends of the range
+// it names instead, and an end the guess leaves open is empty.
+func printVersionGuess(format, guess string) {
+	min, max := splitVersionGuess(guess)
+	switch format {
+	case out.FormatJSON:
+		out.MarshalJSON("misc.probe-version", 1, map[string]any{
+			"guess": guess,
+			"min":   min,
+			"max":   max,
+		})
+	case out.FormatAWK:
+		fmt.Printf("%s\t%s\n", min, max)
+	default:
+		fmt.Println("Kafka " + guess)
+	}
+}
+
+// splitVersionGuess pulls the version or versions out of kversion's sentence.
+// An exact guess is both ends of a range of one.
+func splitVersionGuess(guess string) (min, max string) {
+	switch {
+	case guess == "unknown custom version":
+		return "", ""
+	case strings.HasPrefix(guess, "between "):
+		lo, hi, ok := strings.Cut(strings.TrimPrefix(guess, "between "), " and ")
+		if !ok {
+			return "", ""
+		}
+		return lo, hi
+	case strings.HasPrefix(guess, "not even "):
+		return "", strings.TrimPrefix(guess, "not even ")
+	case strings.Contains(guess, "at least "):
+		_, v, _ := strings.Cut(guess, "at least ")
+		return v, ""
+	}
+	return guess, guess
 }
 
 func rawCommand(cl *client.Client) *cobra.Command {
