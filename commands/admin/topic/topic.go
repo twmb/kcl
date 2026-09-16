@@ -246,8 +246,19 @@ func topicDeleteCommand(cl *client.Client) *cobra.Command {
 		Long: `Delete all listed topics (Kafka 0.10.1+).
 
 Use --regex to treat arguments as regex patterns: all topics matching any
-pattern will be deleted. Use --dry-run to see which topics would be deleted
-without actually deleting them.
+pattern will be deleted. A pattern is matched against every topic in the
+cluster, so an unanchored one deletes more than it looks like it will; run
+the same command with --dry-run first to see what it matches.
+
+EXAMPLES:
+  kcl topic delete foo bar               # delete two topics by name
+  kcl topic delete --regex '^tmp-'       # delete every topic starting with tmp-
+  kcl topic delete --regex . --dry-run   # print every topic the pattern matches
+
+SEE ALSO:
+  kcl topic list         list topics
+  kcl topic describe     describe topic partitions
+  kcl topic trim-prefix  delete records without deleting the topic
 `,
 		RunE: func(_ *cobra.Command, topics []string) error {
 			if !useRegex {
