@@ -185,6 +185,103 @@ func TestRuleMarshal(t *testing.T) {
 	}
 }
 
+func TestRuleNormalize(t *testing.T) {
+	tests := []struct {
+		name string
+		in   Rule
+		want Rule
+	}{
+		{"bare", Rule{Topic: "foo"}, Rule{Topic: "foo", Error: "UNKNOWN_SERVER_ERROR", Count: 1}},
+		{"count kept", Rule{Topic: "foo", Count: 3}, Rule{Topic: "foo", Error: "UNKNOWN_SERVER_ERROR", Count: 3}},
+		{"unlimited kept", Rule{Count: -1}, Rule{Error: "UNKNOWN_SERVER_ERROR", Count: -1}},
+		{"error kept", Rule{Error: "UNKNOWN_TOPIC_ID"}, Rule{Error: "UNKNOWN_TOPIC_ID", Count: 1}},
+		{"numeric error kept as written", Rule{Error: "100"}, Rule{Error: "100", Count: 1}},
+		{"numeric key kept as written", Rule{Keys: []string{"0"}}, Rule{Keys: []string{"0"}, Error: "UNKNOWN_SERVER_ERROR", Count: 1}},
+		// An observing rule answers nothing, so an error would be a
+		// default that does not apply.
+		{"observing", Rule{Observe: true}, Rule{Observe: true, Count: 1}},
+		{"observing unlimited", Rule{Observe: true, Count: -1}, Rule{Observe: true, Count: -1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.in.normalize(); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("normalize(%+v) = %+v, want %+v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// A listed rule is the rule the cluster enforces, and it is one you can
+// install again: what fault list prints goes back into fault add --rule.
+func TestFaultListRoundTrip(t *testing.T) {
+	c, err := kfake.NewCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "foo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	srv := httptest.NewServer(controlHandler(c))
+	defer srv.Close()
+
+	install := func(t *testing.T, body string) {
+		t.Helper()
+		resp, err := http.Post(srv.URL+"/faults", "application/json", bytes.NewReader([]byte(body)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("installing %s: status %d", body, resp.StatusCode)
+		}
+	}
+	list := func(t *testing.T) []faultSet {
+		t.Helper()
+		resp, err := http.Get(srv.URL + "/faults")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var got struct {
+			Faults []faultSet `json:"faults"`
+		}
+		if err := json.UnmarshalRead(resp.Body, &got); err != nil {
+			t.Fatal(err)
+		}
+		return got.Faults
+	}
+
+	install(t, `{"rules":[{"topic":"foo"}]}`)
+	sets := list(t)
+	if len(sets) != 1 || len(sets[0].Rules) != 1 {
+		t.Fatalf("faults = %+v, want one rule", sets)
+	}
+	b, err := json.Marshal(sets[0].Rules[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"topic":"foo","error":"UNKNOWN_SERVER_ERROR","count":1}`; string(b) != want {
+		t.Fatalf("listed rule = %s, want %s", b, want)
+	}
+
+	// The listed rule parses back to itself and installs again, so a
+	// script can keep what it read and hand it to fault add.
+	back, err := parseRules(string(b))
+	if err != nil {
+		t.Fatalf("parsing %s: %v", b, err)
+	}
+	if !reflect.DeepEqual(back, []Rule{sets[0].Rules[0]}) {
+		t.Errorf("parsed %+v, want %+v", back, sets[0].Rules[0])
+	}
+	install(t, `{"rules":[`+string(b)+`]}`)
+	sets = list(t)
+	if len(sets) != 2 {
+		t.Fatalf("faults = %+v, want two", sets)
+	}
+	if !reflect.DeepEqual(sets[1].Rules, sets[0].Rules) {
+		t.Errorf("reinstalled rule = %+v, want %+v", sets[1].Rules, sets[0].Rules)
+	}
+}
+
 func TestParseRules(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name, body string) string {

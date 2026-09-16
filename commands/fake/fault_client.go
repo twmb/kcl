@@ -131,6 +131,10 @@ LEFT is the requests the fault can still answer, 0 once it is spent and -1
 when a rule in it is unlimited. That tells a spent count:3 apart from a live
 count:-1 that happens to have fired three times.
 
+Rules print with kfake's defaults filled in, the rule the cluster enforces
+rather than the rule you typed, so a rule from --format json pastes back
+into fault add --rule unchanged.
+
 EXAMPLES:
   kcl fake control fault list
   kcl fake control fault list --format json | jq '.faults[] | select(.left == 0)'

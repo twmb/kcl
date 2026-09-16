@@ -76,6 +76,21 @@ func (r Rule) fault() (kfake.Fault, error) {
 	return f, nil
 }
 
+// normalize fills in what kfake defaults, so a listing shows the rule the
+// cluster enforces rather than the rule you typed and a default reads apart
+// from a choice. We leave every name as you wrote it, so a numeric error
+// code or request key stays numeric. An observing rule faults nothing, so
+// it keeps its empty error.
+func (r Rule) normalize() Rule {
+	if r.Count == 0 {
+		r.Count = 1
+	}
+	if r.Error == "" && !r.Observe {
+		r.Error = "UNKNOWN_SERVER_ERROR"
+	}
+	return r
+}
+
 // requestKeys maps a lowercased request name to its key. kmsg only goes the
 // other way, so we walk the keys once and reverse it.
 var requestKeys = func() map[string]kmsg.Key {
@@ -195,18 +210,20 @@ func (fs *faults) add(rules []Rule) (*faultSet, error) {
 		return nil, fmt.Errorf("no rules given")
 	}
 	kfs := make([]kfake.Fault, 0, len(rules))
+	norm := make([]Rule, 0, len(rules))
 	for i, r := range rules {
 		f, err := r.fault()
 		if err != nil {
 			return nil, fmt.Errorf("rule %d: %v", i+1, err)
 		}
 		kfs = append(kfs, f)
+		norm = append(norm, r.normalize())
 	}
 
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 	fs.next++
-	set := &faultSet{ID: fs.next, Rules: rules, h: fs.c.Fault(kfs...)}
+	set := &faultSet{ID: fs.next, Rules: norm, h: fs.c.Fault(kfs...)}
 	fs.sets[set.ID] = set
 	return set, nil
 }
