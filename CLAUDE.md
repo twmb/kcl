@@ -33,7 +33,7 @@ in scope, and fix what is.
 
 ## Output
 
-`--format` is a root persistent flag (`client/client.go:251`), not part of
+`--format` is a root persistent flag (`client/client.go:298`), not part of
 `Cfg`, so it is unrelated to the TOML file and `-X`. A command holding a
 `*client.Client` reads it with `cl.Format()`; a command without one reads
 `cmd.Flags().GetString("format")`, since cobra hands down root's persistent
@@ -63,9 +63,9 @@ Every command but `kcl fake` takes a `*client.Client`. `fake` does not,
 deliberately: it does not connect to a cluster, it is one, so it has no
 business reading seed brokers, TLS, or SASL. Flags only. That is also why
 it must not grow config keys or read `KCL_*` variables of its own, which
-would collide with the names `client.go:539` derives from config keys.
+would collide with the names `client.go:1011` derives from config keys.
 
-`Short` is a sentence ending in a period (82 of 114 do). `Long` opens by
+`Short` is a sentence ending in a period (115 of 116 do). `Long` opens by
 repeating the short description as its own line, then explains, then:
 
 ```
@@ -76,11 +76,11 @@ SEE ALSO:
   kcl related        one line
 ```
 
-15 files use `EXAMPLES:` and 7 use `SEE ALSO:`, and nothing uses a bare
+17 files use `EXAMPLES:` and 9 use `SEE ALSO:`, and nothing uses a bare
 heading without the colon any more. Keep it that way.
 
 Renames keep the old name working as a `Hidden`/`Deprecated` cobra command
-or flag, so no script breaks. `--help-json` (`main.go:202`) dumps the whole
+or flag, so no script breaks. `--help-json` (`main.go:203`) dumps the whole
 tree, and `main_test.go` pins that hidden commands stay marked.
 
 ## Errors and exit codes
