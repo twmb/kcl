@@ -79,6 +79,14 @@ SEE ALSO:
 17 files use `EXAMPLES:` and 9 use `SEE ALSO:`, and nothing uses a bare
 heading without the colon any more. Keep it that way.
 
+Two overlaps are deliberate, not drift. `kcl consume` and `kcl produce` own
+`-f, --format`, the record template and the input format, which shadows
+root's `--format` for those two commands only; an audit must not flag it.
+`kcl topic delete` has no prompt and no `-y`, unlike `acl delete` and
+`group seek`, because you name the topics on the command line: the scope is
+known before the command runs, where an ACL filter or a group seek only
+learns what it matched after asking the cluster.
+
 Renames keep the old name working as a `Hidden`/`Deprecated` cobra command
 or flag, so no script breaks. `--help-json` (`main.go:203`) dumps the whole
 tree, and `main_test.go` pins that hidden commands stay marked.
