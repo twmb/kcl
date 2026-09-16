@@ -60,7 +60,7 @@ func controlMethodsCommand(addr *string) *cobra.Command {
 			if err := controlDo(http.MethodGet, *addr, "/methods", nil, &resp); err != nil {
 				return err
 			}
-			tw := out.NewFormattedTable(controlFormat(cmd), "fake control methods", 1, "methods", "NAME", "SIGNATURE")
+			tw := out.NewFormattedTable(controlFormat(cmd), "fake.control.methods", 1, "methods", "NAME", "SIGNATURE")
 			for _, m := range resp.Methods {
 				tw.Row(m.Name, m.Signature)
 			}

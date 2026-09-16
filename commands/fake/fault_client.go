@@ -98,7 +98,7 @@ SEE ALSO:
 				return err
 			}
 			if controlFormat(cmd) == out.FormatJSON {
-				out.MarshalJSON("fake control fault add", 1, map[string]any{"id": resp.ID})
+				out.MarshalJSON("fake.control.fault.add", 1, map[string]any{"id": resp.ID})
 				return nil
 			}
 			fmt.Println(resp.ID)
@@ -135,7 +135,7 @@ SEE ALSO:
 			if err := controlDo(http.MethodGet, *addr, "/faults", nil, &resp); err != nil {
 				return err
 			}
-			tw := out.NewFormattedTable(controlFormat(cmd), "fake control fault list", 1, "faults", "ID", "HITS", "LEFT", "RULES")
+			tw := out.NewFormattedTable(controlFormat(cmd), "fake.control.fault.list", 1, "faults", "ID", "HITS", "LEFT", "RULES")
 			for _, f := range resp.Faults {
 				b, err := json.Marshal(f.Rules)
 				if err != nil {
@@ -218,7 +218,7 @@ SEE ALSO:
 				return err
 			}
 			if controlFormat(cmd) == out.FormatJSON {
-				out.MarshalJSON("fake control fault wait", 1, map[string]any{"hits": resp.Hits})
+				out.MarshalJSON("fake.control.fault.wait", 1, map[string]any{"hits": resp.Hits})
 				return nil
 			}
 			fmt.Println(resp.Hits)
