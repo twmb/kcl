@@ -8,6 +8,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -307,12 +308,23 @@ func main() {
 	}
 
 	if cmd, err := root.ExecuteC(); err != nil {
-		var path string
-		if cmd != nil {
-			path = cmd.CommandPath()
-		}
-		out.HandleError(asUsageError(err), errFormat(root, cl), out.CommandName(path))
+		out.HandleError(asUsageError(err), errFormat(root, cmd, cl), errCommand(cmd, cl))
 	}
+}
+
+// errCommand is the _command an error document from a failed Execute
+// carries: the name the client recorded, which a command reached through a
+// hidden alias sets to its new path, or else cobra's path to the command,
+// which is all we have when the arguments failed to validate before any hook
+// ran. It is "" for a failure at the bare root.
+func errCommand(cmd *cobra.Command, cl *client.Client) string {
+	if name := cl.Command(); name != "" {
+		return name
+	}
+	if cmd != nil {
+		return out.CommandName(cmd.CommandPath())
+	}
+	return ""
 }
 
 // errFormat is the format to report a failed Execute in. Flag parsing stops
@@ -320,13 +332,24 @@ func main() {
 // reaches --format and cl still holds the default. When that happens we scan
 // the arguments for the format you asked for, the same way wantsHelpJSON
 // scans for --help-json.
-func errFormat(root *cobra.Command, cl *client.Client) string {
-	if !root.PersistentFlags().Changed("format") {
+//
+// consume and produce own a --format of their own, the record format, which
+// shadows the root's; a "--format json" in their arguments asks for JSON
+// records, not a JSON error document, so for a leaf with a local format flag
+// we do not scan.
+func errFormat(root *cobra.Command, leaf *cobra.Command, cl *client.Client) string {
+	if !root.PersistentFlags().Changed("format") && !ownsFormat(leaf) {
 		if format := formatFromArgs(os.Args[1:]); format != "" {
 			return format
 		}
 	}
 	return cl.Format()
+}
+
+// ownsFormat reports whether cmd declares a --format flag of its own, which
+// shadows the root's persistent one.
+func ownsFormat(cmd *cobra.Command) bool {
+	return cmd != nil && cmd.LocalNonPersistentFlags().Lookup("format") != nil
 }
 
 // usageErrors wraps every command's argument validator and the flag error
@@ -369,9 +392,46 @@ func usageErrors(root *cobra.Command, checkFlags func() error) {
 			return nil
 		}
 	})
-	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+	root.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
+		if hint := boolFlagValueHint(cmd, err); hint != "" {
+			return out.Errf(out.ExitUsage, "%s", hint)
+		}
 		return out.Errf(out.ExitUsage, "%v", err)
 	})
+}
+
+// boolFlagValueHint rewrites pflag's error for a boolean flag given a value,
+// "--regex=PATTERN" on topic list, which pflag reports as a strconv.ParseBool
+// failure. A flag that used to take the pattern and now marks the arguments
+// as patterns is the case this is for, so the hint says where the value goes.
+// It returns "" for any other error.
+func boolFlagValueHint(cmd *cobra.Command, err error) string {
+	msg := err.Error()
+	if !strings.Contains(msg, "strconv.ParseBool") {
+		return ""
+	}
+	// pflag: invalid argument "PATTERN" for "-r, --regex" flag: strconv.ParseBool: ...
+	_, rest, ok := strings.Cut(msg, ` for "`)
+	if !ok {
+		return ""
+	}
+	names, _, ok := strings.Cut(rest, `" flag`)
+	if !ok {
+		return ""
+	}
+	name := names
+	if _, long, ok := strings.Cut(names, ", "); ok {
+		name = long
+	}
+	f := cmd.Flags().Lookup(strings.TrimPrefix(name, "--"))
+	if f == nil || f.Value.Type() != "bool" {
+		return ""
+	}
+	hint := fmt.Sprintf("flag %s takes no value", name)
+	if f.Name == "regex" {
+		hint += "; pass the pattern as an argument"
+	}
+	return hint
 }
 
 // asUsageError marks cobra's unknown command error, which no hook of ours
@@ -438,14 +498,7 @@ func buildCommandJSON(cmd *cobra.Command, parentHidden bool) commandJSON {
 	if len(cmd.Aliases) > 0 {
 		c.Aliases = cmd.Aliases
 	}
-	if cmd.Example != "" {
-		for _, line := range strings.Split(strings.TrimSpace(cmd.Example), "\n") {
-			line = strings.TrimSpace(line)
-			if line != "" {
-				c.Examples = append(c.Examples, line)
-			}
-		}
-	}
+	c.Examples = examples(cmd)
 
 	// Flags.
 	cmd.LocalFlags().VisitAll(func(f *pflag.Flag) {
@@ -479,6 +532,44 @@ func buildCommandJSON(cmd *cobra.Command, parentHidden bool) commandJSON {
 		c.Commands[sub.Name()] = buildCommandJSON(sub, hidden)
 	}
 	return c
+}
+
+// examples returns the command lines of the EXAMPLES: block in cmd's long
+// help, the ones a user can paste, trimmed of their indent and with the
+// comment that follows a command kept. The block runs to the next heading
+// (SEE ALSO:) or the end of the help; the indented lines in it are the
+// examples, and a line at the margin, as kcl fake writes between groups of
+// examples, is prose. Every command writes its examples there rather than in
+// cobra's Example field, so that the help reads in one order.
+func examples(cmd *cobra.Command) []string {
+	var lines []string
+	var in, cont bool
+	for line := range strings.SplitSeq(cmd.Long, "\n") {
+		switch {
+		case line == "EXAMPLES:":
+			in = true
+		case !in:
+		case isHelpHeading(line):
+			in = false
+		case cont:
+			// The rest of a command that ended in a backslash.
+			cont = strings.HasSuffix(line, "\\")
+			lines[len(lines)-1] += " " + strings.TrimSpace(strings.TrimSuffix(line, "\\"))
+		case strings.HasPrefix(line, "  ") && !strings.HasPrefix(strings.TrimSpace(line), "#"):
+			cont = strings.HasSuffix(line, "\\")
+			lines = append(lines, strings.TrimSpace(strings.TrimSuffix(line, "\\")))
+		}
+	}
+	return lines
+}
+
+// isHelpHeading reports whether line is a heading of the long help, such as
+// EXAMPLES: or SEE ALSO:, capitals at the margin ending in a colon.
+func isHelpHeading(line string) bool {
+	if !strings.HasSuffix(line, ":") || line != strings.ToUpper(line) {
+		return false
+	}
+	return strings.ContainsFunc(line, unicode.IsLetter)
 }
 
 const usageTmpl = `USAGE:{{if and .Runnable (not .HasAvailableSubCommands)}}

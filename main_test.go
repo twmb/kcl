@@ -295,7 +295,8 @@ func TestTreeShorthandsAndUsage(t *testing.T) {
 	}
 	for path, use := range map[string]string{
 		"kcl topic create":              "create TOPICS...",
-		"kcl misc list-offsets":         "list-offsets TOPICS...",
+		"kcl topic list-offsets":        "list-offsets [TOPICS...]",
+		"kcl misc list-offsets":         "list-offsets [TOPICS...]",
 		"kcl topic add-partitions":      "add-partitions TOPIC",
 		"kcl share-group offset-delete": "offset-delete GROUP",
 	} {
@@ -334,11 +335,13 @@ func TestGroupsNameAnUnknownSubcommand(t *testing.T) {
 	})
 }
 
-// TestExamplesArePasteable pins that every Example line is a command you can
-// paste. buildRoot used to rewrite the Example field, replacing the bare
-// command name with the full path, which doubled a path that was already
-// full ("kcl acl kcl acl delete --topic foo") and mangled any prose that
-// happened to contain the word ("kcl logdirs describes all").
+// TestExamplesArePasteable pins that every line of every EXAMPLES: block is
+// a command you can paste: it starts with kcl, and its flags and arguments
+// parse against the tree. A block names the command whose help it is in, or
+// one under it for a group, at least once; a line may name a related command
+// as the step before or after. Examples live in the long help rather than
+// cobra's Example field, so the walk reads the block the way --help-json
+// does. A pipeline or a redirection is checked at each kcl segment.
 func TestExamplesArePasteable(t *testing.T) {
 	root, _ := buildRoot()
 	var checked int
@@ -347,30 +350,148 @@ func TestExamplesArePasteable(t *testing.T) {
 		return cmd.Hidden || cmd.HasParent() && hidden(cmd.Parent())
 	}
 	allCommands(root, func(cmd *cobra.Command) {
-		if cmd.Example == "" {
-			return
-		}
 		path := cmd.CommandPath()
-		for _, line := range strings.Split(cmd.Example, "\n") {
-			if strings.TrimSpace(line) == "" {
-				continue
-			}
+		lines := examples(cmd)
+		var own int
+		for _, line := range lines {
 			checked++
-			if line != strings.TrimLeft(line, " \t") {
-				t.Errorf("%s: example is indented, so it does not paste: %q", path, line)
+			var found bool
+			for _, words := range shellSegments(line) {
+				if len(words) == 0 || words[0] != "kcl" {
+					continue
+				}
+				found = true
+				// A fresh tree per example: parsing sets flag variables,
+				// and a slice flag appends on every parse.
+				fresh, _ := buildRoot()
+				sub, rest, err := fresh.Find(words[1:])
+				if err != nil {
+					t.Errorf("%s: example %q: %v", path, line, err)
+					continue
+				}
+				if err := sub.ParseFlags(rest); err != nil {
+					t.Errorf("%s: example %q: %v", path, line, err)
+					continue
+				}
+				if err := sub.ValidateArgs(sub.Flags().Args()); err != nil {
+					t.Errorf("%s: example %q: %v", path, line, err)
+					continue
+				}
+				if sub.CommandPath() == path || strings.HasPrefix(sub.CommandPath(), path+" ") {
+					own++
+				}
 			}
-			if !strings.HasPrefix(line, "kcl ") {
+			if !found {
 				t.Errorf("%s: example does not start with kcl: %q", path, line)
 			}
-			// A hidden deprecated mirror carries the primary command's
-			// examples on purpose, and its deprecation notice names it.
-			if !hidden(cmd) && !strings.HasPrefix(line, path+" ") && line != path {
-				t.Errorf("%s: example is for another command: %q", path, line)
-			}
+		}
+		// A hidden deprecated mirror carries the primary command's
+		// examples on purpose, and its deprecation notice names it.
+		if len(lines) > 0 && own == 0 && !hidden(cmd) {
+			t.Errorf("%s: no example is for this command: %q", path, lines)
 		}
 	})
 	if checked == 0 {
 		t.Error("no examples found; the walk is not reaching them")
+	}
+}
+
+// shellSegments splits an example line the way a shell would read it: words
+// broken on spaces outside quotes, with a comment dropped, and the line cut
+// into segments at an unquoted |, &, or ;. A redirection and its target are
+// dropped from the segment they are in.
+func shellSegments(line string) [][]string {
+	var (
+		segments [][]string
+		words    []string
+		word     strings.Builder
+		inWord   bool
+		quote    rune
+		redirect bool
+	)
+	flush := func() {
+		if inWord {
+			if redirect {
+				redirect = false
+			} else {
+				words = append(words, word.String())
+			}
+			word.Reset()
+			inWord = false
+		}
+	}
+	cut := func() {
+		flush()
+		if len(words) > 0 {
+			segments = append(segments, words)
+		}
+		words = nil
+	}
+	for _, r := range line {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			} else {
+				word.WriteRune(r)
+			}
+		case r == '\'' || r == '"':
+			quote = r
+			inWord = true
+		case r == '#' && !inWord:
+			cut()
+			return segments
+		case r == ' ' || r == '\t':
+			flush()
+		case r == '|' || r == '&' || r == ';':
+			cut()
+		case r == '<' || r == '>':
+			flush()
+			redirect = true
+		default:
+			word.WriteRune(r)
+			inWord = true
+		}
+	}
+	cut()
+	return segments
+}
+
+func TestShellSegments(t *testing.T) {
+	for _, test := range []struct {
+		line string
+		want [][]string
+	}{
+		{"kcl topic list", [][]string{{"kcl", "topic", "list"}}},
+		{`kcl topic list -r 'logs\.'   # comment`, [][]string{{"kcl", "topic", "list", "-r", `logs\.`}}},
+		{"cat x | kcl produce foo", [][]string{{"cat", "x"}, {"kcl", "produce", "foo"}}},
+		{"kcl produce foo < lines.txt", [][]string{{"kcl", "produce", "foo"}}},
+		{"kcl fake --control &", [][]string{{"kcl", "fake", "--control"}}},
+		{"kcl x --format json | jq '.a[] | select(.b == 0)'", [][]string{{"kcl", "x", "--format", "json"}, {"jq", ".a[] | select(.b == 0)"}}},
+		{`kcl fault add --rule '{"topic":"foo"}'`, [][]string{{"kcl", "fault", "add", "--rule", `{"topic":"foo"}`}}},
+	} {
+		t.Run(test.line, func(t *testing.T) {
+			got := shellSegments(test.line)
+			if !slices.EqualFunc(got, test.want, slices.Equal) {
+				t.Errorf("shellSegments(%q) = %q, want %q", test.line, got, test.want)
+			}
+		})
+	}
+}
+
+// TestHelpJSONExamples pins that --help-json carries the examples the long
+// help does, since nothing sets cobra's Example field any more.
+func TestHelpJSONExamples(t *testing.T) {
+	root, _ := buildRoot()
+	tree := buildCommandJSON(root, false)
+	list := tree.Commands["topic"].Commands["list"]
+	if len(list.Examples) == 0 || !strings.HasPrefix(list.Examples[0], "kcl topic list") {
+		t.Errorf("topic list examples = %q", list.Examples)
+	}
+	for _, e := range list.Examples {
+		if e != strings.TrimSpace(e) {
+			t.Errorf("example %q is not trimmed", e)
+		}
 	}
 }
 
@@ -422,8 +543,8 @@ func TestAwkHeader(t *testing.T) {
 	}{
 		{"registered", []string{"profile", "list", "--awk-header"}, "NAME\tCURRENT\n"},
 		{"registered, flag first", []string{"--awk-header", "profile", "list"}, "NAME\tCURRENT\n"},
-		{"unregistered leaf", []string{"topic", "list", "--awk-header"}, ""},
-		{"missing arguments", []string{"topic", "create", "--awk-header"}, ""},
+		{"unregistered leaf", []string{"consume", "--awk-header"}, ""},
+		{"missing arguments", []string{"topic", "create", "--awk-header"}, "TOPIC\tTOPIC-ID\tERROR\tMESSAGE\n"},
 		{"group", []string{"topic", "--awk-header"}, ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -431,6 +552,48 @@ func TestAwkHeader(t *testing.T) {
 			stdout, stderr, code := runChild(t, append([]string{"--no-config-file", "-B", "localhost:1"}, test.args...)...)
 			if code != 0 || stdout != test.want || stderr != "" {
 				t.Errorf("exit %d stdout %q stderr %q, want exit 0 stdout %q and no stderr", code, stdout, stderr, test.want)
+			}
+		})
+	}
+}
+
+// TestErrorDocumentNamesTheCommand pins the _command and the format of an
+// error a failed Execute reports: the new path under a hidden alias, since
+// the command records it before it fails; the hint for a boolean flag given a
+// value; and text, not a JSON document, when "--format json" belongs to a
+// leaf's own --format, the record format of consume and produce.
+func TestErrorDocumentNamesTheCommand(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		args     []string
+		command  string
+		contains string
+		text     bool
+	}{
+		{"hidden alias", []string{"misc", "list-offsets", "foo", "--at", "bogus", "--format", "json"}, "topic.list-offsets", "invalid --at", false},
+		{"bool flag given a value", []string{"topic", "list", "--regex=foo", "--format", "json"}, "topic.list", "flag --regex takes no value; pass the pattern as an argument", false},
+		{"bool flag given a value, no hint", []string{"group", "delete", "-d=foo", "--format", "json"}, "group.delete", "flag --dry-run takes no value", false},
+		{"consume owns --format", []string{"consume", "--format", "json"}, "", "at least one topic", true},
+		{"consume owns --format, flag first", []string{"--format", "json", "consume"}, "", "at least one topic", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			stdout, stderr, code := runChild(t, append([]string{"--no-config-file", "-B", "localhost:1"}, test.args...)...)
+			if code != out.ExitUsage {
+				t.Errorf("exit %d, want %d; stdout %q stderr %q", code, out.ExitUsage, stdout, stderr)
+			}
+			if test.text {
+				if stdout != "" || !strings.Contains(stderr, test.contains) {
+					t.Errorf("stdout %q stderr %q, want text on stderr containing %q", stdout, stderr, test.contains)
+				}
+				return
+			}
+			var doc map[string]any
+			if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+				t.Fatalf("stdout %q is not JSON: %v; stderr %q", stdout, err, stderr)
+			}
+			if doc["_command"] != test.command || doc["code"] != float64(2) || !strings.Contains(doc["error"].(string), test.contains) {
+				t.Errorf("doc = %v, want _command %q, code 2, error containing %q", doc, test.command, test.contains)
 			}
 		})
 	}
