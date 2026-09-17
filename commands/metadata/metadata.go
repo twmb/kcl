@@ -146,7 +146,7 @@ SEE ALSO:
 				fields := make(map[string]any)
 				if pcluster {
 					fields["cluster_id"] = clusterID
-					fields["controller"] = controller
+					fields["controller_id"] = controller
 				}
 				if pbrokers {
 					brokers := make([]map[string]any, 0, len(resp.Brokers))
