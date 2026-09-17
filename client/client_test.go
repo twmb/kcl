@@ -388,25 +388,26 @@ func TestFlagCfg(t *testing.T) {
 		wantErr   bool
 	}{
 		{
-			name: "nothing given is the defaults",
-			want: defaultCfg(),
+			// Only what was given is saved, so a profile created with no
+			// flags takes every default of the kcl that loads it.
+			name: "nothing given is nothing",
+			want: Cfg{},
 		},
 		{
 			name:      "bootstrap shorthand",
 			bootstrap: []string{"a:9092", "b:9092"},
-			want:      Cfg{SeedBrokers: []string{"a:9092", "b:9092"}, BrokerTimeout: Dur(5 * time.Second)},
+			want:      Cfg{SeedBrokers: []string{"a:9092", "b:9092"}},
 		},
 		{
 			name:      "bootstrap wins over -X seed_brokers",
 			flags:     []string{"seed_brokers=x:9092"},
 			bootstrap: []string{"a:9092"},
-			want:      Cfg{SeedBrokers: []string{"a:9092"}, BrokerTimeout: Dur(5 * time.Second)},
+			want:      Cfg{SeedBrokers: []string{"a:9092"}},
 		},
 		{
 			name:  "tls and sasl, dotted and legacy underscore",
 			flags: []string{"tls.ca_cert_path=/ca.pem", "sasl.mechanism=scram-sha-256", "sasl_user=alice", "dial_timeout=2s", "broker_timeout=1s"},
 			want: Cfg{
-				SeedBrokers:   []string{"localhost:9092"},
 				BrokerTimeout: Dur(time.Second),
 				DialTimeout:   Dur(2 * time.Second),
 				TLS:           &CfgTLS{CACert: "/ca.pem"},
@@ -416,13 +417,13 @@ func TestFlagCfg(t *testing.T) {
 		{
 			name:     "registry shorthand",
 			registry: []string{"http://sr:8081"},
-			want:     Cfg{SeedBrokers: []string{"localhost:9092"}, BrokerTimeout: Dur(5 * time.Second), SR: &CfgSR{URLs: []string{"http://sr:8081"}}},
+			want:     Cfg{SR: &CfgSR{URLs: []string{"http://sr:8081"}}},
 		},
 		{
 			name:      "environment is ignored",
 			env:       map[string]string{"KCL_SASL_PASS": "secret", "KCL_SEED_BROKERS": "env:9092"},
 			bootstrap: []string{"a:9092"},
-			want:      Cfg{SeedBrokers: []string{"a:9092"}, BrokerTimeout: Dur(5 * time.Second)},
+			want:      Cfg{SeedBrokers: []string{"a:9092"}},
 		},
 		{
 			name:    "unknown key",

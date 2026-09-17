@@ -1219,11 +1219,12 @@ func (c *Client) ApplyFlags(cfg *Cfg) (set, unset []string, err error) {
 	return set, unset, nil
 }
 
-// FlagCfg returns the defaults with the -X, -B, and -R flags laid over them.
-// This is what "kcl profile create" saves, so a new profile spells out what
-// it runs with.
+// FlagCfg returns the -X, -B, and -R flags laid over an empty Cfg: the keys
+// you gave and nothing else. This is what "kcl profile create" saves, so a
+// key you did not set takes the default of the kcl that loads the profile
+// rather than the default of the one that wrote it.
 func (c *Client) FlagCfg() (Cfg, error) {
-	cfg := defaultCfg()
+	var cfg Cfg
 	if _, _, err := c.ApplyFlags(&cfg); err != nil {
 		return Cfg{}, err
 	}
