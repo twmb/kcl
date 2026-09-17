@@ -735,3 +735,19 @@ func TestDryRun(t *testing.T) {
 		})
 	}
 }
+
+// TestRowWidth pins that a row must have one cell per header: under go test
+// a short or long row panics, since a script counts on every column.
+func TestRowWidth(t *testing.T) {
+	for _, row := range [][]any{{"a"}, {"a", "b", "c"}} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("Row(%v) under two headers did not panic", row)
+				}
+			}()
+			NewFormattedTable("awk", "x", 1, "rows", "A", "B").Row(row...)
+		}()
+	}
+	NewFormattedTable("awk", "x", 1, "rows", "A", "B").Row("a", "b")
+}

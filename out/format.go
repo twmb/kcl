@@ -144,10 +144,25 @@ func (t *FormattedTable) SetDryRun(dry bool) {
 	t.dryRun = dry
 }
 
-// Row adds a row of values to the table. Under ResultColumns or ErrorColumn
-// the ERROR and MESSAGE cells are made strings first: see errorCell and
-// messageCell.
+// Row adds a row of values to the table, one per header. Under ResultColumns
+// or ErrorColumn the ERROR and MESSAGE cells are made strings first: see
+// errorCell and messageCell. A row with the wrong number of cells is a
+// programming error: it panics under go test, and otherwise warns on stderr
+// and is padded with Unknown or cut to the headers, so that every awk row
+// has every column.
 func (t *FormattedTable) Row(values ...any) {
+	if len(values) != len(t.headers) {
+		msg := fmt.Sprintf("kcl: %s prints a row of %d cells under the %d columns %v; please report this", t.command, len(values), len(t.headers), t.headers)
+		if testing.Testing() {
+			panic(msg)
+		}
+		fmt.Fprintln(os.Stderr, msg)
+		values = slices.Clone(values)
+		for len(values) < len(t.headers) {
+			values = append(values, Unknown)
+		}
+		values = values[:len(t.headers)]
+	}
 	if t.errCol >= 0 && t.errCol < len(values) {
 		values = slices.Clone(values)
 		values[t.errCol] = errorCell(values[t.errCol])

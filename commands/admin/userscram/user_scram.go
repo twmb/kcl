@@ -119,7 +119,7 @@ SEE ALSO:
 					return int(a.Mechanism - b.Mechanism)
 				})
 				for _, info := range infos {
-					table.Row(res.User, mech2str(info.Mechanism), info.Iterations, "")
+					table.Row(res.User, mech2str(info.Mechanism), info.Iterations, "", "")
 				}
 			}
 			return table.Flush()
