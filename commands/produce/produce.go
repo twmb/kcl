@@ -17,6 +17,12 @@ import (
 	"github.com/twmb/kcl/serde"
 )
 
+// recordReader is what the produce loop reads from: kgo's format string
+// reader, or ours for -f json.
+type recordReader interface {
+	ReadRecord() (*kgo.Record, error)
+}
+
 func Command(cl *client.Client) *cobra.Command {
 	var (
 		topicFlag            string
@@ -46,13 +52,16 @@ Produce records, optionally to a specific topic, from stdin.
 
 By default, producing reads newline delimited, unkeyed records from stdin.
 The input format (-f) can be specified with delimiters or with sized numbers,
-and the format can parse a topic, key, value, and header keys and values.
+and the format can parse a topic, key, value, and header keys and values. The
+bare word "json" reads JSON objects instead; see JSON INPUT below.
 
-The topic comes from the argument, -t/--topic, or a %t in the input format;
-with none of those, producing is an error before stdin is read.
+The topic comes from the argument, -t/--topic, a %t in the input format, or
+the "topic" of a JSON input object; with none of those, producing is an error
+before stdin is read.
 
 -k/--key gives a key to every record whose input carries none. A %k in the
-input format wins over -k; -k fills in where the input has no key at all.
+input format wins over -k, as does a key in a JSON input object; -k fills in
+where the input has no key at all.
 
 The output format (-o) controls what is printed after each record is produced
 (e.g., to confirm topic/partition/offset). The output format uses the same
@@ -146,6 +155,35 @@ As well, these text options can be parsed with regular expressions:
   %k{re[\d*]}%v{re[\s+]}
 
 
+JSON INPUT
+
+As a special case, -f/--format set to exactly "json" reads one JSON object per
+record, the objects "kcl consume -f json" writes, so a consume can be piped
+into a produce:
+
+  {"topic":"orders","partition":3,"key":"user-1","value":"...","headers":[...]}
+
+Only the exact word is reserved; -f 'json%v' is still an ordinary format.
+
+The fields, and what each one does:
+  topic         used unless a topic is given as the argument or -t, which then
+                applies to every object; no topic anywhere is an error
+  partition     honored unless -p is given, so a dump replays onto the
+                partitions it came from; drop it (jq 'del(.partition)') to let
+                the partitioner place the records
+  timestamp     milliseconds, kept when present
+  key, value    a string is its bytes; null stays null (a tombstone), distinct
+                from ""; an object or array (what --decode writes) is produced
+                as its compact text, which --schema can then encode
+  key_base64, value_base64
+                bytes that are not UTF-8, as consume writes them
+  headers       [{"key":..,"value":..}], with value_base64 as above
+  offset, leader_epoch, delivery_count
+                accepted and ignored; the cluster assigns them
+
+A misspelled field is an error.
+
+
 JSON OUTPUT
 
 -o/--output-format set to exactly "json" prints one JSON object per record as
@@ -210,8 +248,8 @@ The flag value is a small spec:
 
 VERSION is a number or "latest" (default). Any form may add a trailing
 #MESSAGE to pick the protobuf message in a multi-message schema. The "topic"
-strategy cannot be used when the input format parses a per-record topic (%t);
-use id: or subject: instead.
+strategy cannot be used when the topic is parsed per record (%t, or -f json
+with no topic given); use id: or subject: instead.
 
 Examples:
 
@@ -235,20 +273,30 @@ Examples:
 				args = []string{topicFlag}
 			}
 
-			// Without %t in the format there is no topic at all, and we
-			// say so before reading stdin.
-			if len(args) == 0 && !layoutParses(informat, 't') {
+			isJSON := informat == jsonFormatName
+			// A per-record topic comes from %t, or from -f json with no
+			// topic given. Without any of those, there is no topic at
+			// all, and we say so before reading stdin.
+			perRecordTopic := layoutParses(informat, 't') || (isJSON && len(args) == 0)
+			if len(args) == 0 && !isJSON && !layoutParses(informat, 't') {
 				return out.Errf(out.ExitUsage, "no topic: give one as an argument or with -t/--topic, or parse it from input with %%t in -f")
 			}
 
-			reader, err := kgo.NewRecordReader(os.Stdin, informat)
-			if err != nil {
-				return out.Errf(out.ExitUsage, "input format %q: %v", informat, err)
+			var reader recordReader
+			if isJSON {
+				reader = newJSONReader(os.Stdin)
+			} else {
+				r, err := kgo.NewRecordReader(os.Stdin, informat)
+				if err != nil {
+					return out.Errf(out.ExitUsage, "input format %q: %v", informat, err)
+				}
+				reader = r
 			}
 
 			outJSON := verboseFormat == jsonFormatName
 			var verboseFormatter *kgo.RecordFormatter
 			if verboseFormat != "" && !outJSON {
+				var err error
 				verboseFormatter, err = kgo.NewRecordFormatter(verboseFormat)
 				if err != nil {
 					return out.Errf(out.ExitUsage, "output format %q: %v", verboseFormat, err)
@@ -284,8 +332,14 @@ Examples:
 				return out.Errf(out.ExitUsage, "invalid acks %d not in allowed -1, 0, 1", acks)
 			}
 
-			if partition > -1 {
+			// -p sends every record to one partition. Without it, a JSON
+			// object's partition is honored and the rest are placed by
+			// the default partitioner.
+			switch {
+			case partition > -1:
 				cl.AddOpt(kgo.RecordPartitioner(kgo.ManualPartitioner()))
+			case isJSON:
+				cl.AddOpt(kgo.RecordPartitioner(newJSONPartitioner()))
 			}
 
 			if retries > -1 {
@@ -323,7 +377,6 @@ Examples:
 				if len(args) > 0 {
 					topic = args[0]
 				}
-				hasTopicVerb := layoutParses(informat, 't')
 
 				build := func(flag, raw string, isKey bool) (*serde.Encoder, error) {
 					spec, err := parseSchemaSpec(raw)
@@ -332,11 +385,11 @@ Examples:
 					}
 					// A single encoder is resolved up front for the whole run.
 					// If the subject is derived from the topic but the input
-					// format parses a per-record topic (%t), records for other
-					// topics would be silently encoded against the wrong schema.
+					// carries a per-record topic, records for other topics
+					// would be silently encoded against the wrong schema.
 					// Reject that rather than corrupt the stream.
-					if spec.DerivesSubject() && hasTopicVerb {
-						return nil, out.Errf(out.ExitUsage, "%s derives the subject from the topic, but -f/--format parses a per-record topic (%%t); use %s id:N or %s subject:NAME", flag, flag, flag)
+					if spec.DerivesSubject() && perRecordTopic {
+						return nil, out.Errf(out.ExitUsage, "%s derives the subject from the topic, but the topic is parsed per record; use %s id:N or %s subject:NAME", flag, flag, flag)
 					}
 					enc, err := serde.NewEncoder(scl, topic, isKey, spec)
 					if err != nil {
@@ -393,22 +446,28 @@ Examples:
 				if tombstone && len(r.Value) == 0 {
 					r.Value = nil
 				}
-				// -k fills in a key the input did not set; %k sets one
-				// even when it read nothing.
+				// -k fills in a key the input did not set: %k sets one
+				// even when it read nothing, and a JSON object's null is
+				// deliberate but a missing field is not, so both null and
+				// absent take -k.
 				if setKey && r.Key == nil {
 					r.Key = []byte(key)
 				}
-				if r.Topic == "" {
-					if len(args) == 0 {
-						return out.Errf(out.ExitUsage, "no topic: the input record names none and none was given as an argument or with -t/--topic")
-					}
+				if len(args) > 0 && (isJSON || r.Topic == "") {
 					r.Topic = args[0]
 				}
+				if r.Topic == "" {
+					return out.Errf(out.ExitUsage, "no topic: the input record names none and none was given as an argument or with -t/--topic")
+				}
 
-				// Override the partition in the case when the manual partitioner is used.
-				r.Partition = partition
+				// -p wins. Without it, a JSON object's partition is kept
+				// for the partitioner; a format string's %p is not, and
+				// never was, the default partitioner placing the record.
+				if partition > -1 || !isJSON {
+					r.Partition = partition
+				}
 
-				// Schema Registry encode: JSON in -> schema binary (with the
+				// Schema Registry encode: JSON in, schema binary (with the
 				// registry wire header) out. Tombstones (nil value) are left
 				// untouched.
 				if keyEnc != nil && r.Key != nil {
@@ -442,9 +501,9 @@ Examples:
 	}
 
 	cmd.Flags().StringVarP(&topicFlag, "topic", "t", "", "topic to produce to (alternative to positional argument)")
-	cmd.Flags().StringVarP(&informat, "format", "f", "%v\n", "record input format")
+	cmd.Flags().StringVarP(&informat, "format", "f", "%v\n", "record input format; the bare word 'json' reads the objects consume -f json writes")
 	cmd.Flags().StringVarP(&verboseFormat, "output-format", "o", "", "format string for produced record output (topic, partition, offset of each record); the bare word 'json' prints one JSON object per record")
-	cmd.Flags().StringVarP(&key, "key", "k", "", "key for every record whose input carries none (a %k in -f wins)")
+	cmd.Flags().StringVarP(&key, "key", "k", "", "key for every record whose input carries none (a %k in -f or a key in a JSON object wins)")
 	cmd.Flags().StringVarP(&compression, "compression", "z", "snappy", "compression to use for producing batches (none, gzip, snappy, lz4, zstd)")
 	cmd.Flags().IntVar(&acks, "acks", -1, "number of acks required, -1 is all in sync replicas, 1 is leader replica only, 0 is no acks required (0 disables idempotency)")
 	cmd.Flags().IntVar(&retries, "retries", -1, "number of times to retry producing if non-negative")

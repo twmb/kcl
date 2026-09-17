@@ -17,6 +17,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/commands/consume"
 	"github.com/twmb/kcl/out"
 )
 
@@ -50,7 +51,7 @@ func runKCL(t *testing.T, addrs []string, stdin string, args ...string) ([]byte,
 
 	root := &cobra.Command{Use: "kcl", SilenceUsage: true, SilenceErrors: true}
 	kcl := client.New(root)
-	root.AddCommand(Command(kcl))
+	root.AddCommand(Command(kcl), consume.Command(kcl))
 	root.SetArgs(append(args, "--no-config-file", "-B", strings.Join(addrs, ",")))
 
 	inR, inW, err := os.Pipe()
@@ -124,8 +125,83 @@ func readAll(t *testing.T, addrs []string, topic string, n int) []*kgo.Record {
 	return recs
 }
 
+// TestProduceJSONRoundTrip pins that "consume -f json | produce -f json"
+// reproduces a record exactly: a null key stays null rather than becoming
+// empty, bytes that are not UTF-8 travel through the _base64 fields, headers
+// come back in order, and the partition and timestamp are kept.
+func TestProduceJSONRoundTrip(t *testing.T) {
+	c, cl := newCluster(t, map[string]int32{"src": 2, "dst": 2})
+	addrs := c.ListenAddrs()
+
+	ts := time.UnixMilli(1755645291123)
+	want := []*kgo.Record{
+		{Topic: "src", Partition: 1, Timestamp: ts, Key: nil, Value: []byte{0xff, 0xfe}, Headers: []kgo.RecordHeader{
+			{Key: "h1", Value: []byte("v1")},
+			{Key: "raw", Value: []byte{0xff}},
+		}},
+		{Topic: "src", Partition: 0, Timestamp: ts.Add(time.Second), Key: []byte("k"), Value: []byte("plain")},
+	}
+	pcl, err := kgo.NewClient(kgo.SeedBrokers(addrs...), kgo.RecordPartitioner(kgo.ManualPartitioner()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := pcl.ProduceSync(t.Context(), want...); res.FirstErr() != nil {
+		t.Fatal(res.FirstErr())
+	}
+	pcl.Close()
+	_ = cl
+
+	dump, err := runKCL(t, addrs, "", "consume", "src", "-o", "start", "-n", "2", "-f", "json")
+	if err != nil {
+		t.Fatalf("consume: %v", err)
+	}
+	if !bytes.Contains(dump, []byte(`"key":null`)) || !bytes.Contains(dump, []byte(`"value_base64":"//4="`)) {
+		t.Fatalf("consume dump lacks the null key or the base64 value: %s", dump)
+	}
+
+	got, err := runKCL(t, addrs, string(dump), "produce", "dst", "-f", "json", "-o", "json")
+	if err != nil {
+		t.Fatalf("produce: %v\n%s", err, got)
+	}
+	for _, o := range decodeObjects(t, got) {
+		if o["error"] != "" || o["topic"] != "dst" {
+			t.Errorf("produced object = %v", o)
+		}
+	}
+
+	recs := readAll(t, addrs, "dst", 2)
+	byPart := map[int32]*kgo.Record{}
+	for _, r := range recs {
+		byPart[r.Partition] = r
+	}
+	for _, w := range want {
+		g := byPart[w.Partition]
+		if g == nil {
+			t.Fatalf("no record on partition %d", w.Partition)
+		}
+		if (g.Key == nil) != (w.Key == nil) || !bytes.Equal(g.Key, w.Key) {
+			t.Errorf("partition %d key = %v, want %v", w.Partition, g.Key, w.Key)
+		}
+		if !bytes.Equal(g.Value, w.Value) {
+			t.Errorf("partition %d value = %v, want %v", w.Partition, g.Value, w.Value)
+		}
+		if len(g.Headers) != len(w.Headers) {
+			t.Fatalf("partition %d has %d headers, want %d", w.Partition, len(g.Headers), len(w.Headers))
+		}
+		for i := range w.Headers {
+			if g.Headers[i].Key != w.Headers[i].Key || !bytes.Equal(g.Headers[i].Value, w.Headers[i].Value) {
+				t.Errorf("partition %d header %d = %v, want %v", w.Partition, i, g.Headers[i], w.Headers[i])
+			}
+		}
+		if !g.Timestamp.Equal(w.Timestamp) {
+			t.Errorf("partition %d timestamp = %v, want %v", w.Partition, g.Timestamp, w.Timestamp)
+		}
+	}
+}
+
 // TestProduceKey pins the precedence: -k fills in a key only where the input
-// set none, so a %k in the format wins.
+// set none, so a %k in the format or a key in the object wins, and a null key
+// in the object is the same as none. Without -k, null stays null.
 func TestProduceKey(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -136,6 +212,10 @@ func TestProduceKey(t *testing.T) {
 		{"flag on a plain line", []string{"-k", "fk"}, "v\n", []byte("fk")},
 		{"empty flag is an empty key", []string{"-k", ""}, "v\n", []byte{}},
 		{"%k wins over the flag", []string{"-k", "fk", "-f", "%k %v\n"}, "a v\n", []byte("a")},
+		{"json key wins over the flag", []string{"-k", "fk", "-f", "json"}, `{"value":"v","key":"a"}`, []byte("a")},
+		{"json without a key takes the flag", []string{"-k", "fk", "-f", "json"}, `{"value":"v"}`, []byte("fk")},
+		{"json null key takes the flag", []string{"-k", "fk", "-f", "json"}, `{"value":"v","key":null}`, []byte("fk")},
+		{"json null key stays null", []string{"-f", "json"}, `{"value":"v","key":null}`, nil},
 		{"no key at all", nil, "v\n", nil},
 	}
 	topics := map[string]int32{}
@@ -260,6 +340,11 @@ func TestProduceInputErrors(t *testing.T) {
 		{"bad layout", []string{"-f", "%q"}, "x\n", `input format "%q"`},
 		{"truncated sized input", []string{"-f", "%V{big32}%v"}, "abc", `input format "%V{big32}%v": unexpected EOF`},
 		{"bad output layout", []string{"-o", "%q"}, "x\n", `output format "%q"`},
+		{"json unknown field", []string{"-f", "json"}, `{"vallue":"x"}`, `unknown field "/vallue"`},
+		{"json not an object", []string{"-f", "json"}, `[1]`, `want an object`},
+		{"json both key forms", []string{"-f", "json"}, `{"key":"a","key_base64":"YQ=="}`, `both key and key_base64`},
+		{"json bad base64", []string{"-f", "json"}, `{"value_base64":"!!"}`, `value_base64`},
+		{"json wrong type", []string{"-f", "json"}, `{"partition":"x"}`, `field "/partition": got a JSON string, want a number`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -274,6 +359,52 @@ func TestProduceInputErrors(t *testing.T) {
 				t.Errorf("error = %q, want it to contain %q", err, tt.want)
 			}
 		})
+	}
+
+	// An object without a topic, and none given, is also a usage error;
+	// this one can only be found once the object is read.
+	_, err := runKCL(t, addrs, `{"value":"x"}`, "produce", "-f", "json")
+	if err == nil || out.ExitCode(err) != out.ExitUsage || !strings.Contains(err.Error(), "no topic") {
+		t.Errorf("error = %v, want a usage error naming the missing topic", err)
+	}
+}
+
+// TestProduceJSONTopicAndPartition pins the two precedence rules of -f json:
+// a topic on the command line applies to every object, and an object's
+// partition is honored unless -p is given.
+func TestProduceJSONTopicAndPartition(t *testing.T) {
+	c, _ := newCluster(t, map[string]int32{"a": 3, "b": 3})
+	addrs := c.ListenAddrs()
+
+	in := `{"topic":"a","partition":2,"value":"x"}` + "\n" + `{"topic":"a","value":"y"}` + "\n"
+
+	// No topic given: the object's topic and partition are used.
+	got, err := runKCL(t, addrs, in, "produce", "-f", "json", "-o", "json")
+	if err != nil {
+		t.Fatalf("produce: %v\n%s", err, got)
+	}
+	for _, o := range decodeObjects(t, got) {
+		if o["topic"] != "a" || o["error"] != "" {
+			t.Errorf("object = %v", o)
+		}
+	}
+	// The object that named partition 2 is there; the other went where
+	// the partitioner put it, which may also be 2.
+	for _, r := range readAll(t, addrs, "a", 2) {
+		if string(r.Value) == "x" && r.Partition != 2 {
+			t.Errorf("record x is on partition %d, want 2", r.Partition)
+		}
+	}
+
+	// A topic given overrides the object's; -p overrides its partition.
+	got, err = runKCL(t, addrs, in, "produce", "b", "-p", "1", "-f", "json", "-o", "json")
+	if err != nil {
+		t.Fatalf("produce: %v\n%s", err, got)
+	}
+	for _, o := range decodeObjects(t, got) {
+		if o["topic"] != "b" || o["partition"] != float64(1) {
+			t.Errorf("object = %v, want topic b partition 1", o)
+		}
 	}
 }
 
