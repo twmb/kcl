@@ -882,18 +882,18 @@ func lagHeaders(by string) []string {
 	}
 }
 
-func offsetNum(o int64) out.Number {
+func offsetNum(o int64) any {
 	if o < 0 {
-		return out.NoNum
+		return out.Unknown
 	}
-	return out.Num(o)
+	return o
 }
 
-func lagNum(r describeRow) out.Number {
+func lagNum(r describeRow) any {
 	if !r.lagValid {
-		return out.NoNum
+		return out.Unknown
 	}
-	return out.Num(r.lag)
+	return r.lag
 }
 
 func lagValues(by string, r describeRow) []any {
@@ -1145,9 +1145,9 @@ func printGroupView(format, command string, opts describeOpts, groups []printGro
 		if !opts.lag.matches(g.totalLag, g.totalLagValid) {
 			continue
 		}
-		lag := out.Num(g.totalLag)
+		var lag any = g.totalLag
 		if !g.totalLagValid {
-			lag = out.NoNum
+			lag = out.Unknown
 		}
 		table.Row(g.group, g.state, g.nMembers, len(g.rows), lag)
 		rows++

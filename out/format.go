@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"strconv"
 	"strings"
 	"text/tabwriter"
 )
@@ -15,6 +14,21 @@ const (
 	FormatJSON = "json"
 	FormatAWK  = "awk"
 )
+
+// Unknown is the table cell for a value we do not have: an offset the cluster
+// did not report, or a flag's column when the flag is off. It prints as "-"
+// in text and awk and as null in JSON.
+//
+// A known empty string is "" instead, the ERROR of a row that succeeded: awk
+// prints it as "-" as well, and JSON keeps the "". 0 and false are values and
+// print as themselves everywhere. Commands never write "-" into a cell; the
+// awk and text writers do.
+var Unknown unknown
+
+type unknown struct{}
+
+func (unknown) String() string               { return "-" }
+func (unknown) MarshalJSON() ([]byte, error) { return []byte("null"), nil }
 
 // FormattedTable buffers tabular output and can flush in text, json, or awk
 // format. Use this for commands whose output is a single table.
@@ -37,10 +51,7 @@ type FormattedTable struct {
 func NewFormattedTable(format, command string, version int, jsonKey string, headers ...string) *FormattedTable {
 	keys := make([]string, len(headers))
 	for i, h := range headers {
-		k := strings.ToLower(h)
-		k = strings.ReplaceAll(k, " ", "_")
-		k = strings.ReplaceAll(k, "-", "_")
-		keys[i] = k
+		keys[i] = jsonKeyOf(h)
 	}
 	return &FormattedTable{
 		format:   format,
@@ -50,6 +61,13 @@ func NewFormattedTable(format, command string, version int, jsonKey string, head
 		headers:  headers,
 		jsonKeys: keys,
 	}
+}
+
+func jsonKeyOf(header string) string {
+	k := strings.ToLower(header)
+	k = strings.ReplaceAll(k, " ", "_")
+	k = strings.ReplaceAll(k, "-", "_")
+	return k
 }
 
 // Row adds a row of values to the table.
@@ -75,7 +93,7 @@ func (t *FormattedTable) flushText() {
 	for _, row := range t.rows {
 		strs := make([]string, len(row))
 		for i, v := range row {
-			strs[i] = fmt.Sprint(v)
+			strs[i] = textCell(v)
 		}
 		fmt.Fprint(tw, strings.Join(strs, "\t")+"\n")
 	}
@@ -105,46 +123,49 @@ func (t *FormattedTable) flushJSON() {
 
 func (t *FormattedTable) flushAWK() {
 	for _, row := range t.rows {
-		strs := make([]string, len(row))
-		for i, v := range row {
-			strs[i] = fmt.Sprint(v)
-		}
-		fmt.Println(strings.Join(strs, "\t"))
+		AwkRow(row...)
 	}
 }
 
-// Number is a number for a table cell whose value the cluster may not have
-// reported. JSON gets the number itself, or null when there is none; text and
-// awk get the digits, or the dash those columns already showed. Build one
-// with Num, or use NoNum.
-//
-// A cell holding strconv.FormatInt of a number reaches JSON as a string, and
-// "start":"0" sat beside "stable":5 in one list-offsets document. A cell
-// holding the int64 itself is a JSON number, so reach for Number only where
-// a dash is also possible.
-type Number struct {
-	v  int64
-	ok bool
+// AwkRow prints one awk row, the values tab separated, with the cell rules a
+// table follows under --format awk. A command that prints awk rows by hand
+// uses this rather than fmt.Printf, so that the "-" for an empty cell is
+// written in one place.
+func AwkRow(values ...any) {
+	strs := make([]string, len(values))
+	for i, v := range values {
+		strs[i] = awkCell(v)
+	}
+	fmt.Println(strings.Join(strs, "\t"))
 }
 
-// Num is the table cell for v.
-func Num[T int | int32 | int64](v T) Number { return Number{v: int64(v), ok: true} }
+// awkCell is the awk text of one cell. An awk row has no empty field: a cell
+// that is Unknown, nil, or prints as "" is "-", so a script can count on every
+// column being there.
+func awkCell(v any) string {
+	switch v := v.(type) {
+	case nil, unknown:
+		return "-"
+	case string:
+		if v == "" {
+			return "-"
+		}
+		return v
+	}
+	if s := fmt.Sprint(v); s != "" {
+		return s
+	}
+	return "-"
+}
 
-// NoNum is the table cell for a number the cluster did not report.
-var NoNum Number
-
-func (n Number) String() string {
-	if !n.ok {
+// textCell is the text of one cell: "-" for Unknown and nil, and otherwise
+// what the value prints as, an empty string included.
+func textCell(v any) string {
+	switch v.(type) {
+	case nil, unknown:
 		return "-"
 	}
-	return strconv.FormatInt(n.v, 10)
-}
-
-func (n Number) MarshalJSON() ([]byte, error) {
-	if !n.ok {
-		return []byte("null"), nil
-	}
-	return strconv.AppendInt(nil, n.v, 10), nil
+	return fmt.Sprint(v)
 }
 
 // MarshalJSON outputs structured JSON with _command and _version metadata

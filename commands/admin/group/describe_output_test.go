@@ -173,7 +173,7 @@ func TestDescribeLogStartOffset(t *testing.T) {
 				t.Fatalf("got %d rows, want 1:\n%s", len(rows), stdout)
 			}
 			row := rows[0]
-			if row[3] != test.current || row[4] != "4" || row[5] != "10" || row[6] != test.lag || (row[7] != "") != test.member {
+			if row[3] != test.current || row[4] != "4" || row[5] != "10" || row[6] != test.lag || (row[7] != "-") != test.member {
 				t.Errorf("row = %q, want current %s, start 4, end 10, lag %s, member %v", row, test.current, test.lag, test.member)
 			}
 		})
@@ -543,10 +543,10 @@ func TestDescribeBy(t *testing.T) {
 					t.Fatalf("got %d rows, want 2:\n%s", len(rows), stdout)
 				}
 				owner, unowned := rows[0], rows[1]
-				if owner[1] == "" || owner[2] != "2" || owner[3] != "10" || owner[4] != "kgo" || owner[5] == "" {
+				if owner[1] == "-" || owner[2] != "2" || owner[3] != "10" || owner[4] != "kgo" || owner[5] == "-" {
 					t.Errorf("owner row = %q, want a member with 2 partitions, lag 10, client kgo, and a host", owner)
 				}
-				if want := []string{path.group, "", "1", "0", "", ""}; !slices.Equal(unowned, want) {
+				if want := []string{path.group, "-", "1", "0", "-", "-"}; !slices.Equal(unowned, want) {
 					t.Errorf("unowned row = %q, want %q", unowned, want)
 				}
 			})

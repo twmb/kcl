@@ -309,62 +309,6 @@ func TestDieJSON(t *testing.T) {
 	}
 }
 
-func TestNumber(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		n      Number
-		expStr string
-		expRaw string
-	}{
-		{"a number", Num(5), "5", "5"},
-		{"zero", Num(0), "0", "0"},
-		{"negative", Num(int64(-1)), "-1", "-1"},
-		{"not reported", NoNum, "-", "null"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if got := test.n.String(); got != test.expStr {
-				t.Errorf("String() = %s != exp %s", got, test.expStr)
-			}
-			raw, err := json.Marshal(test.n)
-			if err != nil {
-				t.Fatalf("Marshal: %v", err)
-			}
-			if string(raw) != test.expRaw {
-				t.Errorf("Marshal = %s != exp %s", raw, test.expRaw)
-			}
-		})
-	}
-}
-
-func TestNumberInTable(t *testing.T) {
-	rows := func(format string) string {
-		return captureStdout(func() {
-			table := NewFormattedTable(format, "test.cmd", 1, "data", "NAME", "SIZE", "LAG")
-			table.Row("alpha", Num(395), NoNum)
-			table.Flush()
-		})
-	}
-
-	if got, exp := rows("awk"), "alpha\t395\t-\n"; got != exp {
-		t.Errorf("awk = %q != exp %q", got, exp)
-	}
-	if got := rows("text"); !strings.Contains(got, "alpha  395   -") {
-		t.Errorf("text = %q", got)
-	}
-
-	var result map[string]any
-	if err := json.Unmarshal([]byte(rows("json")), &result); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	first := result["data"].([]any)[0].(map[string]any)
-	if first["size"] != float64(395) {
-		t.Errorf("size = %v (type %T), want a JSON number", first["size"], first["size"])
-	}
-	if first["lag"] != nil {
-		t.Errorf("lag = %v (type %T), want null", first["lag"], first["lag"])
-	}
-}
-
 // TestEmptyCommandOmitted pins that a document with no command to name leaves
 // _command out rather than carrying an empty one, the rule ErrorDoc follows.
 // Only the bare root has no command.
@@ -394,5 +338,78 @@ func TestEmptyCommandOmitted(t *testing.T) {
 				t.Errorf("_version = %v", result["_version"])
 			}
 		})
+	}
+}
+
+// TestCellRules pins how one cell prints per format: Unknown is "-" in text
+// and awk and null in JSON; "" is "-" in awk only; 0 and false are values.
+func TestCellRules(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		cell     any
+		text     string
+		awk      string
+		jsonText string
+	}{
+		{"unknown", Unknown, "-", "-", "null"},
+		{"nil", nil, "-", "-", "null"},
+		{"empty string", "", "", "-", `""`},
+		{"string", "x", "x", "x", `"x"`},
+		{"zero", 0, "0", "0", "0"},
+		{"false", false, "false", "false", "false"},
+		{"int64", int64(-1), "-1", "-1", "-1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := textCell(test.cell); got != test.text {
+				t.Errorf("text = %q, want %q", got, test.text)
+			}
+			if got := awkCell(test.cell); got != test.awk {
+				t.Errorf("awk = %q, want %q", got, test.awk)
+			}
+			raw, err := json.Marshal(test.cell)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(raw) != test.jsonText {
+				t.Errorf("json = %s, want %s", raw, test.jsonText)
+			}
+		})
+	}
+}
+
+// TestUnknownInTable drives the cell rules through the three writers, and
+// pins that the awk dash never reaches JSON: the "" a command wrote is the ""
+// JSON prints.
+func TestUnknownInTable(t *testing.T) {
+	rows := func(format string) string {
+		return captureStdout(func() {
+			table := NewFormattedTable(format, "test.cmd", 1, "data", "NAME", "SIZE", "LAG", "ERROR", "N", "B")
+			table.Row("alpha", int64(395), Unknown, "", 0, false)
+			table.Flush()
+		})
+	}
+	if got, exp := rows("awk"), "alpha\t395\t-\t-\t0\tfalse\n"; got != exp {
+		t.Errorf("awk = %q, want %q", got, exp)
+	}
+	if got := rows("text"); !strings.Contains(got, "alpha  395   -            0     false") {
+		t.Errorf("text = %q", got)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(rows("json")), &result); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	first := result["data"].([]any)[0].(map[string]any)
+	if first["size"] != float64(395) || first["lag"] != nil || first["error"] != "" || first["n"] != float64(0) || first["b"] != false {
+		t.Errorf("json row = %v", first)
+	}
+	if _, ok := first["lag"]; !ok {
+		t.Error("lag is absent, want null")
+	}
+}
+
+func TestAwkRow(t *testing.T) {
+	got := captureStdout(func() { AwkRow("topic", 0, "", Unknown, nil, false) })
+	if want := "topic\t0\t-\t-\t-\tfalse\n"; got != want {
+		t.Errorf("AwkRow = %q, want %q", got, want)
 	}
 }

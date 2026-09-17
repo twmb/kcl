@@ -377,9 +377,9 @@ Defaults: text shows all sections, awk shows offsets.
 										if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
 											errMsg = err.Error()
 										}
-										lag := out.NoNum
+										var lag any = out.Unknown
 										if p.Lag >= 0 {
-											lag = out.Num(p.Lag)
+											lag = p.Lag
 										}
 										lagTable.Row(topic.Topic, p.Partition, p.StartOffset, p.LeaderEpoch, lag, errMsg)
 									}

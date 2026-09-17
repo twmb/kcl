@@ -55,12 +55,12 @@ func humanSize(bytes int64) string {
 // strings they are.
 func formatSize(bytes int64, human bool) any {
 	if bytes < 0 {
-		return out.NoNum
+		return out.Unknown
 	}
 	if human {
 		return humanSize(bytes)
 	}
-	return out.Num(bytes)
+	return bytes
 }
 
 func describeCommand(cl *client.Client) *cobra.Command {
