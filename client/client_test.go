@@ -402,13 +402,13 @@ func TestFlagCfg(t *testing.T) {
 		},
 		{
 			name:  "tls and sasl, dotted and legacy underscore",
-			flags: []string{"tls.ca_cert_path=/ca.pem", "sasl.method=scram-sha-256", "sasl_user=alice", "dial_timeout=2s", "broker_timeout=1s"},
+			flags: []string{"tls.ca_cert_path=/ca.pem", "sasl.mechanism=scram-sha-256", "sasl_user=alice", "dial_timeout=2s", "broker_timeout=1s"},
 			want: Cfg{
 				SeedBrokers:   []string{"localhost:9092"},
 				BrokerTimeout: Dur(time.Second),
 				DialTimeout:   Dur(2 * time.Second),
 				TLS:           &CfgTLS{CACert: "/ca.pem"},
-				SASL:          &CfgSASL{Method: "scram-sha-256", User: "alice"},
+				SASL:          &CfgSASL{Mechanism: "scram-sha-256", User: "alice"},
 			},
 		},
 		{
@@ -574,7 +574,7 @@ func TestCfgFileLaysOverDefaults(t *testing.T) {
 
 func TestApplyCfgOptsUnsetAndBools(t *testing.T) {
 	tlsOn := func() Cfg { return Cfg{TLS: &CfgTLS{InsecureSkipVerify: true, CACert: "/ca"}} }
-	sasl := func() Cfg { return Cfg{SASL: &CfgSASL{Method: "plain", User: "u", Pass: "p"}} }
+	sasl := func() Cfg { return Cfg{SASL: &CfgSASL{Mechanism: "plain", User: "u", Pass: "p"}} }
 	for _, test := range []struct {
 		name    string
 		start   Cfg
@@ -587,7 +587,7 @@ func TestApplyCfgOptsUnsetAndBools(t *testing.T) {
 		{name: "bare boolean means true", opts: []string{"tls.insecure"}, want: Cfg{TLS: &CfgTLS{InsecureSkipVerify: true}}},
 		{name: "empty boolean unsets", start: tlsOn(), opts: []string{"tls.insecure="}, want: Cfg{TLS: &CfgTLS{CACert: "/ca"}}},
 		{name: "bad boolean", opts: []string{"tls.insecure=maybe"}, wantErr: "invalid boolean"},
-		{name: "empty string unsets and keeps the table", start: sasl(), opts: []string{"sasl.user="}, want: Cfg{SASL: &CfgSASL{Method: "plain", Pass: "p"}}},
+		{name: "empty string unsets and keeps the table", start: sasl(), opts: []string{"sasl.user="}, want: Cfg{SASL: &CfgSASL{Mechanism: "plain", Pass: "p"}}},
 		{name: "unsetting in an absent table stays absent", opts: []string{"sasl.user="}, want: Cfg{}},
 		{name: "table removal", start: sasl(), opts: []string{"sasl="}, want: Cfg{}},
 		{name: "table with a value", opts: []string{"sasl=x"}, wantErr: "is a table"},
@@ -813,12 +813,12 @@ func TestMaybeXHelp(t *testing.T) {
 
 func TestDiskCfgKeepsReferences(t *testing.T) {
 	t.Setenv("KCL_TEST_PASS", "s3cret")
-	c := &Client{noCfgFile: true, format: "text", envPfx: "KCL_", flagOverrides: []string{"sasl.method=plain", "sasl.pass=${KCL_TEST_PASS}", "seed_brokers=${KCL_TEST_PASS}.example:1"}, cfg: defaultCfg()}
+	c := &Client{noCfgFile: true, format: "text", envPfx: "KCL_", flagOverrides: []string{"sasl.mechanism=plain", "sasl.pass=${KCL_TEST_PASS}", "seed_brokers=${KCL_TEST_PASS}.example:1"}, cfg: defaultCfg()}
 	c.loadCfg()
 	if c.cfg.SASL.Pass != "s3cret" || c.cfg.SeedBrokers[0] != "s3cret.example:1" {
 		t.Errorf("running cfg not expanded: %+v %v", c.cfg.SASL, c.cfg.SeedBrokers)
 	}
-	if c.cfgWritten.SASL.Pass != "${KCL_TEST_PASS}" || c.cfgWritten.SeedBrokers[0] != "${KCL_TEST_PASS}.example:1" || c.cfgWritten.SASL.Method != "plain" {
+	if c.cfgWritten.SASL.Pass != "${KCL_TEST_PASS}" || c.cfgWritten.SeedBrokers[0] != "${KCL_TEST_PASS}.example:1" || c.cfgWritten.SASL.Mechanism != "plain" {
 		t.Errorf("written cfg changed: %+v %v", c.cfgWritten.SASL, c.cfgWritten.SeedBrokers)
 	}
 }
@@ -850,7 +850,7 @@ func TestCfgCloneIsDeep(t *testing.T) {
 // TestDiskCfgNeedsNoSecrets pins that dump can read a config whose ${NAME}
 // references are unset, and that a client built from it still fails.
 func TestDiskCfgNeedsNoSecrets(t *testing.T) {
-	c := &Client{noCfgFile: true, format: "text", envPfx: "KCL_", flagOverrides: []string{"sasl.method=plain", "sasl.pass=${KCL_TEST_DEFINITELY_UNSET}"}, cfg: defaultCfg()}
+	c := &Client{noCfgFile: true, format: "text", envPfx: "KCL_", flagOverrides: []string{"sasl.mechanism=plain", "sasl.pass=${KCL_TEST_DEFINITELY_UNSET}"}, cfg: defaultCfg()}
 	if got := c.DiskCfg(); got.SASL == nil || got.SASL.Pass != "${KCL_TEST_DEFINITELY_UNSET}" {
 		t.Errorf("DiskCfg = %+v", got.SASL)
 	}
@@ -1055,5 +1055,54 @@ func TestRegistryKeyAliases(t *testing.T) {
 	}
 	if !strings.Contains(XHelp(), "[schema_registry] is its old name") {
 		t.Error("-X help does not say the section's old name is still read")
+	}
+}
+
+// TestSASLMechanismAlias pins that sasl.mechanism is the key and sasl.method
+// its old name, from -X, the environment, and a file, with the current name
+// winning when a file has both.
+func TestSASLMechanismAlias(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		file     string
+		opts     []string
+		env      map[string]string
+		want     string
+		wantWarn string
+	}{
+		{name: "-X current", opts: []string{"sasl.mechanism=plain"}, want: "plain"},
+		{name: "-X old", opts: []string{"sasl.method=plain"}, want: "plain"},
+		{name: "-X old underscore form", opts: []string{"sasl_method=plain"}, want: "plain"},
+		{name: "env current", env: map[string]string{"KCL_SASL_MECHANISM": "plain"}, want: "plain"},
+		{name: "env old", env: map[string]string{"KCL_SASL_METHOD": "plain"}, want: "plain"},
+		{name: "env both, current wins", env: map[string]string{"KCL_SASL_METHOD": "plain", "KCL_SASL_MECHANISM": "scram-sha-256"}, want: "scram-sha-256"},
+		{name: "file current", file: "[sasl]\nmechanism = \"plain\"\n", want: "plain"},
+		{name: "file old", file: "[sasl]\nmethod = \"plain\"\n", want: "plain"},
+		{name: "file both", file: "[sasl]\nmethod = \"plain\"\nmechanism = \"scram-sha-256\"\n", want: "scram-sha-256", wantWarn: `config key "sasl.method" in PATH is ignored; "sasl.mechanism" is also set and wins`},
+		{name: "profile old", file: "current_profile = \"p\"\n[profiles.p.sasl]\nmethod = \"plain\"\n", want: "plain"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for k, v := range test.env {
+				t.Setenv(k, v)
+			}
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if test.file != "" {
+				if err := os.WriteFile(path, []byte(test.file), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			c := &Client{cfgPath: path, noCfgFile: test.file == "", envPfx: "KCL_", format: "text", flagOverrides: test.opts, cfg: defaultCfg()}
+			stderr := captureStderr(t, c.loadCfg)
+			if c.cfg.SASL == nil || c.cfg.SASL.Mechanism != test.want || c.cfg.SASL.Method != "" {
+				t.Errorf("SASL = %+v, want mechanism %q and no method", c.cfg.SASL, test.want)
+			}
+			want := strings.ReplaceAll(test.wantWarn, "PATH", path)
+			if want == "" && stderr != "" || want != "" && !strings.Contains(stderr, want) {
+				t.Errorf("stderr = %q, want %q", stderr, want)
+			}
+		})
+	}
+	if list := XList(); strings.Contains(list, "sasl.method") || !strings.Contains(list, "sasl.mechanism=") {
+		t.Errorf("-X list: %s", list)
 	}
 }

@@ -232,7 +232,7 @@ seed_brokers = ["p:9092"]
 				SeedBrokers: []string{"k:9093"},
 				DialTimeout: client.Dur(2 * time.Second),
 				TLS:         &client.CfgTLS{CACert: "/ca.pem"},
-				SASL:        &client.CfgSASL{Method: "scram-sha-256", User: "me", Pass: "pw"},
+				SASL:        &client.CfgSASL{Mechanism: "scram-sha-256", User: "me", Pass: "pw"},
 			},
 			wantCurrent: true,
 			check: func(t *testing.T, f client.CfgFile) {
@@ -243,7 +243,7 @@ seed_brokers = ["p:9092"]
 				if p.TLS == nil || p.TLS.CACert != "/ca.pem" {
 					t.Errorf("tls = %+v", p.TLS)
 				}
-				if p.SASL == nil || p.SASL.Method != "scram-sha-256" || p.SASL.User != "me" || p.SASL.Pass != "pw" {
+				if p.SASL == nil || p.SASL.Mechanism != "scram-sha-256" || p.SASL.User != "me" || p.SASL.Pass != "pw" {
 					t.Errorf("sasl = %+v", p.SASL)
 				}
 			},
@@ -374,11 +374,11 @@ seed_brokers = ["s:9092"]
 			exists:    true,
 			existing:  profiles,
 			profile:   "staging",
-			opts:      []string{"sasl.method=scram-sha-256", "sasl_user=me", "dial_timeout=2s"},
+			opts:      []string{"sasl.mechanism=scram-sha-256", "sasl_user=me", "dial_timeout=2s"},
 			wantWhere: `profile "staging"`,
 			check: func(t *testing.T, f client.CfgFile) {
 				p := f.Profiles["staging"]
-				if p.SASL == nil || p.SASL.Method != "scram-sha-256" || p.SASL.User != "me" || p.DialTimeout.D() != 2*time.Second {
+				if p.SASL == nil || p.SASL.Mechanism != "scram-sha-256" || p.SASL.User != "me" || p.DialTimeout.D() != 2*time.Second {
 					t.Errorf("staging = %+v sasl=%+v", p, p.SASL)
 				}
 				if f.Profiles["prod"].SeedBrokers[0] != "p:9092" {
@@ -738,8 +738,8 @@ func TestProfileFormats(t *testing.T) {
 		{name: "current json", args: []string{"--format", "json", "profile", "current"}, want: `"profile":"prod"`, json: true},
 		{name: "current awk with -C", args: []string{"--format", "awk", "-C", "dev", "profile", "current"}, want: "dev\n"},
 		{name: "dump text is toml", args: []string{"profile", "dump"}, want: "seed_brokers = [\"p:9092\", \"q:9092\"]"},
-		{name: "dump json", args: []string{"--format", "json", "profile", "dump"}, want: `"method":"plain"`, json: true},
-		{name: "dump awk", args: []string{"--format", "awk", "profile", "dump"}, want: "registry.urls\thttp://sr:8081\nsasl.method\tplain\nseed_brokers\tp:9092,q:9092\n"},
+		{name: "dump json", args: []string{"--format", "json", "profile", "dump"}, want: `"mechanism":"plain"`, json: true},
+		{name: "dump awk", args: []string{"--format", "awk", "profile", "dump"}, want: "registry.urls\thttp://sr:8081\nsasl.mechanism\tplain\nseed_brokers\tp:9092,q:9092\n"},
 		{name: "dump json names the registry section", args: []string{"--format", "json", "profile", "dump"}, want: `"registry":{"urls":["http://sr:8081"]}`, json: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {

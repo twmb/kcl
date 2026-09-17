@@ -209,7 +209,7 @@ environment variables are not read.
 
 EXAMPLES:
   kcl profile create local -B localhost:9092
-  kcl profile create prod -B k1:9093,k2:9093 -X tls.ca_cert_path=/etc/kafka/ca.pem -X sasl.method=scram-sha-256 -X sasl.user=me -X sasl.pass=secret
+  kcl profile create prod -B k1:9093,k2:9093 -X tls.ca_cert_path=/etc/kafka/ca.pem -X sasl.mechanism=scram-sha-256 -X sasl.user=me -X sasl.pass=secret
   kcl profile create sr -B localhost:9092 -R http://localhost:8081
 
 SEE ALSO:
@@ -258,7 +258,7 @@ parses.
 
 EXAMPLES:
   kcl profile set -B k1:9092,k2:9092
-  kcl -C prod profile set -X sasl.method=scram-sha-256 -X sasl.user=me -X sasl.pass=secret
+  kcl -C prod profile set -X sasl.mechanism=scram-sha-256 -X sasl.user=me -X sasl.pass=secret
 
 SEE ALSO:
   kcl -X help          every key, with its meaning
@@ -590,7 +590,7 @@ Only set keys take effect. "kcl -X help" describes every key; "kcl profile
 dump" shows the result.
 
 EXAMPLES:
-  kcl profile create prod -B k1:9092,k2:9092 -X sasl.method=scram-sha-256 -X sasl.user=me -X sasl.pass='${KAFKA_PASS}'
+  kcl profile create prod -B k1:9092,k2:9092 -X sasl.mechanism=scram-sha-256 -X sasl.user=me -X sasl.pass='${KAFKA_PASS}'
   kcl -C prod topic list                   # one command against prod
   kcl profile use prod                     # every command against prod
   kcl profile set -X dial_timeout=2s       # change the current profile

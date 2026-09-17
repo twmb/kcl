@@ -52,7 +52,14 @@ type CfgTLS struct {
 }
 
 type CfgSASL struct {
-	Method  string `toml:"method,omitempty"`
+	// Mechanism is plain, scram-sha-256, scram-sha-512, or aws_msk_iam, the
+	// key every other Kafka tool spells sasl.mechanism.
+	Mechanism string `toml:"mechanism,omitempty"`
+
+	// Method is the old name of Mechanism. It is read forever and folded
+	// into Mechanism by FoldAliases; nothing writes it.
+	Method string `toml:"method,omitempty"`
+
 	Zid     string `toml:"zid,omitempty"`
 	User    string `toml:"user,omitempty"`
 	Pass    string `toml:"pass,omitempty"`
@@ -149,10 +156,11 @@ type Cfg struct {
 }
 
 // FoldAliases moves what a file said under an old key to its current key,
-// [schema_registry] into [registry], and clears the old one so that writing
-// the config back writes the current name. Where both were set the current
-// key wins, and the old one is returned with the key that won, as dotted
-// paths under prefix ("profiles.prod."), for the caller to warn about.
+// [schema_registry] into [registry] and sasl.method into sasl.mechanism, and
+// clears the old one so that writing the config back writes the current name.
+// Where both were set the current key wins, and the old one is returned with
+// the key that won, as dotted paths under prefix ("profiles.prod."), for the
+// caller to warn about.
 func (c *Cfg) FoldAliases(prefix string) (dropped [][2]string) {
 	if c.SchemaRegistry != nil {
 		if c.SR == nil {
@@ -161,6 +169,14 @@ func (c *Cfg) FoldAliases(prefix string) (dropped [][2]string) {
 			dropped = append(dropped, [2]string{prefix + "schema_registry", prefix + "registry"})
 		}
 		c.SchemaRegistry = nil
+	}
+	if c.SASL != nil && c.SASL.Method != "" {
+		if c.SASL.Mechanism == "" {
+			c.SASL.Mechanism = c.SASL.Method
+		} else {
+			dropped = append(dropped, [2]string{prefix + "sasl.method", prefix + "sasl.mechanism"})
+		}
+		c.SASL.Method = ""
 	}
 	return dropped
 }
@@ -980,7 +996,7 @@ var cfgKeys = func() []CfgKey {
 	keys = append(keys, tlsKeys("tls", tlsTable, func(c *Cfg) *CfgTLS { return c.TLS }, "TLS")...)
 	keys = append(keys,
 		table("sasl", "Turns SASL off (removes every sasl.* key).", saslTable),
-		str("sasl.method", "scram-sha-256", "plain, scram-sha-256, scram-sha-512, or aws_msk_iam.", saslTable, func(c *Cfg) *string { return &c.SASL.Method }),
+		str("sasl.mechanism", "scram-sha-256", "plain, scram-sha-256, scram-sha-512, or aws_msk_iam. sasl.method is its old name and still read.", saslTable, func(c *Cfg) *string { return &c.SASL.Mechanism }),
 		str("sasl.zid", "", "Authorization id, if not the user.", saslTable, func(c *Cfg) *string { return &c.SASL.Zid }),
 		str("sasl.user", "alice", "User name.", saslTable, func(c *Cfg) *string { return &c.SASL.User }),
 		str("sasl.pass", "${KAFKA_PASS}", "Password.", saslTable, func(c *Cfg) *string { return &c.SASL.Pass }),
@@ -995,10 +1011,14 @@ var cfgKeys = func() []CfgKey {
 	keys = append(keys, tlsKeys("registry.tls", srTLSTable, func(c *Cfg) *CfgTLS { return c.SR.TLS }, "registry TLS")...)
 
 	// The old names still work from -X, the environment, and the file, and
-	// are shown nowhere: schema_registry.* for registry.*.
+	// are shown nowhere: schema_registry.* for registry.*, and sasl.method
+	// for sasl.mechanism.
 	for _, k := range keys {
-		if k.Name == "registry" || strings.HasPrefix(k.Name, "registry.") {
+		switch {
+		case k.Name == "registry" || strings.HasPrefix(k.Name, "registry."):
 			keys = append(keys, CfgKey{Name: "schema_" + k.Name, Type: k.Type, set: k.set, hidden: true})
+		case k.Name == "sasl.mechanism":
+			keys = append(keys, CfgKey{Name: "sasl.method", Type: k.Type, set: k.set, hidden: true})
 		}
 	}
 	return keys
@@ -1194,9 +1214,7 @@ func (c *Client) maybeAddSASL() error {
 		return nil
 	}
 
-	method := Strnorm(c.cfg.SASL.Method)
-
-	switch method {
+	switch Strnorm(c.cfg.SASL.Mechanism) {
 	case "":
 	case "plain":
 		c.AddOpt(kgo.SASL(plain.Plain(func(context.Context) (plain.Auth, error) {
@@ -1239,7 +1257,7 @@ func (c *Client) maybeAddSASL() error {
 		})))
 
 	default:
-		return out.Errf(out.ExitUsage, "unrecognized / unhandled sasl method %q", c.cfg.SASL.Method)
+		return out.Errf(out.ExitUsage, "unrecognized / unhandled sasl mechanism %q", c.cfg.SASL.Mechanism)
 	}
 	return nil
 }
