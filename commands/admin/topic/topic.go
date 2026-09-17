@@ -3,7 +3,6 @@ package topic
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -17,7 +16,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
-	"github.com/twmb/kcl/commands/metadata"
 	"github.com/twmb/kcl/flagutil"
 	"github.com/twmb/kcl/kv"
 	"github.com/twmb/kcl/out"
@@ -88,19 +86,35 @@ func topicCreateCommand(cl *client.Client) *cobra.Command {
 Requires Kafka 0.10.1+.
 
 All topics created with this command will have the same number of partitions,
-replication factor, and key/value configs.
+replication factor, and configs.
 
 To manually assign replicas, use --replica-assignment with a comma-separated
 list of colon-separated broker IDs. Each comma-separated group is a partition's
 replica list. For example, "0:1:2,1:2:3,2:3:0" creates 3 partitions with 3
 replicas each. When using --replica-assignment, do not use --num-partitions or
 --replication-factor.
+
+Each result row is TOPIC TOPIC-ID ERROR MESSAGE. The id is unknown below
+CreateTopics v7 (Kafka 2.8) and on a dry run, which validates the request
+without creating anything.
+
+EXAMPLES:
+  kcl topic create foo                          # cluster default partitions and replication
+  kcl topic create foo -p 6 -r 3                # six partitions, three replicas each
+  kcl topic create foo -c cleanup.policy=compact -c retention.ms=-1
+  kcl topic create foo --dry-run                # validate only
+
+SEE ALSO:
+  kcl topic list            list topics
+  kcl topic describe        describe topic partitions
+  kcl topic add-partitions  add partitions to a topic
 `,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
+			cl.SetCommand("topic.create")
 			kvs, err := kv.Parse(configKVs)
 			if err != nil {
-				return fmt.Errorf("unable to parse KVs: %v", err)
+				return out.Errf(out.ExitUsage, "unable to parse --config: %v", err)
 			}
 			req := kmsg.CreateTopicsRequest{TimeoutMillis: cl.TimeoutMillis()}
 			req.ValidateOnly = validateOnly
@@ -116,7 +130,7 @@ replicas each. When using --replica-assignment, do not use --num-partitions or
 			if replicaAssignment != "" {
 				assignments, err = parseReplicaAssignment(replicaAssignment)
 				if err != nil {
-					return fmt.Errorf("unable to parse replica assignment: %v", err)
+					return out.Errf(out.ExitUsage, "unable to parse replica assignment: %v", err)
 				}
 				if len(assignments) == 0 {
 					return out.Errf(out.ExitUsage, "--replica-assignment specified but no partitions parsed")
@@ -141,102 +155,204 @@ replicas each. When using --replica-assignment, do not use --num-partitions or
 			}
 
 			resp := kresp.(*kmsg.CreateTopicsResponse)
-			var table *out.FormattedTable
-			if resp.Version >= 7 {
-				table = out.NewFormattedTable(cl.Format(), cl.Command(), 1, "topics",
-					"NAME", "ID", "MESSAGE")
-			} else {
-				table = out.NewFormattedTable(cl.Format(), cl.Command(), 1, "topics",
-					"NAME", "MESSAGE")
-			}
-			anyErr := false
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "topics",
+				"TOPIC", "TOPIC-ID", "ERROR", "MESSAGE").ResultColumns()
+			table.SetDryRun(validateOnly)
 			for _, topic := range resp.Topics {
-				msg := "OK"
-				if err := kerr.ErrorForCode(topic.ErrorCode); err != nil {
-					anyErr = true
-					msg = err.Error()
-					if topic.ErrorMessage != nil {
-						msg += ": " + *topic.ErrorMessage
-					}
-				}
-				if resp.Version >= 7 {
-					table.Row(topic.Topic, fmt.Sprintf("%x", topic.TopicID), msg)
-				} else {
-					table.Row(topic.Topic, msg)
-				}
+				errStr, msg := errorCells(topic.ErrorCode, topic.ErrorMessage)
+				table.Row(topic.Topic, topicIDCell(topic.TopicID), errStr, msg)
 			}
-			if err := table.Flush(); err != nil {
-				return err
-			}
-			if anyErr {
-				return out.ErrSilent
-			}
-			return nil
+			return table.Flush()
 		},
 	}
+	out.Columns(cmd, "TOPIC", "TOPIC-ID", "ERROR", "MESSAGE")
 
 	cmd.Flags().BoolVarP(&validateOnly, "dry-run", "d", false, "validate the topic creation request; do not create topics (Kafka 0.10.2+)")
 	cmd.Flags().Int32VarP(&numPartitions, "num-partitions", "p", -1, "number of partitions to create (-1 uses the cluster default: num.partitions)")
 	cmd.Flags().Int16VarP(&replicationFactor, "replication-factor", "r", -1, "replicas per partition (-1 uses the cluster default: default.replication.factor)")
-	cmd.Flags().StringArrayVarP(&configKVs, "kv", "k", nil, "list of key=value config parameters (repeatable, e.g. -k cleanup.policy=compact -k preallocate=true)")
+	cmd.Flags().StringArrayVarP(&configKVs, "config", "c", nil, "topic config as key=value (repeatable, e.g. -c cleanup.policy=compact -c preallocate=true)")
+	cmd.Flags().StringArrayVarP(&configKVs, "kv", "k", nil, "old name for --config")
+	cmd.Flags().MarkHidden("kv")
 	cmd.Flags().StringVar(&replicaAssignment, "replica-assignment", "", "manual replica assignment as comma-separated partition groups of colon-separated broker IDs (e.g. 0:1:2,1:2:3,2:3:0)")
 
 	return cmd
+}
+
+// ListHeaders are the columns of a topic list row, which "kcl cluster
+// metadata" prints as its topics section too, and ListKeys their JSON keys.
+var (
+	ListHeaders = []string{"TOPIC", "TOPIC-ID", "PARTITIONS", "REPLICATION", "INTERNAL", "ERROR"}
+	ListKeys    = []string{"topic", "topic_id", "partition_count", "replication_factor", "internal", "error"}
+)
+
+// ListTable is the table of ListRows, with its JSON keys.
+func ListTable(format, command string) *out.FormattedTable {
+	return out.NewFormattedTable(format, command, 1, "topics", ListHeaders...).
+		WithKeys(map[string]string{"PARTITIONS": "partition_count", "REPLICATION": "replication_factor"})
+}
+
+// ListRows is one row per topic in the metadata response, in name order, and
+// whether any topic carried an error. A topic the broker answered with an
+// error keeps its row, with what we do not know unknown and the error in
+// ERROR. The id is unknown below Metadata v10 (Kafka 2.8). Internal topics
+// are skipped unless internal is set.
+func ListRows(version int16, topics []kmsg.MetadataResponseTopic, internal bool) (rows [][]any, failed bool) {
+	SortTopics(topics)
+	for _, t := range topics {
+		if t.IsInternal && !internal {
+			continue
+		}
+		var name any = out.Unknown
+		if t.Topic != nil {
+			name = *t.Topic
+		}
+		var id any = out.Unknown
+		if version >= 10 {
+			id = topicIDCell(t.TopicID)
+		}
+		if err := kerr.ErrorForCode(t.ErrorCode); err != nil {
+			failed = true
+			rows = append(rows, []any{name, id, out.Unknown, out.Unknown, out.Unknown, err.Error()})
+			continue
+		}
+		replication := 0
+		if len(t.Partitions) > 0 {
+			replication = len(t.Partitions[0].Replicas)
+		}
+		rows = append(rows, []any{name, id, len(t.Partitions), replication, t.IsInternal, ""})
+	}
+	return rows, failed
+}
+
+// ListRowMaps is ListRows as JSON objects, for a document that carries the
+// topics under a key of its own.
+func ListRowMaps(rows [][]any) []map[string]any {
+	return rowMaps(ListKeys, rows)
 }
 
 func topicListCommand(cl *client.Client) *cobra.Command {
 	var (
 		detailed     bool
 		showInternal bool
-		regexFilter  string
+		useRegex     bool
 	)
 
 	cmd := &cobra.Command{
-		Use:     "list",
+		Use:     "list [TOPICS...]",
 		Aliases: []string{"ls"},
-		Short:   "List all topics.",
-		Long: `List all topics.
+		Short:   "List topics.",
+		Long: `List topics.
+
+With no argument, every topic is listed, internal topics only with -i. With
+arguments, the named topics are listed, and one that does not exist prints
+its row with the error and the command exits 1. With -r, the arguments are
+regular expressions instead, and every topic matching any of them is listed.
+
+Each row is TOPIC TOPIC-ID PARTITIONS REPLICATION INTERNAL ERROR. The id is
+unknown below Metadata v10 (Kafka 2.8).
 
 EXAMPLES:
   kcl topic list                    # all non-internal topics
   kcl topic list -i                 # include internal topics
-  kcl topic list --regex 'logs\.'   # filter by regex
+  kcl topic list foo bar            # two topics by name
+  kcl topic list -r 'logs\.'        # topics matching a regex
+
+SEE ALSO:
+  kcl topic describe     describe topic partitions
+  kcl cluster metadata   brokers and topics from the Metadata request
 `,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(_ *cobra.Command, args []string) error {
+			cl.SetCommand("topic.list")
+			var patterns []*regexp.Regexp
+			if useRegex {
+				for _, pat := range args {
+					re, err := regexp.Compile(pat)
+					if err != nil {
+						return out.Errf(out.ExitUsage, "invalid regex %q: %v", pat, err)
+					}
+					patterns = append(patterns, re)
+				}
+			}
+
 			req := kmsg.NewPtrMetadataRequest()
+			if !useRegex {
+				for _, t := range args {
+					rt := kmsg.NewMetadataRequestTopic()
+					rt.Topic = kmsg.StringPtr(t)
+					req.Topics = append(req.Topics, rt)
+				}
+			}
 			resp, err := req.RequestWith(context.Background(), cl.Client())
 			if err != nil {
 				return fmt.Errorf("unable to list topics: %v", err)
 			}
 
+			// A topic you named is listed even if it is internal; the
+			// -i filter is for the unqualified listing.
+			internal := showInternal || len(args) > 0 && !useRegex
 			var topics []kmsg.MetadataResponseTopic
 			for _, t := range resp.Topics {
-				if !showInternal && t.IsInternal {
-					continue
-				}
-				if regexFilter != "" {
-					re, err := regexp.Compile(regexFilter)
-					if err != nil {
-						return out.Errf(out.ExitUsage, "invalid --regex: %v", err)
-					}
+				if len(patterns) > 0 {
 					name := ""
 					if t.Topic != nil {
 						name = *t.Topic
 					}
-					if !re.MatchString(name) {
+					if !matchesAny(patterns, name) {
 						continue
 					}
 				}
 				topics = append(topics, t)
 			}
-			metadata.PrintTopics(cl.Format(), cl.Command(), resp.Version, topics, false, detailed)
+
+			if detailed {
+				return Describe(cl, DescribeOpts{}, topicNames(topics))
+			}
+			table := ListTable(cl.Format(), cl.Command())
+			rows, failed := ListRows(resp.Version, topics, internal)
+			for _, row := range rows {
+				table.Row(row...)
+			}
+			if err := table.Flush(); err != nil {
+				return err
+			}
+			if failed {
+				return out.ErrSilent
+			}
 			return nil
 		},
 	}
-	cmd.Flags().BoolVarP(&detailed, "detailed", "d", false, "include detailed information about all topic partitions")
+	out.ColumnsFunc(cmd, func() []string {
+		if detailed {
+			return describeHeaders("partitions")
+		}
+		return ListHeaders
+	})
+	cmd.Flags().BoolVar(&detailed, "detailed", false, "describe the listed topics, as kcl topic describe does")
+	cmd.Flags().MarkHidden("detailed")
 	cmd.Flags().BoolVarP(&showInternal, "internal", "i", false, "include internal topics")
-	cmd.Flags().StringVarP(&regexFilter, "regex", "r", "", "filter topics by regex pattern")
+	cmd.Flags().BoolVarP(&useRegex, "regex", "r", false, "treat the arguments as regular expressions to match topic names against")
 	return cmd
+}
+
+func matchesAny(patterns []*regexp.Regexp, s string) bool {
+	for _, re := range patterns {
+		if re.MatchString(s) {
+			return true
+		}
+	}
+	return false
+}
+
+// topicNames are the names in a metadata response, a topic we know by id
+// alone skipped.
+func topicNames(topics []kmsg.MetadataResponseTopic) []string {
+	names := make([]string, 0, len(topics))
+	for _, t := range topics {
+		if t.Topic != nil {
+			names = append(names, *t.Topic)
+		}
+	}
+	return names
 }
 
 func topicDeleteCommand(cl *client.Client) *cobra.Command {
@@ -253,6 +369,9 @@ pattern will be deleted. A pattern is matched against every topic in the
 cluster, so an unanchored one deletes more than it looks like it will; run
 the same command with --dry-run first to see what it matches.
 
+Each result row is TOPIC ERROR MESSAGE. A dry run prints the rows a real run
+would, marked as a dry run, and deletes nothing.
+
 EXAMPLES:
   kcl topic delete foo bar               # delete two topics by name
   kcl topic delete --regex '^tmp-'       # delete every topic starting with tmp-
@@ -263,18 +382,23 @@ SEE ALSO:
   kcl topic describe     describe topic partitions
   kcl topic trim-prefix  delete records without deleting the topic
 `,
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, topics []string) error {
-			if !useRegex {
+			cl.SetCommand("topic.delete")
+			if useRegex && ids {
+				return out.Errf(out.ExitUsage, "--regex and --ids cannot be used together")
+			}
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "topics",
+				"TOPIC", "ERROR", "MESSAGE").ResultColumns()
+			table.SetDryRun(dryRun)
+
+			if !useRegex && !ids {
 				var err error
 				if topics, err = flagutil.ResolveTopics(context.Background(), cl.Client(), topics); err != nil {
 					return err
 				}
 			}
 			if useRegex {
-				if ids {
-					return out.Errf(out.ExitUsage, "--regex and --ids cannot be used together")
-				}
-				// Compile all patterns first.
 				var patterns []*regexp.Regexp
 				for _, pat := range topics {
 					re, err := regexp.Compile(pat)
@@ -284,38 +408,30 @@ SEE ALSO:
 					patterns = append(patterns, re)
 				}
 
-				// Fetch all topic names via metadata.
 				metaReq := kmsg.NewPtrMetadataRequest()
 				metaResp, err := metaReq.RequestWith(context.Background(), cl.Client())
 				if err != nil {
 					return fmt.Errorf("unable to list topics: %v", err)
 				}
+				SortTopics(metaResp.Topics)
 
 				topics = nil
 				for _, t := range metaResp.Topics {
-					name := ""
-					if t.Topic != nil {
-						name = *t.Topic
-					}
-					for _, re := range patterns {
-						if re.MatchString(name) {
-							topics = append(topics, name)
-							break
-						}
+					if t.Topic != nil && matchesAny(patterns, *t.Topic) {
+						topics = append(topics, *t.Topic)
 					}
 				}
 				if len(topics) == 0 {
 					fmt.Fprintln(os.Stderr, "No topics matched the provided regex patterns.")
-					return nil
+					return table.Flush()
 				}
 			}
 
 			if dryRun {
-				fmt.Fprintln(os.Stderr, "Dry run: the following topics would be deleted:")
 				for _, topic := range topics {
-					fmt.Fprintf(os.Stderr, "  %s\n", topic)
+					table.Row(topic, "", "")
 				}
-				return nil
+				return table.Flush()
 			}
 
 			req := &kmsg.DeleteTopicsRequest{
@@ -325,14 +441,11 @@ SEE ALSO:
 			for _, topic := range topics {
 				t := kmsg.NewDeleteTopicsRequestTopic()
 				if ids {
-					if len(topic) != 32 {
-						return out.Errf(out.ExitUsage, "topic id %s is not a 32 byte hex string", topic)
-					}
-					raw, err := hex.DecodeString(topic)
+					id, err := flagutil.ParseTopicID(topic)
 					if err != nil {
-						return out.Errf(out.ExitUsage, "topic id %s is not a hex string", topic)
+						return out.Errf(out.ExitUsage, "invalid topic id %q: %v", topic, err)
 					}
-					copy(t.TopicID[:], raw)
+					t.TopicID = id
 				} else {
 					t.Topic = kmsg.StringPtr(topic)
 				}
@@ -344,36 +457,18 @@ SEE ALSO:
 				return fmt.Errorf("unable to delete topics: %v", err)
 			}
 
-			resps := resp.(*kmsg.DeleteTopicsResponse).Topics
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "topics",
-				"NAME", "MESSAGE")
-			anyErr := false
-			for _, topicResp := range resps {
-				msg := "OK"
-				if err := kerr.ErrorForCode(topicResp.ErrorCode); err != nil {
-					anyErr = true
-					msg = err.Error()
-					if topicResp.ErrorMessage != nil {
-						msg += ": " + *topicResp.ErrorMessage
-					}
-				}
-				topic := ""
+			for _, topicResp := range resp.(*kmsg.DeleteTopicsResponse).Topics {
+				errStr, msg := errorCells(topicResp.ErrorCode, topicResp.ErrorMessage)
+				var topic any = topicIDCell(topicResp.TopicID)
 				if topicResp.Topic != nil {
 					topic = *topicResp.Topic
-				} else {
-					topic = fmt.Sprintf("%x", topicResp.TopicID)
 				}
-				table.Row(topic, msg)
+				table.Row(topic, errStr, msg)
 			}
-			if err := table.Flush(); err != nil {
-				return err
-			}
-			if anyErr {
-				return out.ErrSilent
-			}
-			return nil
+			return table.Flush()
 		},
 	}
+	out.Columns(cmd, "TOPIC", "ERROR", "MESSAGE")
 	cmd.Flags().BoolVar(&ids, "ids", false, "whether the input topics should be parsed as topic IDs")
 	cmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "print topics that would be deleted without actually deleting them")
 	cmd.Flags().BoolVarP(&useRegex, "regex", "r", false, "treat topic arguments as regex patterns; match against all existing topics")
@@ -400,14 +495,22 @@ added. -a places the new partitions yourself, one -a per partition listing
 the brokers its replicas go on, comma separated, leader first; -a '1,2:3,1'
 in one value is the same as -a 1,2 -a 3,1. Each new partition must have as
 many replicas as the existing ones.
-`,
 
-		Example: `kcl topic add-partitions foo -n 3                  # three more, broker places replicas
-kcl topic add-partitions foo --total 12            # up to twelve; nothing to do if already there
-kcl topic add-partitions foo -a 1,2 -a 3,1 -a 2,3  # three more, on brokers 1+2, 3+1, 2+3`,
+Each result row is TOPIC ERROR MESSAGE.
+
+EXAMPLES:
+  kcl topic add-partitions foo -n 3                  # three more, broker places replicas
+  kcl topic add-partitions foo --total 12            # up to twelve; nothing to do if already there
+  kcl topic add-partitions foo -a 1,2 -a 3,1 -a 2,3  # three more, on brokers 1+2, 3+1, 2+3
+
+SEE ALSO:
+  kcl topic describe     partition leaders and replicas
+  kcl topic create       create topics
+`,
 
 		Args: cobra.ArbitraryArgs,
 		RunE: func(_ *cobra.Command, args []string) error {
+			cl.SetCommand("topic.add-partitions")
 			// With -t this is the old form: the positionals are the
 			// assignments, "1,2 : 3,1". Without it the one positional is
 			// the topic and -n or -a says what to add.
@@ -415,7 +518,7 @@ kcl topic add-partitions foo -a 1,2 -a 3,1 -a 2,3  # three more, on brokers 1+2,
 			var err error
 			if len(topics) > 0 {
 				if assignments, err = parseAssignments(strings.Join(args, "")); err != nil {
-					return fmt.Errorf("parse assignments failure: %v", err)
+					return out.Errf(out.ExitUsage, "parse assignments failure: %v", err)
 				}
 				if len(assignments) == 0 {
 					return out.Errf(out.ExitUsage, "no new partitions requested")
@@ -463,12 +566,18 @@ kcl topic add-partitions foo -a 1,2 -a 3,1 -a 2,3  # three more, on brokers 1+2,
 			}
 			metaResp := kmetaResp.(*kmsg.MetadataResponse)
 
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "topics",
+				"TOPIC", "ERROR", "MESSAGE").ResultColumns()
 			createReq := kmsg.CreatePartitionsRequest{
 				TimeoutMillis: cl.TimeoutMillis(),
 			}
 			for _, topic := range metaResp.Topics {
 				if topic.Topic == nil {
 					return fmt.Errorf("metadata returned nil topic, unknown topic ID!")
+				}
+				if err := kerr.ErrorForCode(topic.ErrorCode); err != nil {
+					table.Row(*topic.Topic, err.Error(), "")
+					continue
 				}
 				currentPartitionCount := len(topic.Partitions)
 				adding := num
@@ -480,7 +589,7 @@ kcl topic add-partitions foo -a 1,2 -a 3,1 -a 2,3  # three more, on brokers 1+2,
 					case currentPartitionCount > total:
 						return out.Errf(out.ExitError, "topic %s has %d partitions, more than --total %d", *topic.Topic, currentPartitionCount, total)
 					case currentPartitionCount == total:
-						fmt.Fprintf(os.Stderr, "topic %s already has %d partitions\n", *topic.Topic, total)
+						table.Row(*topic.Topic, "", fmt.Sprintf("already has %d partitions", total))
 						continue
 					}
 					if want := total - currentPartitionCount; len(assignments) > 0 && len(assignments) != want {
@@ -503,31 +612,20 @@ kcl topic add-partitions foo -a 1,2 -a 3,1 -a 2,3  # three more, on brokers 1+2,
 				})
 			}
 
-			if len(createReq.Topics) == 0 {
-				return nil
-			}
-			createResp, err := cl.Client().Request(context.Background(), &createReq)
-			if err != nil {
-				return fmt.Errorf("unable to create topic partitions: %v", err)
-			}
-
-			resps := createResp.(*kmsg.CreatePartitionsResponse).Topics
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "topics",
-				"NAME", "STATUS", "MESSAGE")
-			for _, topic := range resps {
-				errKind := "OK"
-				errMsg := ""
-				if err := kerr.ErrorForCode(topic.ErrorCode); err != nil {
-					errKind = err.Error()
-					if topic.ErrorMessage != nil {
-						errMsg = *topic.ErrorMessage
-					}
+			if len(createReq.Topics) > 0 {
+				createResp, err := cl.Client().Request(context.Background(), &createReq)
+				if err != nil {
+					return fmt.Errorf("unable to create topic partitions: %v", err)
 				}
-				table.Row(topic.Topic, errKind, errMsg)
+				for _, topic := range createResp.(*kmsg.CreatePartitionsResponse).Topics {
+					errStr, msg := errorCells(topic.ErrorCode, topic.ErrorMessage)
+					table.Row(topic.Topic, errStr, msg)
+				}
 			}
 			return table.Flush()
 		},
 	}
+	out.Columns(cmd, "TOPIC", "ERROR", "MESSAGE")
 
 	cmd.Flags().IntVarP(&num, "num", "n", 0, "number of partitions to add; the broker places their replicas")
 	cmd.Flags().IntVar(&total, "total", 0, "partition count to bring the topic to; past it fails, at it does nothing")
