@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -249,4 +251,110 @@ func (c *consumeChild) interrupt(t *testing.T) int {
 		return exit.ExitCode()
 	}
 	return out.ExitOK
+}
+
+// freezeListener wraps a net.Listener so that, once frozen, every connection
+// to it accepts but delivers no more bytes to the server. The server then
+// never sees a request and never answers, which is a broker that stopped
+// responding -- not the connection-refused a closed cluster gives, which
+// kgo fails fast. kfake serves on this via ListenFn, so it advertises this
+// address and the client cannot route around it.
+type freezeListener struct {
+	net.Listener
+	frozen *atomic.Bool
+}
+
+func (l freezeListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return &freezeConn{Conn: c, frozen: l.frozen, done: make(chan struct{})}, nil
+}
+
+type freezeConn struct {
+	net.Conn
+	frozen   *atomic.Bool
+	done     chan struct{}
+	doneOnce sync.Once
+}
+
+func (c *freezeConn) Read(b []byte) (int, error) {
+	for c.frozen.Load() {
+		select {
+		case <-c.done:
+			return 0, io.EOF
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	return c.Conn.Read(b)
+}
+
+func (c *freezeConn) Close() error {
+	c.doneOnce.Do(func() { close(c.done) })
+	return c.Conn.Close()
+}
+
+// TestConsumeInterruptBrokerGone pins// TestConsumeInterruptBrokerGone pins// TestConsumeInterruptBrokerGone pins that a single interrupt exits promptly
+// even when the broker will not answer the group leave. Close leaves the
+// group, and a leave to a dead broker retries for retry_timeout; without the
+// grace, one SIGTERM would hold the process for that whole time and look
+// wedged, which is why an earlier share-group smoke run reached for SIGKILL.
+func TestConsumeInterruptBrokerGone(t *testing.T) {
+	for _, shared := range []bool{false, true} {
+		name := "group"
+		if shared {
+			name = "share-group"
+		}
+		t.Run(name, func(t *testing.T) {
+			const topic = "interrupt-gone"
+			var frozen atomic.Bool
+			c, err := kfake.NewCluster(kfake.NumBrokers(1), kfake.ListenFn(func(network, address string) (net.Listener, error) {
+				ln, err := net.Listen(network, address)
+				if err != nil {
+					return nil, err
+				}
+				return freezeListener{Listener: ln, frozen: &frozen}, nil
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(c.Close)
+
+			kcl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(kcl.Close)
+			if _, err := kadm.NewClient(kcl).CreateTopic(t.Context(), 1, 1, nil, topic); err != nil {
+				t.Fatal(err)
+			}
+			if res := kcl.ProduceSync(t.Context(), &kgo.Record{Topic: topic, Value: []byte("r")}); res.FirstErr() != nil {
+				t.Fatal(res.FirstErr())
+			}
+
+			args := []string{"consume", topic, "-o", "start", "--no-config-file", "-B", c.ListenAddrs()[0], "-X", "retry_timeout=45s"}
+			if shared {
+				c.SetGroupConfigs("sg", map[string]string{"share.auto.offset.reset": "earliest"})
+				args = append(args, "--share-group", "sg")
+			} else {
+				args = append(args, "-g", "g")
+			}
+			child := startConsume(t, args...)
+			child.waitFor(t, &child.stdout, "r")
+
+			// From here the broker answers nothing; a leave would retry
+			// for retry_timeout (45s), and the grace is 3s.
+			frozen.Store(true)
+
+			start := time.Now()
+			code := child.interrupt(t)
+			if took := time.Since(start); took > 20*time.Second {
+				t.Errorf("interrupt took %v, want it bounded by the shutdown grace, not retry_timeout", took)
+			}
+			if code != out.ExitOK {
+				t.Errorf("exit %d, want %d; stderr:\n%s", code, out.ExitOK, strings.Join(child.stderr.all(), "\n"))
+			}
+		})
+	}
 }
