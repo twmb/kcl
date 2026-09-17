@@ -2,6 +2,7 @@
 package out
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -102,6 +103,51 @@ func ErrorDoc(err error, command string) map[string]any {
 // metadata.topics when it worked and topic.list when it failed.
 func CommandName(path string) string {
 	return strings.ReplaceAll(strings.TrimSpace(strings.TrimPrefix(path, "kcl")), " ", ".")
+}
+
+// Answer is what Confirm heard.
+type Answer int
+
+const (
+	// Yes: you typed y or yes.
+	Yes Answer = iota
+	// No: you typed anything else.
+	No
+	// NotATerminal: stdin is not a terminal, or ended before an answer, so
+	// nothing was read. A script that forgot -y gets this, and so does
+	// "< /dev/null", which makes that the scriptable dry run.
+	NotATerminal
+)
+
+// Confirm asks prompt on stderr, with " [y/N] " appended, and reads one line
+// from stdin. It reads only when stdin is a terminal, and it prints no
+// document: on No and NotATerminal the caller prints the plan it would have
+// carried out and exits 0.
+func Confirm(prompt string) Answer {
+	return confirm(os.Stdin, os.Stderr, prompt, isTerminal(os.Stdin))
+}
+
+func confirm(r io.Reader, w io.Writer, prompt string, terminal bool) Answer {
+	fmt.Fprint(w, prompt+" [y/N] ")
+	if !terminal {
+		fmt.Fprintln(w, "no (stdin is not a terminal)")
+		return NotATerminal
+	}
+	line, err := bufio.NewReader(r).ReadString('\n')
+	if err != nil && line == "" {
+		fmt.Fprintln(w, "no (end of input)")
+		return NotATerminal
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return Yes
+	}
+	return No
+}
+
+func isTerminal(f *os.File) bool {
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
 // MaybeDie, if err is non-nil, prints the message and exits with 1.
