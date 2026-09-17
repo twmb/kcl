@@ -1,12 +1,15 @@
 package topic
 
 import (
+	"context"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -197,5 +200,81 @@ func TestDescribeConfigsError(t *testing.T) {
 	topics := rowsOf(t, jsonDoc(t, got, "topic.describe"), "topics")
 	if len(topics) != 1 || topics[0]["error"] != "" {
 		t.Errorf("topics = %v, want the topic itself unmarked", topics)
+	}
+}
+
+// TestDescribePartitionOrder pins that partition rows are in partition order
+// whatever order Metadata answers them in; kfake answers from a map, so a
+// dozen partitions arrive shuffled.
+func TestDescribePartitionOrder(t *testing.T) {
+	_, addr := newCluster(t, 12, 0, "order")
+
+	got, code := runKcl(t, addr, "describe", "order", "--format", "awk")
+	if code != 0 {
+		t.Fatalf("exit %d\n%s", code, got)
+	}
+	rows := awkRows(t, got, len(describePartitionsHeaders))
+	if len(rows) != 12 {
+		t.Fatalf("got %d rows, want 12:\n%s", len(rows), got)
+	}
+	for i, row := range rows {
+		if row[1] != strconv.Itoa(i) {
+			t.Errorf("row %d is partition %s, want %d:\n%s", i, row[1], i, got)
+		}
+	}
+}
+
+// TestDescribeErroredTopicsListNothing pins that a describe whose every
+// topic errored issues no ListOffsets, keeps a row per topic, and exits 1.
+func TestDescribeErroredTopicsListNothing(t *testing.T) {
+	c, addr := newCluster(t, 1, 0, "exists")
+	h := c.Fault(kfake.Fault{Keys: []kmsg.Key{kmsg.ListOffsets}, Observe: true, Count: -1})
+	defer h.Remove()
+
+	for _, format := range []string{"awk", "json", "text"} {
+		got, code := runKcl(t, addr, "describe", "nosuch", "other", "--format", format)
+		if code != 1 {
+			t.Errorf("%s: exit %d, want 1\n%s", format, code, got)
+		}
+		switch format {
+		case "awk":
+			if rows := awkRows(t, got, len(describePartitionsHeaders)); len(rows) != 2 {
+				t.Errorf("got %d rows, want one per topic:\n%s", len(rows), got)
+			}
+		case "json":
+			if topics := rowsOf(t, jsonDoc(t, got, "topic.describe"), "topics"); len(topics) != 2 || topics[0]["error"] != "UNKNOWN_TOPIC_OR_PARTITION" {
+				t.Errorf("topics = %v", topics)
+			}
+		}
+	}
+	if n := h.Hits(); n != 0 {
+		t.Errorf("ListOffsets was issued %d times for topics that do not exist", n)
+	}
+}
+
+// TestListOffsetsAllEmpty pins that listOffsetsAll answers one listing per
+// request asked for, an empty map each, when there is no partition to ask
+// about, so that a caller indexing its answers cannot run off the end.
+func TestListOffsetsAllEmpty(t *testing.T) {
+	c, addr := newCluster(t, 1, 0, "t")
+	cl, err := kgo.NewClient(kgo.SeedBrokers(addr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	h := c.Fault(kfake.Fault{Keys: []kmsg.Key{kmsg.ListOffsets}, Observe: true, Count: -1})
+	defer h.Remove()
+
+	listed := listOffsetsAll(context.Background(), cl, map[string][]int32{}, listOffsetsAt{readUncommitted, tsStart}, listOffsetsAt{readUncommitted, tsEnd}, listOffsetsAt{readCommitted, tsEnd})
+	if len(listed) != 3 {
+		t.Fatalf("got %d listings, want 3", len(listed))
+	}
+	for i, l := range listed {
+		if l == nil || len(l) != 0 {
+			t.Errorf("listing %d = %v, want an empty map", i, l)
+		}
+	}
+	if n := h.Hits(); n != 0 {
+		t.Errorf("ListOffsets was issued %d times with nothing to ask", n)
 	}
 }

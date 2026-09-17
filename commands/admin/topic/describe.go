@@ -261,15 +261,19 @@ func Describe(cl *client.Client, opts DescribeOpts, topics []string) error {
 	}
 
 	// One start and one end listing for every partition kept, and the
-	// stable offsets only when asked, since that is a third request.
+	// stable offsets only when asked, since that is a third request. No
+	// partition kept, every topic errored say, is no request; the nil
+	// listings answer nothing, and nothing asks them.
 	var starts, ends, stables listedOffsets
+	tps := make(map[string][]int32)
 	if showPartitions {
-		tps := make(map[string][]int32)
 		for _, d := range described {
 			for _, p := range d.partitions {
 				tps[d.nameStr()] = append(tps[d.nameStr()], p.Partition)
 			}
 		}
+	}
+	if len(tps) > 0 {
 		listings := []listOffsetsAt{{readUncommitted, tsStart}, {readUncommitted, tsEnd}}
 		if opts.Stable {
 			listings = append(listings, listOffsetsAt{readCommitted, tsEnd})
@@ -316,6 +320,10 @@ func Describe(cl *client.Client, opts DescribeOpts, topics []string) error {
 			start, end, stable, errStr,
 		}
 	}
+	// failed is the exit: a topic or partition error in any branch, and a
+	// DescribeConfigs failure that has no row to carry it, so it is one
+	// flag rather than the awk table's Flush, which would cover only the
+	// rows of one format.
 	failed := configsFailed
 	for _, d := range described {
 		if d.err != nil {
@@ -439,9 +447,7 @@ func Describe(cl *client.Client, opts DescribeOpts, topics []string) error {
 				}
 			}
 		}
-		if err := table.Flush(); err != nil {
-			return err
-		}
+		table.Flush()
 
 	default:
 		for ti, d := range described {
