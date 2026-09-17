@@ -565,7 +565,7 @@ func TestACLListSorted(t *testing.T) {
 }
 
 // TestACLAwkHeader pins that the registered awk header has as many fields as
-// a row. --awk-header itself exits the process, so the test reads what it
+// a row. --format awk-header itself exits the process, so the test reads what it
 // would print.
 func TestACLAwkHeader(t *testing.T) {
 	addrs := newCluster(t)

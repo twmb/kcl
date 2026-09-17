@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// TestColumns pins the registry: --awk-header prints what a command
+// TestColumns pins the registry: --format awk-header prints what a command
 // registered, for the flag state its function reads, and nothing for a command
 // that registered no table. A table built under awk while a registered command
 // runs must match, and under go test a mismatch panics.

@@ -477,14 +477,14 @@ func (w *walkthrough) runArgs(t *testing.T, stdin string, full []string) runResu
 	return r
 }
 
-// awkHeader is the row --awk-header prints for the command args name, as its
-// fields, or nil for a command that registered no table. It runs in a child
-// like everything else, so it is what a script would see.
+// awkHeader is the row --format awk-header prints for the command args
+// name, as its fields, or nil for a command that registered no table. It
+// runs in a child like everything else, so it is what a script would see.
 func (w *walkthrough) awkHeader(t *testing.T, path string, args []string) []string {
 	t.Helper()
-	r := w.runArgs(t, "", slices.Concat(args, []string{"--awk-header"}))
+	r := w.runArgs(t, "", slices.Concat(args, []string{"--format", "awk-header"}))
 	if r.code != out.ExitOK || r.stderr != "" {
-		w.errf(t, path, "awk", r, "--awk-header: exit %d, want 0 and nothing on stderr", r.code)
+		w.errf(t, path, "awk", r, "--format awk-header: exit %d, want 0 and nothing on stderr", r.code)
 		return nil
 	}
 	if r.stdout == "" {
@@ -537,7 +537,7 @@ func (w *walkthrough) checkJSON(t *testing.T, path string, r runResult, dryRun b
 }
 
 // checkAWK pins the scripting contract: every row carries the same fields,
-// as many as the header --awk-header prints for the command, and the header
+// as many as the header --format awk-header prints for the command, and the header
 // the text format prints is not one of them. A command that prints rows must
 // have registered its columns, so that a script can learn them.
 func (w *walkthrough) checkAWK(t *testing.T, path, text string, r runResult, header []string) {
@@ -554,9 +554,9 @@ func (w *walkthrough) checkAWK(t *testing.T, path, text string, r runResult, hea
 		return
 	}
 	if header == nil {
-		w.errf(t, path, "awk", r, "prints rows but --awk-header prints nothing; register the columns with out.Columns")
+		w.errf(t, path, "awk", r, "prints rows but --format awk-header prints nothing; register the columns with out.Columns")
 	} else if len(header) != want {
-		w.errf(t, path, "awk", r, "--awk-header has %d fields, row 0 has %d: %q vs %q", len(header), want, header, rows[0])
+		w.errf(t, path, "awk", r, "--format awk-header has %d fields, row 0 has %d: %q vs %q", len(header), want, header, rows[0])
 	}
 	headers := headerLines(text)
 	for i, row := range rows {

@@ -11,9 +11,9 @@ import (
 )
 
 // Columns registers the awk row cmd prints, which is the contract a script
-// reads: --awk-header prints these headers as one tab separated line and exits
-// 0 before the command runs or anything is dialed, and a table built under
-// --format awk while cmd runs must have exactly these headers.
+// reads: --format awk-header prints these headers as one tab separated line
+// and exits 0 before the command runs or anything is dialed, and a table
+// built under --format awk while cmd runs must have exactly these headers.
 //
 // Register at construction, one call per command, next to its flags:
 //
@@ -37,9 +37,10 @@ import (
 // not change the registration: its column is always present, and holds
 // Unknown when the flag is off. A command that prints key and value rows
 // registers KEY and VALUE. A command with no table (consume, produce) registers
-// nothing, and --awk-header prints nothing for it. A constructor that is
-// called twice, once for the command and once for its hidden alias, registers
-// each cobra command it builds, since the map is keyed by the command.
+// nothing, and --format awk-header prints nothing for it. A constructor that
+// is called twice, once for the command and once for its hidden alias,
+// registers each cobra command it builds, since the map is keyed by the
+// command.
 //
 // The check runs in NewFormattedTable for the awk format only: text may print
 // several tables, and JSON prints them under keys of their own. A mismatch
@@ -62,13 +63,14 @@ var (
 
 // SetRunning records the command that is running, so that a table built while
 // it runs is checked against its Columns. The root's persistent pre-run calls
-// this once, after answering --awk-header.
+// this once, after answering --format awk-header.
 func SetRunning(cmd *cobra.Command) {
 	running = cmd
 }
 
-// AwkHeader is what --awk-header prints for cmd: its registered headers, tab
-// separated and newline terminated, or "" when cmd registered none.
+// AwkHeader is what --format awk-header prints for cmd: its registered
+// headers, tab separated and newline terminated, or "" when cmd registered
+// none.
 func AwkHeader(cmd *cobra.Command) string {
 	fn, ok := columns[cmd]
 	if !ok {

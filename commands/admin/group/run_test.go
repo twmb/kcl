@@ -57,7 +57,7 @@ func runGroup(t *testing.T, c *kfake.Cluster, stdin string, args ...string) (str
 	return string(b), runErr
 }
 
-// awkHeader is the header row --awk-header prints for the command the
+// awkHeader is the header row --format awk-header prints for the command the
 // arguments name, with its flags parsed so that --section and --by select
 // the table they would at run time.
 func awkHeader(t *testing.T, args ...string) []string {
@@ -80,7 +80,7 @@ func checkAwkFields(t *testing.T, stdout string, args ...string) {
 	header := awkHeader(t, args...)
 	for i, row := range awkRows(stdout) {
 		if len(row) != len(header) {
-			t.Errorf("awk row %d has %d fields, --awk-header has %d: %q vs %q", i, len(row), len(header), row, header)
+			t.Errorf("awk row %d has %d fields, --format awk-header has %d: %q vs %q", i, len(row), len(header), row, header)
 		}
 	}
 }

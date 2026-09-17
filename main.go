@@ -360,9 +360,9 @@ func ownsFormat(cmd *cobra.Command) bool {
 // with the help text and exit 0. A bare group also runs checkFlags, so that
 // "kcl -X hlep" reports the bad key rather than printing the help.
 //
-// The validator is skipped under --awk-header: the header row does not
-// depend on the arguments, and cobra validates them before the persistent
-// pre-run that answers the flag.
+// The validator is skipped under --format awk-header: the header row does
+// not depend on the arguments, and cobra validates them before the
+// persistent pre-run that answers the format.
 func usageErrors(root *cobra.Command, checkFlags func() error) {
 	allCommands(root, func(cmd *cobra.Command) {
 		if cmd.HasSubCommands() && !cmd.Runnable() {
@@ -383,7 +383,7 @@ func usageErrors(root *cobra.Command, checkFlags func() error) {
 			return
 		}
 		cmd.Args = func(c *cobra.Command, args []string) error {
-			if awk, _ := c.Flags().GetBool("awk-header"); awk {
+			if format, _ := c.Flags().GetString("format"); format == out.FormatAwkHeader {
 				return nil
 			}
 			if err := validate(c, args); err != nil {
@@ -639,9 +639,11 @@ func formatFromArgs(args []string) string {
 }
 
 // knownFormat returns v if it is a format out can print, otherwise "".
+// awk-header counts: an error under it is reported as text, not as a JSON
+// document.
 func knownFormat(v string) string {
 	switch v {
-	case out.FormatText, out.FormatJSON, out.FormatAWK:
+	case out.FormatText, out.FormatJSON, out.FormatAWK, out.FormatAwkHeader:
 		return v
 	}
 	return ""

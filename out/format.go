@@ -14,6 +14,10 @@ const (
 	FormatText = "text"
 	FormatJSON = "json"
 	FormatAWK  = "awk"
+
+	// FormatAwkHeader is the --format that prints the command's awk header
+	// row and exits, before the command runs; see Columns.
+	FormatAwkHeader = "awk-header"
 )
 
 // Unknown is the table cell for a value we do not have: an offset the cluster

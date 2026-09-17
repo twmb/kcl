@@ -497,7 +497,7 @@ func TestHelpJSONExamples(t *testing.T) {
 
 // runChild runs this test binary as kcl with args, the way the walkthrough
 // does, and returns what a user sees. A command that exits on its own, as
-// --awk-header does, needs a process of its own.
+// --format awk-header does, needs a process of its own.
 func runChild(t *testing.T, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
 	exe, err := os.Executable()
@@ -531,21 +531,24 @@ func runChild(t *testing.T, args ...string) (stdout, stderr string, code int) {
 	return outb.String(), errb.String(), code
 }
 
-// TestAwkHeader pins that --awk-header prints the registered header row and
-// exits 0 before anything is dialed: localhost:1 refuses connections, so a
-// command that reached the cluster would exit 1. A command with no registered
-// table prints nothing, and cobra's argument count does not get in the way.
+// TestAwkHeader pins that --format awk-header prints the registered header
+// row and exits 0 before anything is dialed: localhost:1 refuses connections,
+// so a command that reached the cluster would exit 1. A command with no
+// registered table prints nothing, consume's own --format answers it too, and
+// cobra's argument count does not get in the way.
 func TestAwkHeader(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		args []string
 		want string
 	}{
-		{"registered", []string{"profile", "list", "--awk-header"}, "NAME\tCURRENT\n"},
-		{"registered, flag first", []string{"--awk-header", "profile", "list"}, "NAME\tCURRENT\n"},
-		{"unregistered leaf", []string{"consume", "--awk-header"}, ""},
-		{"missing arguments", []string{"topic", "create", "--awk-header"}, "TOPIC\tTOPIC-ID\tERROR\tMESSAGE\n"},
-		{"group", []string{"topic", "--awk-header"}, ""},
+		{"registered", []string{"profile", "list", "--format", "awk-header"}, "NAME\tCURRENT\n"},
+		{"registered, flag first", []string{"--format=awk-header", "profile", "list"}, "NAME\tCURRENT\n"},
+		{"unregistered leaf", []string{"consume", "foo", "--format", "awk-header"}, ""},
+		{"unregistered leaf, no arguments", []string{"consume", "-f", "awk-header"}, ""},
+		{"missing arguments", []string{"topic", "create", "--format", "awk-header"}, "TOPIC\tTOPIC-ID\tERROR\tMESSAGE\n"},
+		{"section selects the table", []string{"group", "describe", "--section", "summary", "--format", "awk-header"}, "GROUP\tCOORDINATOR\tSTATE\tBALANCER\tMEMBERS\tTOTAL-LAG\tERROR\tMESSAGE\n"},
+		{"group", []string{"topic", "--format", "awk-header"}, ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()

@@ -236,7 +236,6 @@ type Client struct {
 	asVersion string
 	asJSON    bool
 	format    string
-	awkHeader bool
 	command   string // the running command, for _command on a config error
 
 	// config options parsed and filled on load
@@ -289,13 +288,15 @@ func (c *Client) dieErr(err error) {
 	out.HandleError(err, c.dieFormat(), c.command)
 }
 
-// Format returns the output format: "text", "json", or "awk".
-// If --dump-json is set and --format is not explicitly set, returns "json".
+// Format returns the output format: "text", "json", or "awk". If --dump-json
+// is set and --format is not explicitly set, returns "json". The fourth
+// value, awk-header, is answered in the persistent pre-run and never reaches
+// a running command.
 func (c *Client) Format() string {
 	switch c.format {
-	case "text", "json", "awk":
+	case out.FormatText, out.FormatJSON, out.FormatAWK, out.FormatAwkHeader:
 	default:
-		out.HandleError(out.Errf(out.ExitUsage, "invalid --format %q: must be text, json, or awk", c.format), out.FormatText, c.command)
+		out.HandleError(out.Errf(out.ExitUsage, "invalid --format %q: must be text, json, awk, or awk-header", c.format), out.FormatText, c.command)
 	}
 	if c.format != "text" {
 		return c.format
@@ -378,13 +379,10 @@ func New(root *cobra.Command) *Client {
 	root.PersistentFlags().StringSliceVarP(&c.bootstrapServers, "bootstrap-servers", "B", nil, "comma-separated list of seed brokers (overrides profile/config); shorthand for -X seed_brokers=...")
 	root.PersistentFlags().StringSliceVarP(&c.registryURLs, "registry", "R", nil, "comma-separated list of schema registry URLs (overrides profile/config); shorthand for -X registry.urls=...")
 	root.PersistentFlags().StringVar(&c.asVersion, "as-version", "", "if nonempty, which version of Kafka versions to use (e.g. '0.8.0', '2.3.0')")
-	root.PersistentFlags().StringVar(&c.format, "format", "text", "output format (text, json, awk)")
+	root.PersistentFlags().StringVar(&c.format, "format", "text", "output format (text, json, awk, awk-header)")
 	root.PersistentFlags().StringVarP(&c.profileName, "profile", "C", "", "use a specific config profile (also KCL_PROFILE; -C wins)")
 	root.PersistentFlags().BoolVarP(&c.asJSON, "dump-json", "j", false, "dump response as json if supported")
 	root.PersistentFlags().MarkDeprecated("dump-json", "use --format json instead")
-	root.PersistentFlags().BoolVar(&c.awkHeader, "awk-header", false, "print the command's awk header row and exit")
-	root.PersistentFlags().MarkHidden("awk-header")
-
 	// -X help and -X list are answered here, after cobra has parsed the
 	// flags so that --format applies. The registry group has a persistent
 	// pre-run of its own, and cobra runs only the nearest one unless told
@@ -395,17 +393,20 @@ func New(root *cobra.Command) *Client {
 	// error document with no _command. Every command reads it back with
 	// Command to name itself in what it prints.
 	//
-	// --awk-header is answered here too, before RunE builds a client: the
-	// header row is what the command registered with out.Columns, so
-	// nothing is dialed. A command that registered no table prints nothing.
+	// --format awk-header is answered first, before RunE builds a client:
+	// the header row is what the command registered with out.Columns, so
+	// nothing is dialed and no config is read. A command that registered
+	// no table prints nothing. The value is read off the command's own
+	// flags, so that consume and produce, whose local --format shadows
+	// the root's, answer it too.
 	cobra.EnableTraverseRunHooks = true
 	root.PersistentPreRun = func(cmd *cobra.Command, _ []string) {
 		c.SetCommand(out.CommandName(cmd.CommandPath()))
-		if c.MaybeXHelp() {
+		if format, _ := cmd.Flags().GetString("format"); format == out.FormatAwkHeader {
+			fmt.Print(out.AwkHeader(cmd))
 			os.Exit(0)
 		}
-		if c.awkHeader {
-			fmt.Print(out.AwkHeader(cmd))
+		if c.MaybeXHelp() {
 			os.Exit(0)
 		}
 		out.SetRunning(cmd)

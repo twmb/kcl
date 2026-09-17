@@ -651,7 +651,7 @@ func TestAWKHeaders(t *testing.T) {
 		{[]string{"delete", "h-value", "-v", "1"}, "SUBJECT\tVERSION\tERROR\tMESSAGE"},
 	} {
 		t.Run(strings.Join(test.args, " "), func(t *testing.T) {
-			// The header, as --awk-header prints it once the flags are
+			// The header, as --format awk-header prints it once the flags are
 			// parsed: the old delete's depends on -v.
 			root, _ := newRoot()
 			root.SetArgs(append(append([]string{"registry"}, test.args...), "--no-config-file", "-R", url, "--format", "awk"))
