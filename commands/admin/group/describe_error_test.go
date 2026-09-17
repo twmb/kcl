@@ -2,13 +2,16 @@ package group
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/out"
@@ -241,4 +244,115 @@ func TestDescribeListOffsetsError(t *testing.T) {
 			t.Errorf("rows = %q, want %q", rows, want)
 		}
 	})
+}
+
+// TestDescribeConsumerProtocolAllShardsFail pins that --consumer-protocol
+// fails as the classic path does when no broker answered
+// ConsumerGroupDescribe: an error and exit 1, not an empty groups document
+// and exit 0.
+func TestDescribeConsumerProtocolAllShardsFail(t *testing.T) {
+	c, cl := newTestCluster(t)
+	adm := kadm.NewClient(cl)
+	if _, err := adm.CreateTopic(context.Background(), 1, 1, nil, "t"); err != nil {
+		t.Fatal(err)
+	}
+	joinGroup(t, c, "g848", true, "t")
+
+	// The connection is closed on every ConsumerGroupDescribe, which the
+	// client retries until retry_timeout runs out.
+	c.ControlKey(int16(kmsg.ConsumerGroupDescribe), func(kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+		return nil, errors.New("closed"), true
+	})
+
+	stdout, err := runDescribe(t, c, "g848", "--consumer-protocol", "--format", "json", "-X", "retry_timeout=1s")
+	if err == nil || err == out.ErrSilent || out.ExitCode(err) != out.ExitError {
+		t.Fatalf("err = %v, want an error naming the failed requests", err)
+	}
+	if stdout != "" {
+		t.Errorf("want nothing on stdout, got:\n%s", stdout)
+	}
+}
+
+// TestDescribeRegexConsumerProtocol pins that -r under --consumer-protocol
+// matches consumer groups only: a classic group the pattern matches is not
+// described, since ConsumerGroupDescribe would answer GROUP_ID_NOT_FOUND
+// for it and fail the command.
+func TestDescribeRegexConsumerProtocol(t *testing.T) {
+	c, cl := newTestCluster(t)
+	adm := kadm.NewClient(cl)
+	ctx := context.Background()
+
+	if _, err := adm.CreateTopic(ctx, 1, 1, nil, "t"); err != nil {
+		t.Fatal(err)
+	}
+	commitAt(t, adm, "rx-classic", "t", 0, 0)
+	joinGroup(t, c, "rx-848", true, "t")
+
+	args := []string{"group", "describe", "-r", "rx-.*", "--consumer-protocol", "--section", "summary", "--format", "awk"}
+	stdout, err := runGroup(t, c, "", args...)
+	if err != nil {
+		t.Fatalf("err = %v\n%s", err, stdout)
+	}
+	checkAwkFields(t, stdout, args...)
+	if rows := awkRows(stdout); len(rows) != 1 || rows[0][0] != "rx-848" || rows[0][6] != "-" {
+		t.Errorf("rows = %q, want rx-848 alone with no error", rows)
+	}
+}
+
+// TestDescribeMembersSkipsOffsets pins that --section members issues no
+// OffsetFetch and no ListOffsets in text and awk, where nothing of theirs
+// prints, and still does in JSON, which prints every section.
+func TestDescribeMembersSkipsOffsets(t *testing.T) {
+	c, cl := newTestCluster(t)
+	adm := kadm.NewClient(cl)
+	ctx := context.Background()
+	if _, err := adm.CreateTopic(ctx, 1, 1, nil, "t"); err != nil {
+		t.Fatal(err)
+	}
+	produceN(t, cl, "t", 1)
+
+	// The member fetches the record before the counting starts, so that
+	// its own OffsetFetch and ListOffsets, issued once it is assigned,
+	// are behind it.
+	m, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...), kgo.ConsumerGroup("mem"), kgo.ConsumeTopics("t"), kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()), kgo.DisableAutoCommit())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(m.Close)
+	pollCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	for got := 0; got < 1; {
+		fs := m.PollFetches(pollCtx)
+		if err := fs.Err(); err != nil {
+			t.Fatalf("group mem: %v", err)
+		}
+		got += fs.NumRecords()
+	}
+
+	for _, test := range []struct {
+		name string
+		args []string
+		hits bool
+	}{
+		{"members awk", []string{"--section", "members", "--format", "awk"}, false},
+		{"members text", []string{"--section", "members"}, false},
+		{"members json", []string{"--section", "members", "--format", "json"}, true},
+		{"summary awk", []string{"--section", "summary", "--format", "awk"}, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			h := c.Fault(kfake.Fault{Keys: []kmsg.Key{kmsg.OffsetFetch, kmsg.ListOffsets}, Observe: true, Count: -1})
+			defer h.Remove()
+			stdout, err := runDescribe(t, c, append([]string{"mem"}, test.args...)...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stdout == "" {
+				t.Error("nothing on stdout")
+			}
+			if got := h.Hits() > 0; got != test.hits {
+				t.Errorf("offset requests issued: %v, want %v", got, test.hits)
+			}
+		})
+	}
 }

@@ -132,9 +132,16 @@ SEE ALSO:
 				}
 			}
 
+			// A pattern under --consumer-protocol matches consumer groups
+			// only, as the flag lists them: a classic group it matched would
+			// describe with GROUP_ID_NOT_FOUND.
 			if regex {
+				listFn := listGroups
+				if useConsumerDescribe {
+					listFn = listConsumerGroups
+				}
 				var err error
-				groups, err = filterGroupsByRegex(cl, groups, listGroups)
+				groups, err = filterGroupsByRegex(cl, groups, listFn)
 				if err != nil {
 					return err
 				}
@@ -386,15 +393,19 @@ func describeConsumerGroups(cl *client.Client, groups []string, readCommitted bo
 		group  kmsg.ConsumerGroupDescribeResponseGroup
 	}
 	var allGroups []consumerGroupInfo
+	var failures int
 	for _, shard := range shards {
 		if shard.Err != nil {
-			fmt.Fprintf(os.Stderr, "unable to issue ConsumerGroupDescribe to broker %d (%s:%d): %v\n", shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
+			shardFail("ConsumerGroupDescribe", shard, &failures)
 			continue
 		}
 		resp := shard.Resp.(*kmsg.ConsumerGroupDescribeResponse)
 		for _, group := range resp.Groups {
 			allGroups = append(allGroups, consumerGroupInfo{broker: shard.Meta.NodeID, group: group})
 		}
+	}
+	if failures == len(shards) {
+		return fmt.Errorf("all %d ConsumerGroupDescribe requests failed", failures)
 	}
 
 	var assignments []*kmsg.Assignment
@@ -602,6 +613,11 @@ func listGroups(cl *client.Client) ([]string, error) {
 	return listGroupsByType(cl, []string{"classic", "consumer"})
 }
 
+// listConsumerGroups lists the groups --consumer-protocol can describe.
+func listConsumerGroups(cl *client.Client) ([]string, error) {
+	return listGroupsByType(cl, []string{"consumer"})
+}
+
 func describeClassicGroups(cl *client.Client, groups []string) ([]describedGroup, error) {
 	req := kmsg.NewPtrDescribeGroupsRequest()
 	req.Groups = groups
@@ -640,8 +656,13 @@ type groupOffsets struct {
 }
 
 // fetchLag fetches what the lag rows need: every group's committed offsets,
-// and the log start and end of every partition in tps or committed to.
+// and the log start and end of every partition in tps or committed to. The
+// members section needs none of it, so --section members skips the
+// requests, unless JSON prints every section.
 func fetchLag(cl *client.Client, opts describeOpts, groups []string, tps map[string]map[int32]struct{}, readCommitted bool) (fetched map[string]groupOffsets, starts, ends map[string]map[int32]offset, err error) {
+	if opts.section == "members" && cl.Format() != out.FormatJSON {
+		return nil, nil, nil, nil
+	}
 	if fetched, err = fetchOffsets(cl, groups); err != nil {
 		return nil, nil, nil, err
 	}
