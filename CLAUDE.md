@@ -55,7 +55,18 @@ you have broken something.
 see MIGRATION.md. Pipe to jq when you want it wide.
 
 `text` is for people and may change between releases. `awk` is the stable
-scripting contract: TSV, no headers, stable column order.
+scripting contract: TSV, no headers, stable column order, and `-` for an
+empty or unknown cell. Every table registers its awk columns with
+`out.Columns` or `out.ColumnsFunc` next to its flags, and `--format
+awk-header` prints them and exits before anything is dialed;
+`NewFormattedTable` checks the runtime headers against the registration.
+
+A mutating command's rows end in ERROR and MESSAGE through
+`ResultColumns` (text prints OK on success); a read-only table ends in
+ERROR through `ErrorColumn` (text prints nothing). ERROR is the bare kerr
+name from `out.ErrName`, MESSAGE the broker's text from
+`out.BrokerMessage`, and `Flush` returns `ErrSilent` when any ERROR is
+set, so the command exits 1.
 
 ## Commands
 
