@@ -23,6 +23,17 @@ type recordReader interface {
 	ReadRecord() (*kgo.Record, error)
 }
 
+// formatReader reads with kgo's format string reader into a record whose
+// partition starts at -1, so that a %p in the format sets it and a format
+// without one leaves the record for the partitioner. kgo's own ReadRecord
+// starts at 0, which would send every record to partition 0.
+type formatReader struct{ *kgo.RecordReader }
+
+func (r formatReader) ReadRecord() (*kgo.Record, error) {
+	rec := &kgo.Record{Partition: -1}
+	return rec, r.ReadRecordInto(rec)
+}
+
 func Command(cl *client.Client) *cobra.Command {
 	var (
 		topicFlag            string
@@ -85,7 +96,7 @@ Percent verbs for reading records from stdin:
   %V    value length
   %h    begin the header specification
   %H    number of headers
-  %p    partition
+  %p    partition (honored unless -p is given)
   %o    offset
   %e    leader epoch
   %d    timestamp (read as milliseconds)
@@ -280,7 +291,7 @@ SEE ALSO:
 				if err != nil {
 					return out.Errf(out.ExitUsage, "input format %q: %v", informat, err)
 				}
-				reader = r
+				reader = formatReader{r}
 			}
 
 			outJSON := verboseFormat == jsonFormatName
@@ -322,14 +333,13 @@ SEE ALSO:
 				return out.Errf(out.ExitUsage, "invalid acks %d not in allowed -1, 0, 1", acks)
 			}
 
-			// -p sends every record to one partition. Without it, a JSON
-			// object's partition is honored and the rest are placed by
-			// the default partitioner.
-			switch {
-			case partition > -1:
+			// -p sends every record to one partition. Without it, the
+			// partition a JSON object or a %p named is honored and the
+			// rest are placed by the default partitioner.
+			if partition > -1 {
 				cl.AddOpt(kgo.RecordPartitioner(kgo.ManualPartitioner()))
-			case isJSON:
-				cl.AddOpt(kgo.RecordPartitioner(newJSONPartitioner()))
+			} else {
+				cl.AddOpt(kgo.RecordPartitioner(newRecordPartitioner()))
 			}
 
 			if retries > -1 {
@@ -450,10 +460,8 @@ SEE ALSO:
 					return out.Errf(out.ExitUsage, "no topic: the input record names none and none was given as an argument or with -t/--topic")
 				}
 
-				// -p wins. Without it, a JSON object's partition is kept
-				// for the partitioner; a format string's %p is not, and
-				// never was, the default partitioner placing the record.
-				if partition > -1 || !isJSON {
+				// -p wins over the partition the input named.
+				if partition > -1 {
 					r.Partition = partition
 				}
 

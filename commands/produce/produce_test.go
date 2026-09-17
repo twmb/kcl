@@ -431,3 +431,57 @@ func TestLayoutParses(t *testing.T) {
 		}
 	}
 }
+
+// TestProduceFormatPartition pins that a %p in the input format places the
+// record, that a format without one leaves the partitioner to place it, and
+// that -p wins over both.
+func TestProduceFormatPartition(t *testing.T) {
+	c, _ := newCluster(t, map[string]int32{"a": 3})
+	addrs := c.ListenAddrs()
+
+	got, err := runKCL(t, addrs, "2 x\n1 y\n", "produce", "a", "-f", "%p %v\n", "-o", "json")
+	if err != nil {
+		t.Fatalf("produce: %v\n%s", err, got)
+	}
+	for _, o := range decodeObjects(t, got) {
+		if o["error"] != "" {
+			t.Errorf("object = %v", o)
+		}
+	}
+	for _, r := range readAll(t, addrs, "a", 2) {
+		want := map[string]int32{"x": 2, "y": 1}[string(r.Value)]
+		if r.Partition != want {
+			t.Errorf("record %s is on partition %d, want %d", r.Value, r.Partition, want)
+		}
+	}
+
+	got, err = runKCL(t, addrs, "2 z\n", "produce", "a", "-p", "0", "-f", "%p %v\n", "-o", "json")
+	if err != nil {
+		t.Fatalf("produce: %v\n%s", err, got)
+	}
+	for _, o := range decodeObjects(t, got) {
+		if o["partition"] != float64(0) {
+			t.Errorf("object = %v, want partition 0 from -p", o)
+		}
+	}
+
+	// A format without %p leaves the partition at -1 for the partitioner,
+	// rather than at kgo's zero value, which would name partition 0.
+	for _, test := range []struct {
+		format string
+		in     string
+		want   int32
+	}{
+		{"%v\n", "x\n", -1},
+		{"%p %v\n", "2 x\n", 2},
+	} {
+		rr, err := kgo.NewRecordReader(strings.NewReader(test.in), test.format)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, err := formatReader{rr}.ReadRecord()
+		if err != nil || r.Partition != test.want {
+			t.Errorf("format %q: partition = %d, err = %v; want %d", test.format, r.Partition, err, test.want)
+		}
+	}
+}

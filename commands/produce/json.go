@@ -201,27 +201,27 @@ func marshalProduced(r *kgo.Record, err error) []byte {
 	return append(b, '\n')
 }
 
-// jsonPartitioner sends a record whose JSON object named a partition there,
-// and hands the rest to kgo's default partitioner, so a consume dump replays
-// onto the same partitions while a hand-written object without one is
-// placed the way any other record is.
-type jsonPartitioner struct{ def kgo.Partitioner }
+// recordPartitioner sends a record whose input named a partition, a JSON
+// object's partition or a %p, there, and hands the rest to kgo's default
+// partitioner, so a consume dump replays onto the same partitions while an
+// input without one is placed the way any other record is.
+type recordPartitioner struct{ def kgo.Partitioner }
 
-func newJSONPartitioner() kgo.Partitioner {
-	return jsonPartitioner{def: kgo.UniformBytesPartitioner(64<<10, true, true, nil)}
+func newRecordPartitioner() kgo.Partitioner {
+	return recordPartitioner{def: kgo.UniformBytesPartitioner(64<<10, true, true, nil)}
 }
 
-func (p jsonPartitioner) ForTopic(t string) kgo.TopicPartitioner {
-	return &jsonTopicPartitioner{def: p.def.ForTopic(t)}
+func (p recordPartitioner) ForTopic(t string) kgo.TopicPartitioner {
+	return &recordTopicPartitioner{def: p.def.ForTopic(t)}
 }
 
-type jsonTopicPartitioner struct{ def kgo.TopicPartitioner }
+type recordTopicPartitioner struct{ def kgo.TopicPartitioner }
 
-func (p *jsonTopicPartitioner) RequiresConsistency(r *kgo.Record) bool {
+func (p *recordTopicPartitioner) RequiresConsistency(r *kgo.Record) bool {
 	return r.Partition >= 0 || p.def.RequiresConsistency(r)
 }
 
-func (p *jsonTopicPartitioner) Partition(r *kgo.Record, n int) int {
+func (p *recordTopicPartitioner) Partition(r *kgo.Record, n int) int {
 	if r.Partition >= 0 {
 		return int(r.Partition)
 	}
@@ -231,7 +231,7 @@ func (p *jsonTopicPartitioner) Partition(r *kgo.Record, n int) int {
 // PartitionByBackup and OnNewBatch are the optional interfaces the default
 // partitioner implements; kgo asks for them by type assertion, so we forward
 // them.
-func (p *jsonTopicPartitioner) PartitionByBackup(r *kgo.Record, n int, backup kgo.TopicBackupIter) int {
+func (p *recordTopicPartitioner) PartitionByBackup(r *kgo.Record, n int, backup kgo.TopicBackupIter) int {
 	if r.Partition >= 0 {
 		return int(r.Partition)
 	}
@@ -241,7 +241,7 @@ func (p *jsonTopicPartitioner) PartitionByBackup(r *kgo.Record, n int, backup kg
 	return p.def.Partition(r, n)
 }
 
-func (p *jsonTopicPartitioner) OnNewBatch() {
+func (p *recordTopicPartitioner) OnNewBatch() {
 	if o, ok := p.def.(kgo.TopicPartitionerOnNewBatch); ok {
 		o.OnNewBatch()
 	}
