@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/twmb/kcl/out"
 )
 
 func TestFormatDefault(t *testing.T) {
@@ -437,6 +439,22 @@ func TestFlagCfg(t *testing.T) {
 			flags:   []string{"seed_brokers"},
 			wantErr: true,
 		},
+		{
+			// pflag parses -B '' as an empty, non-nil slice.
+			name:      "empty -B",
+			bootstrap: []string{},
+			wantErr:   true,
+		},
+		{
+			name:      "-B with an empty address",
+			bootstrap: []string{"a:9092", ""},
+			wantErr:   true,
+		},
+		{
+			name:     "empty -R",
+			registry: []string{},
+			wantErr:  true,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			for k, v := range test.env {
@@ -452,6 +470,9 @@ func TestFlagCfg(t *testing.T) {
 			got, err := c.FlagCfg()
 			if (err != nil) != test.wantErr {
 				t.Fatalf("err = %v, wantErr %v", err, test.wantErr)
+			}
+			if err != nil && out.ExitCode(err) != out.ExitUsage {
+				t.Errorf("err = %v, want exit %d", err, out.ExitUsage)
 			}
 			if err != nil {
 				return

@@ -1129,17 +1129,39 @@ func expandRefs(s string) (string, error) {
 }
 
 // applyShorthandFlags applies -B and -R, which win over any other setting
-// of seed_brokers and registry.urls.
-func (c *Client) applyShorthandFlags(cfg *Cfg) {
-	if len(c.bootstrapServers) > 0 {
+// of seed_brokers and registry.urls. A flag given with nothing in it, an
+// empty -B or -B a:9092, with a trailing comma, is a usage error: it used to
+// leave the setting alone, so the command ran against whatever the config
+// named.
+func (c *Client) applyShorthandFlags(cfg *Cfg) error {
+	if c.bootstrapServers != nil {
+		if err := checkAddrs("-B", c.bootstrapServers); err != nil {
+			return err
+		}
 		cfg.SeedBrokers = c.bootstrapServers
 	}
-	if len(c.registryURLs) > 0 {
+	if c.registryURLs != nil {
+		if err := checkAddrs("-R", c.registryURLs); err != nil {
+			return err
+		}
 		if cfg.SR == nil {
 			cfg.SR = new(CfgSR)
 		}
 		cfg.SR.URLs = c.registryURLs
 	}
+	return nil
+}
+
+func checkAddrs(flag string, addrs []string) error {
+	if len(addrs) == 0 {
+		return out.Errf(out.ExitUsage, "%s needs at least one address", flag)
+	}
+	for _, a := range addrs {
+		if strings.TrimSpace(a) == "" {
+			return out.Errf(out.ExitUsage, "%s has an empty address in %q", flag, strings.Join(addrs, ","))
+		}
+	}
+	return nil
 }
 
 func (c *Client) processOverrides() {
@@ -1165,7 +1187,9 @@ func (c *Client) processOverrides() {
 	if err := ApplyCfgOpts(&c.cfg, c.flagOverrides); err != nil {
 		c.dieErr(err)
 	}
-	c.applyShorthandFlags(&c.cfg)
+	if err := c.applyShorthandFlags(&c.cfg); err != nil {
+		c.dieErr(err)
+	}
 }
 
 // ApplyFlags applies the -X, -B, and -R flags to cfg, in that order so the
@@ -1183,13 +1207,15 @@ func (c *Client) ApplyFlags(cfg *Cfg) (set, unset []string, err error) {
 			set = append(set, k)
 		}
 	}
-	if len(c.bootstrapServers) > 0 {
+	if err := c.applyShorthandFlags(cfg); err != nil {
+		return nil, nil, err
+	}
+	if c.bootstrapServers != nil {
 		set = append(set, "seed_brokers")
 	}
-	if len(c.registryURLs) > 0 {
+	if c.registryURLs != nil {
 		set = append(set, "registry.urls")
 	}
-	c.applyShorthandFlags(cfg)
 	return set, unset, nil
 }
 

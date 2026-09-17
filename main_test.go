@@ -434,3 +434,32 @@ func TestAwkHeader(t *testing.T) {
 		})
 	}
 }
+
+// TestEmptyBootstrapIsUsageError pins that an empty -B exits 2 and names the
+// flag, rather than connecting to whatever the config named.
+func TestEmptyBootstrapIsUsageError(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+	}{
+		{"text", []string{"--no-config-file", "-B", "", "topic", "list"}},
+		{"json", []string{"--no-config-file", "-B", "", "topic", "list", "--format", "json"}},
+		{"empty address", []string{"--no-config-file", "-B", "localhost:1,", "topic", "list"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			stdout, stderr, code := runChild(t, test.args...)
+			if code != out.ExitUsage {
+				t.Errorf("exit %d, want %d; stdout %q stderr %q", code, out.ExitUsage, stdout, stderr)
+			}
+			if test.name == "json" {
+				var doc map[string]any
+				if err := json.Unmarshal([]byte(stdout), &doc); err != nil || doc["code"] != float64(2) || doc["_command"] != "topic.list" || !strings.Contains(doc["error"].(string), "-B") {
+					t.Errorf("stdout = %q, want a usage error document naming -B", stdout)
+				}
+			} else if !strings.Contains(stderr, "-B") {
+				t.Errorf("stderr = %q, want it to name -B", stderr)
+			}
+		})
+	}
+}
