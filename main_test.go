@@ -1,11 +1,17 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"os"
+	"os/exec"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -337,5 +343,67 @@ func TestExamplesArePasteable(t *testing.T) {
 	})
 	if checked == 0 {
 		t.Error("no examples found; the walk is not reaching them")
+	}
+}
+
+// runChild runs this test binary as kcl with args, the way the walkthrough
+// does, and returns what a user sees. A command that exits on its own, as
+// --awk-header does, needs a process of its own.
+func runChild(t *testing.T, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc, err := json.Marshal(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, exe)
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "KCL_") {
+			cmd.Env = append(cmd.Env, kv)
+		}
+	}
+	cmd.Env = append(cmd.Env, walkthroughEnv+"="+string(enc))
+	var outb, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &outb, &errb
+	err = cmd.Run()
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+	case errors.As(err, &exit):
+		code = exit.ExitCode()
+	default:
+		t.Fatalf("unable to run kcl %s: %v", strings.Join(args, " "), err)
+	}
+	return outb.String(), errb.String(), code
+}
+
+// TestAwkHeader pins that --awk-header prints the registered header row and
+// exits 0 before anything is dialed: localhost:1 refuses connections, so a
+// command that reached the cluster would exit 1. A command with no registered
+// table prints nothing, and cobra's argument count does not get in the way.
+func TestAwkHeader(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"registered", []string{"profile", "list", "--awk-header"}, "NAME\tCURRENT\n"},
+		{"registered, flag first", []string{"--awk-header", "profile", "list"}, "NAME\tCURRENT\n"},
+		{"unregistered leaf", []string{"topic", "list", "--awk-header"}, ""},
+		{"missing arguments", []string{"topic", "create", "--awk-header"}, ""},
+		{"group", []string{"topic", "--awk-header"}, ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			stdout, stderr, code := runChild(t, append([]string{"--no-config-file", "-B", "localhost:1"}, test.args...)...)
+			if code != 0 || stdout != test.want || stderr != "" {
+				t.Errorf("exit %d stdout %q stderr %q, want exit 0 stdout %q and no stderr", code, stdout, stderr, test.want)
+			}
+		})
 	}
 }

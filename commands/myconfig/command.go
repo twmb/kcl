@@ -100,7 +100,7 @@ func useCommand(cl *client.Client) *cobra.Command {
 }
 
 func listCommand(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List all profiles.",
@@ -141,6 +141,8 @@ func listCommand(cl *client.Client) *cobra.Command {
 			return nil
 		},
 	}
+	out.Columns(cmd, "NAME", "CURRENT")
+	return cmd
 }
 
 // readCfgFile decodes the config file at path, reporting whether there is no

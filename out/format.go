@@ -52,7 +52,13 @@ type FormattedTable struct {
 // for group list). Headers are used for text column headers and are
 // lowercased with hyphens/spaces replaced by underscores for JSON keys; see
 // WithKeys for the tables where a key must differ from its header.
+//
+// Under the awk format the headers are checked against what the running
+// command registered with Columns.
 func NewFormattedTable(format, command string, version int, jsonKey string, headers ...string) *FormattedTable {
+	if format == FormatAWK {
+		checkColumns(command, headers)
+	}
 	keys := make([]string, len(headers))
 	for i, h := range headers {
 		keys[i] = jsonKeyOf(h)

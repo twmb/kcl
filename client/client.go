@@ -166,6 +166,7 @@ type Client struct {
 	asVersion string
 	asJSON    bool
 	format    string
+	awkHeader bool
 	command   string // the running command, for _command on a config error
 
 	// config options parsed and filled on load
@@ -311,6 +312,8 @@ func New(root *cobra.Command) *Client {
 	root.PersistentFlags().StringVarP(&c.profileName, "profile", "C", "", "use a specific config profile")
 	root.PersistentFlags().BoolVarP(&c.asJSON, "dump-json", "j", false, "dump response as json if supported")
 	root.PersistentFlags().MarkDeprecated("dump-json", "use --format json instead")
+	root.PersistentFlags().BoolVar(&c.awkHeader, "awk-header", false, "print the command's awk header row and exit")
+	root.PersistentFlags().MarkHidden("awk-header")
 
 	// -X help and -X list are answered here, after cobra has parsed the
 	// flags so that --format applies. The registry group has a persistent
@@ -321,12 +324,21 @@ func New(root *cobra.Command) *Client {
 	// client, and it reports the command we know from here rather than an
 	// error document with no _command. Every command reads it back with
 	// Command to name itself in what it prints.
+	//
+	// --awk-header is answered here too, before RunE builds a client: the
+	// header row is what the command registered with out.Columns, so
+	// nothing is dialed. A command that registered no table prints nothing.
 	cobra.EnableTraverseRunHooks = true
 	root.PersistentPreRun = func(cmd *cobra.Command, _ []string) {
 		c.SetCommand(out.CommandName(cmd.CommandPath()))
 		if c.MaybeXHelp() {
 			os.Exit(0)
 		}
+		if c.awkHeader {
+			fmt.Print(out.AwkHeader(cmd))
+			os.Exit(0)
+		}
+		out.SetRunning(cmd)
 	}
 
 	return c

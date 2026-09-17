@@ -254,6 +254,10 @@ func errFormat(root *cobra.Command, cl *client.Client) string {
 // itself only reports those at the root, and answered "kcl profile nope"
 // with the help text and exit 0. A bare group also runs checkFlags, so that
 // "kcl -X hlep" reports the bad key rather than printing the help.
+//
+// The validator is skipped under --awk-header: the header row does not
+// depend on the arguments, and cobra validates them before the persistent
+// pre-run that answers the flag.
 func usageErrors(root *cobra.Command, checkFlags func() error) {
 	allCommands(root, func(cmd *cobra.Command) {
 		if cmd.HasSubCommands() && !cmd.Runnable() {
@@ -274,6 +278,9 @@ func usageErrors(root *cobra.Command, checkFlags func() error) {
 			return
 		}
 		cmd.Args = func(c *cobra.Command, args []string) error {
+			if awk, _ := c.Flags().GetBool("awk-header"); awk {
+				return nil
+			}
 			if err := validate(c, args); err != nil {
 				return out.Errf(out.ExitUsage, "%v", err)
 			}
