@@ -227,11 +227,13 @@ func Describe(cl *client.Client, opts DescribeOpts, topics []string) error {
 		described = append(described, d)
 	}
 
+	var configsFailed bool
 	if needConfigs {
-		configsByTopic, err := fetchTopicConfigs(ctx, kclClient, topics)
+		configsByTopic, failed, err := fetchTopicConfigs(ctx, kclClient, topics)
 		if err != nil {
 			return err
 		}
+		configsFailed = failed
 		for _, d := range described {
 			d.configs = configsByTopic[d.nameStr()]
 		}
@@ -315,7 +317,7 @@ func Describe(cl *client.Client, opts DescribeOpts, topics []string) error {
 			start, end, stable, errStr,
 		}
 	}
-	var failed bool
+	failed := configsFailed
 	for _, d := range described {
 		if d.err != nil {
 			failed = true
@@ -525,7 +527,11 @@ func orEmpty(vals []int32) []int32 {
 	return vals
 }
 
-func fetchTopicConfigs(ctx context.Context, cl kmsg.Requestor, topics []string) (map[string][]kmsg.DescribeConfigsResponseResourceConfig, error) {
+// fetchTopicConfigs describes the configs of topics. A missing topic was
+// already reported from the metadata response and is skipped; any other
+// per-resource error goes to stderr, since the configs rows have no place
+// for it, and failed reports it so the command exits 1.
+func fetchTopicConfigs(ctx context.Context, cl kmsg.Requestor, topics []string) (configs map[string][]kmsg.DescribeConfigsResponseResourceConfig, failed bool, err error) {
 	req := kmsg.NewPtrDescribeConfigsRequest()
 	for _, t := range topics {
 		r := kmsg.NewDescribeConfigsRequestResource()
@@ -536,17 +542,15 @@ func fetchTopicConfigs(ctx context.Context, cl kmsg.Requestor, topics []string) 
 
 	resp, err := req.RequestWith(ctx, cl)
 	if err != nil {
-		return nil, fmt.Errorf("unable to describe configs: %v", err)
+		return nil, false, fmt.Errorf("unable to describe configs: %v", err)
 	}
 
 	result := make(map[string][]kmsg.DescribeConfigsResponseResourceConfig)
 	for _, r := range resp.Resources {
 		if err := kerr.ErrorForCode(r.ErrorCode); err != nil {
-			// A missing topic was already reported from the metadata
-			// response. Route other per-resource errors to stderr so they
-			// don't contaminate JSON/awk output on stdout.
 			if err != kerr.UnknownTopicOrPartition {
-				fmt.Fprintf(os.Stderr, "config error for %s: %v\n", r.ResourceName, err)
+				fmt.Fprintf(os.Stderr, "unable to describe configs for %s: %v\n", r.ResourceName, out.BrokerErr(err, r.ErrorMessage))
+				failed = true
 			}
 			continue
 		}
@@ -559,7 +563,7 @@ func fetchTopicConfigs(ctx context.Context, cl kmsg.Requestor, topics []string) 
 		})
 		result[r.ResourceName] = r.Configs
 	}
-	return result, nil
+	return result, failed, nil
 }
 
 func int32sToString(vals []int32) string {

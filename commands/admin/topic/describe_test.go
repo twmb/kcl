@@ -4,6 +4,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kfake"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 var (
@@ -188,5 +192,23 @@ func TestInt32sToString(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("int32sToString(%v) = %q, want %q", tt.input, got, tt.want)
 		}
+	}
+}
+
+// TestDescribeConfigsError pins that a DescribeConfigs error on a topic that
+// metadata described exits 1: the configs rows have no place for it, so it
+// goes to stderr, and the exit code says the describe was not whole.
+func TestDescribeConfigsError(t *testing.T) {
+	c, addr := newCluster(t, 1, 0, "cfg")
+	h := c.Fault(kfake.Fault{Keys: []kmsg.Key{kmsg.DescribeConfigs}, Resource: "cfg", Err: kerr.TopicAuthorizationFailed})
+	defer h.Remove()
+
+	got, code := runKcl(t, addr, "describe", "cfg", "--section", "configs", "--format", "json")
+	if code != 1 {
+		t.Fatalf("exit %d, want 1\n%s", code, got)
+	}
+	topics := rowsOf(t, jsonDoc(t, got, "topic.describe"), "topics")
+	if len(topics) != 1 || topics[0]["error"] != "" {
+		t.Errorf("topics = %v, want the topic itself unmarked", topics)
 	}
 }
