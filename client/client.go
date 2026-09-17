@@ -699,10 +699,32 @@ takes; "kcl -X help" describes each key and names its default.
 func XList() string {
 	var b strings.Builder
 	b.WriteString(xListHeader)
-	for _, k := range CfgKeys() {
+	keys := CfgKeys()
+	for _, k := range keys {
+		if k.Type == "table" {
+			fmt.Fprintf(&b, "%s=%s\n", k.Name, tableNote(k.Name, keys))
+			continue
+		}
 		fmt.Fprintf(&b, "%s=%s\n", k.Name, k.Example)
 	}
 	return b.String()
+}
+
+// tableNote is what -X list prints after a table key's "=", which has no
+// example of its own: the keys under it, and that the bare key removes them.
+func tableNote(name string, keys []CfgKey) string {
+	var under []string
+	for _, k := range keys {
+		rest, ok := strings.CutPrefix(k.Name, name+".")
+		if !ok || strings.Contains(rest, ".") {
+			continue
+		}
+		if k.Type == "table" {
+			rest += ".*"
+		}
+		under = append(under, rest)
+	}
+	return fmt.Sprintf("  (a table of %s.{%s}; bare %s= removes them all)", name, strings.Join(under, ","), name)
 }
 
 // XCompletions returns completions for the -X flag: each key with a

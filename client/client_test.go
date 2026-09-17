@@ -760,6 +760,14 @@ func TestXListAndHelpCoverEveryKey(t *testing.T) {
 	help := XHelp()
 	for _, k := range CfgKeys() {
 		line := k.Name + "=" + k.Example
+		if k.Type == "table" {
+			// A table has no example; the list says what is under it.
+			line = k.Name + "=  (a table of " + k.Name + ".{"
+			if !strings.Contains(list, "\n"+line) {
+				t.Errorf("-X list lacks %q", line)
+			}
+			continue
+		}
 		if !strings.Contains(list, line+"\n") {
 			t.Errorf("-X list lacks %q", line)
 		}
@@ -770,8 +778,11 @@ func TestXListAndHelpCoverEveryKey(t *testing.T) {
 	if strings.Contains(list, "timeout_ms") || strings.Contains(help, "timeout_ms=") {
 		t.Error("the renamed timeout_ms is listed")
 	}
-	if !strings.Contains(list, "sasl=\n") {
-		t.Error("a table key should print as NAME= with nothing after")
+	if !strings.Contains(list, "sasl=  (a table of sasl.{is_token,mechanism,pass,user,zid}; bare sasl= removes them all)\n") {
+		t.Error("a table key should name the keys under it")
+	}
+	if !strings.Contains(list, "registry=  (a table of registry.{bearer_token,context,pass,tls.*,urls,user};") {
+		t.Error("a table under a table should be named with .*")
 	}
 	if !strings.Contains(help, "(-X sasl.pass=) unsets the key") {
 		t.Error("help does not say how to unset a bool")
@@ -780,7 +791,7 @@ func TestXListAndHelpCoverEveryKey(t *testing.T) {
 	if !slices.IsSortedFunc(keys, func(a, b CfgKey) int { return strings.Compare(a.Name, b.Name) }) {
 		t.Error("keys are not sorted by name")
 	}
-	if i := strings.Index(list, "\nregistry.tls=\n"); i < 0 || !strings.HasPrefix(list[i+len("\nregistry.tls=\n"):], "registry.tls.ca_cert_path=") {
+	if i := strings.Index(list, "\nregistry.tls=  "); i < 0 || !strings.HasPrefix(list[strings.Index(list[i+1:], "\n")+i+2:], "registry.tls.ca_cert_path=") {
 		t.Error("a table key should directly precede its own keys")
 	}
 	for _, line := range strings.Split(help, "\n") {
