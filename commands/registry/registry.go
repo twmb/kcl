@@ -4,13 +4,13 @@
 //
 // It is a thin CLI over franz-go's pkg/sr typed API. The registry is a
 // separate HTTP service from the Kafka brokers, configured independently via
-// -R/--registry, -X registry.urls=..., or the schema_registry section of the
+// -R/--registry, -X registry.urls=..., or the [registry] section of the
 // config file.
 package registry
 
 import (
+	"context"
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -34,25 +34,29 @@ func Command(cl *client.Client) *cobra.Command {
 		Short:   "Schema Registry administration (schemas, subjects, compatibility, mode).",
 		Long: `Schema Registry administration (schemas, subjects, compatibility, mode).
 
-Schema Registry administration.
-
 The Schema Registry is a separate HTTP service from the Kafka brokers. Point
 kcl at it with any of:
 
   -R, --registry        comma-separated registry URLs (highest priority)
   -X registry.urls=...  same, via the generic config-opt flag
-  config file           a [schema_registry] section (or per-profile)
+  config file           a [registry] section (or per-profile)
 
 Auth is optional: basic auth via registry.user / registry.pass, or a bearer
 token via registry.bearer_token. TLS for https URLs is configured with the
 registry.tls.* keys, mirroring the Kafka tls.* keys.
 
-Examples:
+EXAMPLES:
+  kcl registry -R http://localhost:8081 subject list       # the subjects in a registry
+  kcl registry schema create mytopic-value -s schema.avsc  # register a schema
+  kcl registry schema get mytopic-value                    # print its latest version
+  kcl registry compatibility set BACKWARD mytopic-value    # set a subject's level
 
-  kcl registry -R http://localhost:8081 subjects
-  kcl registry schema create mytopic-value -s schema.avsc
-  kcl registry schema get -S mytopic-value
-  kcl registry compat set BACKWARD mytopic-value
+SEE ALSO:
+  kcl registry subject         list and delete subjects
+  kcl registry schema          register, fetch, list, delete, and check schemas
+  kcl registry compatibility   get and set compatibility levels
+  kcl registry mode            get and set the registry mode
+  kcl registry context         list and delete contexts
 `,
 		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
 			cl.SetRegistryContext(context)
@@ -63,16 +67,30 @@ Examples:
 	cmd.PersistentFlags().StringVar(&context, "context", "", "schema registry context (namespace) to scope operations to")
 
 	cmd.AddCommand(
-		subjectsCommand(cl),
+		subjectCommand(cl),
 		schemaCommand(cl),
-		versionsCommand(cl),
-		referencesCommand(cl),
-		deleteCommand(cl),
 		compatCommand(cl),
 		modeCommand(cl),
 		contextCommand(cl),
+
+		// The old names, kept so that a script keeps working.
+		oldName(subjectListCommand(cl), "subjects", "registry subject list"),
+		oldName(versionsCommand(cl), "versions SUBJECT", "registry schema list"),
+		oldName(schemaReferencesCommand(cl), "references SUBJECT", "registry schema references"),
+		oldDeleteCommand(cl),
 	)
 
+	return cmd
+}
+
+// oldName makes cmd the old name of the command at path, kept so that an old
+// script keeps working. It is out of the help, cobra notes the new name on
+// stderr, and what it prints names the new path.
+func oldName(cmd *cobra.Command, use, path string) *cobra.Command {
+	cmd.Use = use
+	cmd.Hidden = true
+	cmd.Deprecated = "use 'kcl " + path + "' instead"
+	out.AliasOf(cmd, out.CommandName("kcl "+path))
 	return cmd
 }
 
@@ -103,6 +121,34 @@ func dieErr(action string, err error) error {
 		return out.Errf(out.ExitError, "unable to %s: %s (error code %d, http %d)", action, msg, re.ErrorCode, re.StatusCode)
 	}
 	return out.Errf(out.ExitError, "unable to %s: %v", action, err)
+}
+
+// resultCells is the ERROR and MESSAGE of a result row whose request the
+// registry answered with err: "" and "" on success, else the registry's error
+// name (SUBJECT_NOT_FOUND), or its code when we do not know the name, and its
+// message. Anything but a registry answer, a refused connection say, is not a
+// per-item result: ok is false and the caller returns err through dieErr.
+func resultCells(err error) (errName, message string, ok bool) {
+	if err == nil {
+		return "", "", true
+	}
+	var re *sr.ResponseError
+	if !errors.As(err, &re) {
+		return "", "", false
+	}
+	switch e := re.SchemaError(); {
+	case e != nil && e != sr.ErrUnknown:
+		errName = e.Name
+	case re.ErrorCode != 0:
+		errName = strconv.Itoa(re.ErrorCode)
+	default:
+		errName = "HTTP_" + strconv.Itoa(re.StatusCode)
+	}
+	message = re.Message
+	if message == "" {
+		message = strings.TrimSpace(string(re.Raw))
+	}
+	return errName, message, true
 }
 
 // parseSchemaType parses an Avro/Protobuf/JSON schema type string.
@@ -186,6 +232,21 @@ func parseVersion(s string) (int, error) {
 	return v, nil
 }
 
+// resolveVersion is version as a number: itself, or, for -1, the subject's
+// latest version as the registry reports it now. A delete or a compatibility
+// check answers nothing about which version "latest" was, so we ask first,
+// act on the number, and the row names what was done.
+func resolveVersion(ctx context.Context, scl *sr.Client, subject string, version int) (int, error) {
+	if version != -1 {
+		return version, nil
+	}
+	ss, err := scl.SchemaByVersion(ctx, subject, -1)
+	if err != nil {
+		return 0, err
+	}
+	return ss.Version, nil
+}
+
 // awkText is s as one awk field. A schema can span lines, a .proto most of
 // all, and a row that spans lines is not TSV. The escapes are the ones Go and
 // JSON already write, so a reader knows them.
@@ -195,10 +256,17 @@ func awkText(s string) string {
 
 var awkEscaper = strings.NewReplacer("\\", "\\\\", "\n", "\\n", "\r", "\\r", "\t", "\\t")
 
-// versionString renders a version int for display, mapping -1 to "latest".
-func versionString(v int) string {
-	if v < 0 {
-		return "latest"
+// showDeletedFlag adds --show-deleted to cmd and returns the context a list
+// runs under, which asks the registry for soft deleted entries too when the
+// flag is set.
+func showDeletedFlag(cmd *cobra.Command, what string) func() context.Context {
+	var showDeleted bool
+	cmd.Flags().BoolVar(&showDeleted, "show-deleted", false, "include soft-deleted "+what)
+	return func() context.Context {
+		ctx := context.Background()
+		if showDeleted {
+			ctx = sr.WithParams(ctx, sr.ShowDeleted)
+		}
+		return ctx
 	}
-	return fmt.Sprintf("%d", v)
 }

@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -236,9 +238,21 @@ func (c *consumeChild) waitFor(t *testing.T, ls *lines, want string) {
 // exits with.
 func (c *consumeChild) interrupt(t *testing.T) int {
 	t.Helper()
+	c.signal(t)
+	return c.wait(t)
+}
+
+// signal sends the child one ctrl-c and returns without waiting.
+func (c *consumeChild) signal(t *testing.T) {
+	t.Helper()
 	if err := c.cmd.Process.Signal(os.Interrupt); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// wait returns the code the child exits with.
+func (c *consumeChild) wait(t *testing.T) int {
+	t.Helper()
 	// Both outputs must be read to EOF before Wait, which closes them.
 	c.scans.Wait()
 	if err := c.cmd.Wait(); err != nil {
@@ -249,4 +263,114 @@ func (c *consumeChild) interrupt(t *testing.T) int {
 		return exit.ExitCode()
 	}
 	return out.ExitOK
+}
+
+// freezeListener wraps a net.Listener so that, once frozen, every connection
+// to it accepts but delivers no more bytes to the server. The server then
+// never sees a request and never answers, which is a broker that stopped
+// responding -- not the connection-refused a closed cluster gives, which
+// kgo fails fast. kfake serves on this via ListenFn, so it advertises this
+// address and the client cannot route around it.
+type freezeListener struct {
+	net.Listener
+	frozen *atomic.Bool
+}
+
+func (l freezeListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return &freezeConn{Conn: c, frozen: l.frozen, done: make(chan struct{})}, nil
+}
+
+type freezeConn struct {
+	net.Conn
+	frozen   *atomic.Bool
+	done     chan struct{}
+	doneOnce sync.Once
+}
+
+func (c *freezeConn) Read(b []byte) (int, error) {
+	for c.frozen.Load() {
+		select {
+		case <-c.done:
+			return 0, io.EOF
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	return c.Conn.Read(b)
+}
+
+func (c *freezeConn) Close() error {
+	c.doneOnce.Do(func() { close(c.done) })
+	return c.Conn.Close()
+}
+
+// TestConsumeInterruptBrokerGone pins what one interrupt does when the broker
+// will not answer the group leave. Close leaves the group, and a leave to a
+// dead broker retries for retry_timeout, so the first ctrl-c cannot finish;
+// after a second we must say what we are waiting on, and a second ctrl-c
+// must quit at once. An earlier share-group smoke run reached for SIGKILL
+// here because nothing said the process was still alive.
+func TestConsumeInterruptBrokerGone(t *testing.T) {
+	for _, shared := range []bool{false, true} {
+		name := "group"
+		if shared {
+			name = "share-group"
+		}
+		t.Run(name, func(t *testing.T) {
+			const topic = "interrupt-gone"
+			var frozen atomic.Bool
+			c, err := kfake.NewCluster(kfake.NumBrokers(1), kfake.ListenFn(func(network, address string) (net.Listener, error) {
+				ln, err := net.Listen(network, address)
+				if err != nil {
+					return nil, err
+				}
+				return freezeListener{Listener: ln, frozen: &frozen}, nil
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(c.Close)
+
+			kcl, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(kcl.Close)
+			if _, err := kadm.NewClient(kcl).CreateTopic(t.Context(), 1, 1, nil, topic); err != nil {
+				t.Fatal(err)
+			}
+			if res := kcl.ProduceSync(t.Context(), &kgo.Record{Topic: topic, Value: []byte("r")}); res.FirstErr() != nil {
+				t.Fatal(res.FirstErr())
+			}
+
+			args := []string{"consume", topic, "-o", "start", "--no-config-file", "-B", c.ListenAddrs()[0], "-X", "retry_timeout=45s"}
+			if shared {
+				c.SetGroupConfigs("sg", map[string]string{"share.auto.offset.reset": "earliest"})
+				args = append(args, "--share-group", "sg")
+			} else {
+				args = append(args, "-g", "g")
+			}
+			child := startConsume(t, args...)
+			child.waitFor(t, &child.stdout, "r")
+
+			// From here the broker answers nothing; the leave retries
+			// for retry_timeout (45s).
+			frozen.Store(true)
+
+			child.signal(t)
+			child.waitFor(t, &child.stderr, "ctrl+c again")
+			start := time.Now()
+			child.signal(t)
+			code := child.wait(t)
+			if took := time.Since(start); took > 10*time.Second {
+				t.Errorf("second interrupt took %v, want an immediate exit", took)
+			}
+			if code != out.ExitOK {
+				t.Errorf("exit %d, want %d; stderr:\n%s", code, out.ExitOK, strings.Join(child.stderr.all(), "\n"))
+			}
+		})
+	}
 }

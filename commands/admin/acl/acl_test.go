@@ -4,14 +4,18 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
 
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
+	"github.com/twmb/franz-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/out"
 )
 
 // run executes "kcl acl <args...>" against an in-process kfake cluster,
@@ -57,12 +61,18 @@ func runJSON(t *testing.T, addrs []string, args ...string) (map[string]any, erro
 
 func newCluster(t *testing.T) []string {
 	t.Helper()
+	_, addrs := newClusterWithControl(t)
+	return addrs
+}
+
+func newClusterWithControl(t *testing.T) (*kfake.Cluster, []string) {
+	t.Helper()
 	c, err := kfake.NewCluster()
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(c.Close)
-	return c.ListenAddrs()
+	return c, c.ListenAddrs()
 }
 
 // aclRows pulls the "acls" array out of a JSON list envelope.
@@ -219,30 +229,65 @@ func TestACLDeleteDefaultsToMatchAll(t *testing.T) {
 	}
 }
 
-// TestACLDeleteConfirmation covers what now protects a broad delete. Answering
-// anything but yes must leave every ACL in place.
-func TestACLDeleteConfirmation(t *testing.T) {
+// TestACLDeleteDeclined covers what now protects a broad delete. A stdin
+// that is not a terminal cannot answer the prompt, so the delete is declined:
+// every ACL stays, the matches print as a dry run, and the exit is 0. The
+// test's stdin is a pipe, which is exactly that case.
+func TestACLDeleteDeclined(t *testing.T) {
 	for _, tc := range []struct {
-		answer    string
-		wantAfter int
+		name   string
+		format string
+		stdin  string
 	}{
-		{"n\n", 2},
-		{"\n", 2}, // bare enter declines
-		{"y\n", 0},
+		{"json with a yes on a pipe", "json", "y\n"},
+		{"awk with a no", "awk", "n\n"},
+		{"text with nothing", "text", ""},
 	} {
-		addrs := newCluster(t)
-		seedACLs(t, addrs)
+		t.Run(tc.name, func(t *testing.T) {
+			addrs := newCluster(t)
+			seedACLs(t, addrs)
 
-		withStdin(t, tc.answer, func() {
-			if _, err := run(t, addrs, "delete"); err != nil {
-				t.Fatalf("delete with answer %q: %v", tc.answer, err)
+			var got string
+			var err error
+			withStdin(t, tc.stdin, func() {
+				got, err = run(t, addrs, "--format", tc.format, "delete")
+			})
+			if err != nil {
+				t.Fatalf("declined delete: %v", err)
+			}
+			switch tc.format {
+			case "json":
+				var doc struct {
+					DryRun  bool             `json:"dry_run"`
+					Deleted []map[string]any `json:"deleted"`
+				}
+				if err := json.Unmarshal([]byte(got), &doc); err != nil {
+					t.Fatalf("not JSON: %v\n%s", err, got)
+				}
+				if !doc.DryRun || len(doc.Deleted) != 2 {
+					t.Errorf("doc = %+v, want dry_run with both matches", doc)
+				}
+				if doc.Deleted[0]["error"] != nil {
+					t.Errorf("a declined delete has no result, got error %v", doc.Deleted[0]["error"])
+				}
+			case "awk":
+				rows := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
+				if len(rows) != 2 {
+					t.Fatalf("awk printed %d rows, want the 2 matches:\n%s", len(rows), got)
+				}
+				for _, row := range rows {
+					if n := len(strings.Split(row, "\t")); n != len(aclResultHeaders) {
+						t.Errorf("row has %d fields, want %d: %q", n, len(aclResultHeaders), row)
+					}
+					if !strings.HasSuffix(row, "\t-\t-") {
+						t.Errorf("row does not end in unknown ERROR and MESSAGE: %q", row)
+					}
+				}
+			}
+			if got := len(aclRows(t, mustJSON(t, addrs, "list"))); got != 2 {
+				t.Errorf("declined delete left %d ACLs, want 2", got)
 			}
 		})
-
-		m, _ := runJSON(t, addrs, "list")
-		if got := len(aclRows(t, m)); got != tc.wantAfter {
-			t.Errorf("answer %q left %d ACLs, want %d", tc.answer, got, tc.wantAfter)
-		}
 	}
 }
 
@@ -400,4 +445,158 @@ func mustJSON(t *testing.T, addrs []string, args ...string) map[string]any {
 		t.Fatal(err)
 	}
 	return m
+}
+
+// TestACLCreateResults pins the result shape of a create: error is "" on
+// success, the kerr name on failure, and any failure exits 1 after every
+// row prints. The failure is a kfake fault on one resource name.
+func TestACLCreateResults(t *testing.T) {
+	c, addrs := newClusterWithControl(t)
+	c.Fault(kfake.Fault{
+		Keys:     []kmsg.Key{kmsg.CreateACLs},
+		Resource: "bad",
+		Err:      kerr.InvalidRequest,
+		Count:    -1,
+	})
+
+	got, err := run(t, addrs, "--format", "json", "create",
+		"--topic", "good", "--topic", "bad",
+		"--allow-principal", "User:alice", "--operation", "read")
+	if code := out.ExitCode(err); err == nil || code != out.ExitError {
+		t.Fatalf("err = %v (exit %d), want a silent exit 1", err, code)
+	}
+	var doc struct {
+		DryRun  bool `json:"dry_run"`
+		Results []struct {
+			Name    string `json:"name"`
+			Error   string `json:"error"`
+			Message string `json:"message"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(got), &doc); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, got)
+	}
+	if doc.DryRun || len(doc.Results) != 2 {
+		t.Fatalf("doc = %+v, want two results and no dry_run", doc)
+	}
+	for _, r := range doc.Results {
+		switch r.Name {
+		case "good":
+			if r.Error != "" {
+				t.Errorf("good: error = %q, want \"\"", r.Error)
+			}
+		case "bad":
+			if r.Error != "INVALID_REQUEST" {
+				t.Errorf("bad: error = %q, want INVALID_REQUEST", r.Error)
+			}
+		default:
+			t.Errorf("unexpected row %+v", r)
+		}
+	}
+	if got := len(aclRows(t, mustJSON(t, addrs, "list"))); got != 1 {
+		t.Errorf("%d ACLs exist, want only the good one", got)
+	}
+}
+
+// TestACLCreateDryRun pins that a dry run is the real run's document with
+// dry_run and no result, in every format, and creates nothing.
+func TestACLCreateDryRun(t *testing.T) {
+	addrs := newCluster(t)
+	args := []string{"create", "--dry-run", "--topic", "foo",
+		"--allow-principal", "User:alice", "--operation", "read", "--operation", "write"}
+
+	doc, err := runJSON(t, addrs, args...)
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	if doc["dry_run"] != true {
+		t.Errorf("dry_run = %v, want true", doc["dry_run"])
+	}
+	results, _ := doc["results"].([]any)
+	if len(results) != 2 {
+		t.Fatalf("results = %v, want 2 rows", doc["results"])
+	}
+	if row := results[0].(map[string]any); row["error"] != nil || row["message"] != nil {
+		t.Errorf("dry run row has a result: %v", row)
+	}
+
+	awk, err := run(t, addrs, append([]string{"--format", "awk"}, args...)...)
+	if err != nil {
+		t.Fatalf("dry run awk: %v", err)
+	}
+	for _, row := range strings.Split(strings.TrimSuffix(awk, "\n"), "\n") {
+		if n := len(strings.Split(row, "\t")); n != len(aclResultHeaders) {
+			t.Errorf("awk row has %d fields, want %d: %q", n, len(aclResultHeaders), row)
+		}
+	}
+
+	text, err := run(t, addrs, args...)
+	if err != nil {
+		t.Fatalf("dry run text: %v", err)
+	}
+	if !strings.Contains(text, "Dry run") {
+		t.Errorf("text does not say it is a dry run:\n%s", text)
+	}
+	if got := len(aclRows(t, mustJSON(t, addrs, "list"))); got != 0 {
+		t.Errorf("dry run created %d ACLs", got)
+	}
+}
+
+// TestACLListSorted pins the order: by principal, then by resource.
+func TestACLListSorted(t *testing.T) {
+	addrs := newCluster(t)
+	for _, args := range [][]string{
+		{"--topic", "zed", "--allow-principal", "User:bob", "--operation", "read"},
+		{"--topic", "alpha", "--allow-principal", "User:bob", "--operation", "read"},
+		{"--group", "g", "--allow-principal", "User:alice", "--operation", "read"},
+	} {
+		if _, err := run(t, addrs, append([]string{"create"}, args...)...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var got []string
+	for _, row := range aclRows(t, mustJSON(t, addrs, "list")) {
+		got = append(got, row["principal"].(string)+" "+row["type"].(string)+" "+row["name"].(string))
+	}
+	want := []string{"User:alice GROUP g", "User:bob TOPIC alpha", "User:bob TOPIC zed"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("order = %v, want %v", got, want)
+	}
+}
+
+// TestACLAwkHeader pins that the registered awk header has as many fields as
+// a row. --format awk-header itself exits the process, so the test reads what it
+// would print.
+func TestACLAwkHeader(t *testing.T) {
+	addrs := newCluster(t)
+	seedACLs(t, addrs)
+
+	root := &cobra.Command{Use: "kcl"}
+	acl := Command(client.New(root))
+	for _, tc := range []struct {
+		args []string
+		want []string
+	}{
+		{[]string{"list"}, aclHeaders},
+		{[]string{"create", "--topic", "t", "--allow-principal", "User:a", "--operation", "read", "--dry-run"}, aclResultHeaders},
+		{[]string{"delete", "-y"}, aclResultHeaders},
+	} {
+		cmd, _, err := acl.Find(tc.args[:1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		header := strings.Split(strings.TrimSuffix(out.AwkHeader(cmd), "\n"), "\t")
+		if !slices.Equal(header, tc.want) {
+			t.Errorf("%v registered %v, want %v", tc.args, header, tc.want)
+		}
+		rows, err := run(t, addrs, append([]string{"--format", "awk"}, tc.args...)...)
+		if err != nil {
+			t.Fatalf("%v awk: %v", tc.args, err)
+		}
+		for _, row := range strings.Split(strings.TrimSuffix(rows, "\n"), "\n") {
+			if n := len(strings.Split(row, "\t")); n != len(header) {
+				t.Errorf("%v awk row has %d fields, header has %d: %q", tc.args, n, len(header), row)
+			}
+		}
+	}
 }

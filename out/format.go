@@ -1,20 +1,44 @@
 package out
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
+	"testing"
 	"text/tabwriter"
+	"time"
 )
 
 const (
 	FormatText = "text"
 	FormatJSON = "json"
 	FormatAWK  = "awk"
+
+	// FormatAwkHeader is the --format that prints the command's awk header
+	// row and exits, before the command runs; see Columns.
+	FormatAwkHeader = "awk-header"
 )
+
+// Unknown is the table cell for a value we do not have: an offset the cluster
+// did not report, or a flag's column when the flag is off. It prints as "-"
+// in text and awk and as null in JSON.
+//
+// A known empty string is "" instead, the ERROR of a row that succeeded: awk
+// prints it as "-" as well, and JSON keeps the "". 0 and false are values and
+// print as themselves everywhere. Commands never write "-" into a cell; the
+// awk and text writers do.
+var Unknown unknown
+
+type unknown struct{}
+
+func (unknown) String() string               { return "-" }
+func (unknown) MarshalJSON() ([]byte, error) { return []byte("null"), nil }
 
 // FormattedTable buffers tabular output and can flush in text, json, or awk
 // format. Use this for commands whose output is a single table.
@@ -26,6 +50,10 @@ type FormattedTable struct {
 	headers  []string
 	jsonKeys []string
 	rows     [][]any
+	dryRun   bool
+	errCol   int  // the ERROR column under ResultColumns or ErrorColumn, else -1
+	msgCol   int  // the MESSAGE column after errCol, else -1
+	okText   bool // ResultColumns: text prints OK for a "" ERROR
 }
 
 // NewFormattedTable creates a table that outputs in the specified format.
@@ -33,14 +61,18 @@ type FormattedTable struct {
 // takes from Client.Command rather than naming itself; see CommandName. The
 // jsonKey parameter names the top-level array in JSON output (e.g., "groups"
 // for group list). Headers are used for text column headers and are
-// lowercased with hyphens/spaces replaced by underscores for JSON keys.
+// lowercased with hyphens/spaces replaced by underscores for JSON keys; see
+// WithKeys for the tables where a key must differ from its header.
+//
+// Under the awk format the headers are checked against what the running
+// command registered with Columns.
 func NewFormattedTable(format, command string, version int, jsonKey string, headers ...string) *FormattedTable {
+	if format == FormatAWK {
+		checkColumns(command, headers)
+	}
 	keys := make([]string, len(headers))
 	for i, h := range headers {
-		k := strings.ToLower(h)
-		k = strings.ReplaceAll(k, " ", "_")
-		k = strings.ReplaceAll(k, "-", "_")
-		keys[i] = k
+		keys[i] = jsonKeyOf(h)
 	}
 	return &FormattedTable{
 		format:   format,
@@ -49,16 +81,159 @@ func NewFormattedTable(format, command string, version int, jsonKey string, head
 		jsonKey:  jsonKey,
 		headers:  headers,
 		jsonKeys: keys,
+		errCol:   -1,
+		msgCol:   -1,
 	}
 }
 
-// Row adds a row of values to the table.
+func jsonKeyOf(header string) string {
+	k := strings.ToLower(header)
+	k = strings.ReplaceAll(k, " ", "_")
+	k = strings.ReplaceAll(k, "-", "_")
+	return k
+}
+
+// WithKeys overrides the JSON key a header derives, for the tables where the
+// two must differ: group describe --by group prints MEMBERS, PARTITIONS, and
+// LAG under member_count, partition_count, and total_lag. The map is header
+// to key. A header the table does not have is a programming error and
+// panics.
+func (t *FormattedTable) WithKeys(keys map[string]string) *FormattedTable {
+	for header, key := range keys {
+		i := slices.Index(t.headers, header)
+		if i < 0 {
+			panic(fmt.Sprintf("out: WithKeys names header %q, which the table does not have: %v", header, t.headers))
+		}
+		t.jsonKeys[i] = key
+	}
+	return t
+}
+
+// ResultColumns declares that the table's last two columns are ERROR and then
+// MESSAGE, the per-item result of a mutating command, so that no command
+// checks its own results. A row's ERROR is "" on success and the error name
+// otherwise; text prints OK for the "", awk prints "-", and JSON keeps the "".
+// Flush returns ErrSilent when any row's ERROR is set, so the command exits 1
+// after printing every result. A table that ends in ERROR alone may declare
+// this too. Any other shape is a programming error and panics.
+func (t *FormattedTable) ResultColumns() *FormattedTable {
+	t.ErrorColumn()
+	t.okText = true
+	return t
+}
+
+// ErrorColumn is ResultColumns for a table that describes rather than
+// changes: logdirs describe, txn list, user list. A row's ERROR is "" when
+// the broker answered it and the error name otherwise, and Flush returns
+// ErrSilent when any is set, but text prints nothing for the "" rather than
+// OK, since nothing was done. awk prints "-" and JSON keeps the "".
+func (t *FormattedTable) ErrorColumn() *FormattedTable {
+	n := len(t.headers)
+	switch {
+	case n >= 2 && t.headers[n-2] == "ERROR" && t.headers[n-1] == "MESSAGE":
+		t.errCol, t.msgCol = n-2, n-1
+	case n >= 1 && t.headers[n-1] == "ERROR":
+		t.errCol = n - 1
+	default:
+		panic(fmt.Sprintf("out: ErrorColumn needs the headers to end in ERROR or ERROR, MESSAGE: %v", t.headers))
+	}
+	return t
+}
+
+// SetDryRun marks the table as the output of a dry run: JSON carries
+// "dry_run":true at the top level and text opens with the line PrintDryRun
+// prints. awk is unchanged.
+func (t *FormattedTable) SetDryRun(dry bool) {
+	t.dryRun = dry
+}
+
+// Row adds a row of values to the table, one per header. Under ResultColumns
+// or ErrorColumn the ERROR and MESSAGE cells are made strings first: see
+// errorCell and messageCell. A row with the wrong number of cells is a
+// programming error: it panics under go test, and otherwise warns on stderr
+// and is padded with Unknown or cut to the headers, so that every awk row
+// has every column.
 func (t *FormattedTable) Row(values ...any) {
+	if len(values) != len(t.headers) {
+		msg := fmt.Sprintf("kcl: %s prints a row of %d cells under the %d columns %v; please report this", t.command, len(values), len(t.headers), t.headers)
+		if testing.Testing() {
+			panic(msg)
+		}
+		fmt.Fprintln(os.Stderr, msg)
+		values = slices.Clone(values)
+		for len(values) < len(t.headers) {
+			values = append(values, Unknown)
+		}
+		values = values[:len(t.headers)]
+	}
+	if t.errCol >= 0 && t.errCol < len(values) {
+		values = slices.Clone(values)
+		values[t.errCol] = t.errorCell(values[t.errCol])
+		if t.msgCol >= 0 && t.msgCol < len(values) {
+			values[t.msgCol] = t.messageCell(values[t.msgCol])
+		}
+	}
 	t.rows = append(t.rows, values)
 }
 
-// Flush writes the buffered data in the configured format to stdout.
-func (t *FormattedTable) Flush() {
+// errorCell is the ERROR cell for v, as a string: an error is its kerr name
+// or else its text, as ErrCell has it, and a Stringer is its String. A
+// string, Unknown, and nil are themselves, and a nil pointer of any type is
+// Unknown. Any other type is a programming error: it panics under go test,
+// and otherwise prints as fmt.Sprint with a warning on stderr, so a user
+// sees the cell rather than a crash.
+func (t *FormattedTable) errorCell(v any) any {
+	switch v := v.(type) {
+	case nil, unknown, string:
+		return v
+	}
+	if isNilPointer(v) {
+		return Unknown
+	}
+	switch v := v.(type) {
+	case error:
+		return ErrCell(v)
+	case fmt.Stringer:
+		return v.String()
+	}
+	return t.badCell("ERROR", v)
+}
+
+// messageCell is the MESSAGE cell for v, as a string: a *string from a kmsg
+// response is what it points to, "" when nil, as BrokerMessage has it. A nil
+// pointer of any other type is Unknown.
+func (t *FormattedTable) messageCell(v any) any {
+	switch v := v.(type) {
+	case nil, unknown, string:
+		return v
+	case *string:
+		return BrokerMessage(v)
+	}
+	if isNilPointer(v) {
+		return Unknown
+	}
+	return t.badCell("MESSAGE", v)
+}
+
+func isNilPointer(v any) bool {
+	rv := reflect.ValueOf(v)
+	return rv.Kind() == reflect.Pointer && rv.IsNil()
+}
+
+func (t *FormattedTable) badCell(column string, v any) string {
+	msg := fmt.Sprintf("kcl: %s prints a %s cell holding a %T, which is not a string; please report this", t.command, column, v)
+	if testing.Testing() {
+		panic(msg)
+	}
+	fmt.Fprintln(os.Stderr, msg)
+	return fmt.Sprint(v)
+}
+
+// Flush writes the buffered data in the configured format to stdout. It
+// returns ErrSilent when the table declares ResultColumns or ErrorColumn and
+// a row's ERROR is set, and nil otherwise, so a command ends with "return
+// table.Flush()".
+func (t *FormattedTable) Flush() error {
 	switch t.format {
 	case FormatJSON:
 		t.flushJSON()
@@ -67,15 +242,37 @@ func (t *FormattedTable) Flush() {
 	default:
 		t.flushText()
 	}
+	if t.errCol >= 0 {
+		for _, row := range t.rows {
+			if t.errCol < len(row) && isError(row[t.errCol]) {
+				return ErrSilent
+			}
+		}
+	}
+	return nil
+}
+
+// isError reports whether an ERROR cell names an error: Row made it a string,
+// and "", Unknown, and nil do not.
+func isError(v any) bool {
+	s, ok := v.(string)
+	return ok && s != ""
 }
 
 func (t *FormattedTable) flushText() {
+	if t.dryRun {
+		PrintDryRun()
+	}
 	tw := tabwriter.NewWriter(os.Stdout, 6, 4, 2, ' ', 0)
 	fmt.Fprint(tw, strings.Join(t.headers, "\t")+"\n")
 	for _, row := range t.rows {
 		strs := make([]string, len(row))
 		for i, v := range row {
-			strs[i] = fmt.Sprint(v)
+			if i == t.errCol && v == "" && t.okText {
+				strs[i] = "OK"
+				continue
+			}
+			strs[i] = textCell(v)
 		}
 		fmt.Fprint(tw, strings.Join(strs, "\t")+"\n")
 	}
@@ -88,7 +285,7 @@ func (t *FormattedTable) flushJSON() {
 		m := make(map[string]any, len(t.jsonKeys))
 		for j, key := range t.jsonKeys {
 			if j < len(row) {
-				m[key] = row[j]
+				m[key] = jsonCell(row[j])
 			}
 		}
 		data = append(data, m)
@@ -100,75 +297,145 @@ func (t *FormattedTable) flushJSON() {
 	if t.command != "" {
 		doc["_command"] = t.command
 	}
+	if t.dryRun {
+		doc[dryRunKey] = true
+	}
 	writeJSON(doc)
 }
 
 func (t *FormattedTable) flushAWK() {
 	for _, row := range t.rows {
-		strs := make([]string, len(row))
-		for i, v := range row {
-			strs[i] = fmt.Sprint(v)
+		AwkRow(row...)
+	}
+}
+
+// AwkRow prints one awk row, the values tab separated, with the cell rules a
+// table follows under --format awk. A command that prints awk rows by hand
+// uses this rather than fmt.Printf, so that the "-" for an empty cell is
+// written in one place.
+func AwkRow(values ...any) {
+	strs := make([]string, len(values))
+	for i, v := range values {
+		strs[i] = awkCell(v)
+	}
+	fmt.Println(strings.Join(strs, "\t"))
+}
+
+// awkCell is the awk text of one cell. An awk row has no empty field: a cell
+// that is Unknown, nil, or prints as "" is "-", so a script can count on every
+// column being there.
+func awkCell(v any) string {
+	if s, ok := cellText(v); ok && s != "" {
+		return s
+	}
+	return "-"
+}
+
+// textCell is the text of one cell: "-" for Unknown, nil, and a nil pointer,
+// and otherwise what the value prints as, an empty string included.
+func textCell(v any) string {
+	if s, ok := cellText(v); ok {
+		return s
+	}
+	return "-"
+}
+
+// cellText is what v prints as in text and awk, and false when v is not a
+// value at all: Unknown, nil, or a nil pointer. A slice is its elements
+// joined by "," with no brackets, so that a replica list is one awk field,
+// and an empty slice is "". A []byte is base64, as JSON prints it, since raw
+// bytes may hold the tab or newline that ends an awk field or row. A
+// pointer, the *string or *int64 a kmsg response carries, is what it points
+// to. A Stringer is its String, and anything else prints as fmt.Sprint does.
+func cellText(v any) (string, bool) {
+	switch v := v.(type) {
+	case nil, unknown:
+		return "", false
+	case string:
+		return v, true
+	case []string:
+		return strings.Join(v, ","), true
+	case []byte:
+		return base64.StdEncoding.EncodeToString(v), true
+	}
+	rv := reflect.ValueOf(v)
+	if rv.Kind() == reflect.Pointer && rv.IsNil() {
+		return "", false
+	}
+	if s, ok := v.(fmt.Stringer); ok {
+		return s.String(), true
+	}
+	switch rv.Kind() {
+	case reflect.Pointer:
+		return cellText(rv.Elem().Interface())
+	case reflect.Slice, reflect.Array:
+		strs := make([]string, rv.Len())
+		for i := range strs {
+			strs[i] = textCell(rv.Index(i).Interface())
 		}
-		fmt.Println(strings.Join(strs, "\t"))
+		return strings.Join(strs, ","), true
 	}
+	return fmt.Sprint(v), true
 }
 
-// Number is a number for a table cell whose value the cluster may not have
-// reported. JSON gets the number itself, or null when there is none; text and
-// awk get the digits, or the dash those columns already showed. Build one
-// with Num, or use NoNum.
-//
-// A cell holding strconv.FormatInt of a number reaches JSON as a string, and
-// "start":"0" sat beside "stable":5 in one list-offsets document. A cell
-// holding the int64 itself is a JSON number, so reach for Number only where
-// a dash is also possible.
-type Number struct {
-	v  int64
-	ok bool
+// jsonCell is v as JSON prints it. A nil slice is [], since a list a row
+// carries is known and empty rather than unknown; a type that marshals
+// itself is left to do so. A Stringer that does not is its String, the same
+// text awk prints: a kmsg enum is an int8 on the wire and would print as its
+// number, and a time.Duration as its nanoseconds.
+func jsonCell(v any) any {
+	if _, ok := v.(json.Marshaler); ok {
+		return v
+	}
+	if s, ok := v.(fmt.Stringer); ok && !isNilPointer(v) {
+		return s.String()
+	}
+	if rv := reflect.ValueOf(v); rv.Kind() == reflect.Slice && rv.IsNil() {
+		return []any{}
+	}
+	return v
 }
 
-// Num is the table cell for v.
-func Num[T int | int32 | int64](v T) Number { return Number{v: int64(v), ok: true} }
+// dryRunKey is the top-level JSON key a dry run carries, from both a table
+// under SetDryRun and MarshalJSON with DryRun.
+const dryRunKey = "dry_run"
 
-// NoNum is the table cell for a number the cluster did not report.
-var NoNum Number
-
-func (n Number) String() string {
-	if !n.ok {
-		return "-"
-	}
-	return strconv.FormatInt(n.v, 10)
+// PrintDryRun prints the text line that says a dry run changed nothing. A
+// table prints it itself under SetDryRun; a command that prints text of its
+// own calls this once, before its output.
+func PrintDryRun() {
+	fmt.Println("Dry run: nothing was changed.")
 }
 
-func (n Number) MarshalJSON() ([]byte, error) {
-	if !n.ok {
-		return []byte("null"), nil
+// Opt shapes the document MarshalJSON prints.
+type Opt func(doc map[string]any)
+
+// DryRun marks the document as the output of a dry run, adding "dry_run":true
+// at the top level when dry is true. It is the key a table adds under
+// SetDryRun.
+func DryRun(dry bool) Opt {
+	return func(doc map[string]any) {
+		if dry {
+			doc[dryRunKey] = true
+		}
 	}
-	return strconv.AppendInt(nil, n.v, 10), nil
 }
 
 // MarshalJSON outputs structured JSON with _command and _version metadata
 // alongside arbitrary additional fields. Use this for commands with
 // non-tabular or mixed output. Like an error document, this leaves _command
 // out when we have no command to name, which is only the bare root.
-func MarshalJSON(command string, version int, fields map[string]any) {
-	output := make(map[string]any, len(fields)+2)
+func MarshalJSON(command string, version int, fields map[string]any, opts ...Opt) {
+	output := make(map[string]any, len(fields)+3)
 	if command != "" {
 		output["_command"] = command
 	}
 	output["_version"] = version
 	maps.Copy(output, fields)
+	for _, opt := range opts {
+		opt(output)
+	}
 	writeJSON(output)
-}
-
-// DieJSON outputs a JSON error to stdout and exits with code 1.
-func DieJSON(command string, errCode string, message string) {
-	writeJSON(map[string]any{
-		"_command": command,
-		"error":    errCode,
-		"message":  message,
-	})
-	os.Exit(1)
 }
 
 // writeJSON writes v as one line. JSON output is for machines: a single line
@@ -180,4 +447,17 @@ func writeJSON(v any) {
 	if err := enc.Encode(v); err != nil {
 		Die("unable to marshal JSON: %v", err)
 	}
+}
+
+// Millis is a unix millisecond timestamp cell. Text and awk print the UTC
+// time in RFC 3339 as one word, so it is one awk field; JSON prints the
+// milliseconds themselves.
+type Millis int64
+
+func (m Millis) String() string {
+	return time.UnixMilli(int64(m)).UTC().Format("2006-01-02T15:04:05.000Z")
+}
+
+func (m Millis) MarshalJSON() ([]byte, error) {
+	return strconv.AppendInt(nil, int64(m), 10), nil
 }

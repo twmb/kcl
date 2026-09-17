@@ -3,6 +3,7 @@ package sharegroup
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/spf13/cobra"
 
@@ -24,9 +25,15 @@ Delete share group offsets for topics (KIP-932, Kafka 4.0+).
 
 The group must be empty (no active consumers). This deletes all offset state
 for the specified topics within the share group.
+
+EXAMPLES:
+  kcl share-group offset-delete mygroup -t foo -t bar
+
+SEE ALSO:
+  kcl share-group describe    describe share groups with lag
+  kcl share-group seek        reset share group start offsets
 `,
-		Example: "kcl share-group offset-delete mygroup -t foo -t bar",
-		Args:    cobra.MinimumNArgs(1),
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			group := args[0]
 			// Positional topics after the group are the old form, kept
@@ -50,29 +57,19 @@ for the specified topics within the share group.
 			}
 
 			if err := kerr.ErrorForCode(kresp.ErrorCode); err != nil {
-				msg := err.Error()
-				if kresp.ErrorMessage != nil {
-					msg += ": " + *kresp.ErrorMessage
-				}
-				return fmt.Errorf("%s", msg)
+				return out.BrokerErr(err, kresp.ErrorMessage)
 			}
 
 			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
-				"TOPIC", "STATUS")
+				"TOPIC", "ERROR", "MESSAGE").ResultColumns()
+			sort.Slice(kresp.Topics, func(i, j int) bool { return kresp.Topics[i].Topic < kresp.Topics[j].Topic })
 			for _, topic := range kresp.Topics {
-				errMsg := "OK"
-				if err := kerr.ErrorForCode(topic.ErrorCode); err != nil {
-					errMsg = err.Error()
-					if topic.ErrorMessage != nil {
-						errMsg += ": " + *topic.ErrorMessage
-					}
-				}
-				table.Row(topic.Topic, errMsg)
+				table.Row(topic.Topic, out.ErrName(topic.ErrorCode), out.BrokerMessage(topic.ErrorMessage))
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
+	out.Columns(cmd, "TOPIC", "ERROR", "MESSAGE")
 	cmd.Flags().StringArrayVarP(&topicFlags, "topic", "t", nil, "topic to delete offsets for; repeatable")
 	return cmd
 }

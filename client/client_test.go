@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/twmb/kcl/out"
 )
 
 func TestFormatDefault(t *testing.T) {
@@ -386,41 +388,42 @@ func TestFlagCfg(t *testing.T) {
 		wantErr   bool
 	}{
 		{
-			name: "nothing given is the defaults",
-			want: defaultCfg(),
+			// Only what was given is saved, so a profile created with no
+			// flags takes every default of the kcl that loads it.
+			name: "nothing given is nothing",
+			want: Cfg{},
 		},
 		{
 			name:      "bootstrap shorthand",
 			bootstrap: []string{"a:9092", "b:9092"},
-			want:      Cfg{SeedBrokers: []string{"a:9092", "b:9092"}, BrokerTimeout: Dur(5 * time.Second)},
+			want:      Cfg{SeedBrokers: []string{"a:9092", "b:9092"}},
 		},
 		{
 			name:      "bootstrap wins over -X seed_brokers",
 			flags:     []string{"seed_brokers=x:9092"},
 			bootstrap: []string{"a:9092"},
-			want:      Cfg{SeedBrokers: []string{"a:9092"}, BrokerTimeout: Dur(5 * time.Second)},
+			want:      Cfg{SeedBrokers: []string{"a:9092"}},
 		},
 		{
 			name:  "tls and sasl, dotted and legacy underscore",
-			flags: []string{"tls.ca_cert_path=/ca.pem", "sasl.method=scram-sha-256", "sasl_user=alice", "dial_timeout=2s", "broker_timeout=1s"},
+			flags: []string{"tls.ca_cert_path=/ca.pem", "sasl.mechanism=scram-sha-256", "sasl_user=alice", "dial_timeout=2s", "broker_timeout=1s"},
 			want: Cfg{
-				SeedBrokers:   []string{"localhost:9092"},
 				BrokerTimeout: Dur(time.Second),
 				DialTimeout:   Dur(2 * time.Second),
 				TLS:           &CfgTLS{CACert: "/ca.pem"},
-				SASL:          &CfgSASL{Method: "scram-sha-256", User: "alice"},
+				SASL:          &CfgSASL{Mechanism: "scram-sha-256", User: "alice"},
 			},
 		},
 		{
 			name:     "registry shorthand",
 			registry: []string{"http://sr:8081"},
-			want:     Cfg{SeedBrokers: []string{"localhost:9092"}, BrokerTimeout: Dur(5 * time.Second), SR: &CfgSR{URLs: []string{"http://sr:8081"}}},
+			want:     Cfg{SR: &CfgSR{URLs: []string{"http://sr:8081"}}},
 		},
 		{
 			name:      "environment is ignored",
 			env:       map[string]string{"KCL_SASL_PASS": "secret", "KCL_SEED_BROKERS": "env:9092"},
 			bootstrap: []string{"a:9092"},
-			want:      Cfg{SeedBrokers: []string{"a:9092"}, BrokerTimeout: Dur(5 * time.Second)},
+			want:      Cfg{SeedBrokers: []string{"a:9092"}},
 		},
 		{
 			name:    "unknown key",
@@ -437,6 +440,22 @@ func TestFlagCfg(t *testing.T) {
 			flags:   []string{"seed_brokers"},
 			wantErr: true,
 		},
+		{
+			// pflag parses -B '' as an empty, non-nil slice.
+			name:      "empty -B",
+			bootstrap: []string{},
+			wantErr:   true,
+		},
+		{
+			name:      "-B with an empty address",
+			bootstrap: []string{"a:9092", ""},
+			wantErr:   true,
+		},
+		{
+			name:     "empty -R",
+			registry: []string{},
+			wantErr:  true,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			for k, v := range test.env {
@@ -452,6 +471,9 @@ func TestFlagCfg(t *testing.T) {
 			got, err := c.FlagCfg()
 			if (err != nil) != test.wantErr {
 				t.Fatalf("err = %v, wantErr %v", err, test.wantErr)
+			}
+			if err != nil && out.ExitCode(err) != out.ExitUsage {
+				t.Errorf("err = %v, want exit %d", err, out.ExitUsage)
 			}
 			if err != nil {
 				return
@@ -574,7 +596,7 @@ func TestCfgFileLaysOverDefaults(t *testing.T) {
 
 func TestApplyCfgOptsUnsetAndBools(t *testing.T) {
 	tlsOn := func() Cfg { return Cfg{TLS: &CfgTLS{InsecureSkipVerify: true, CACert: "/ca"}} }
-	sasl := func() Cfg { return Cfg{SASL: &CfgSASL{Method: "plain", User: "u", Pass: "p"}} }
+	sasl := func() Cfg { return Cfg{SASL: &CfgSASL{Mechanism: "plain", User: "u", Pass: "p"}} }
 	for _, test := range []struct {
 		name    string
 		start   Cfg
@@ -587,7 +609,7 @@ func TestApplyCfgOptsUnsetAndBools(t *testing.T) {
 		{name: "bare boolean means true", opts: []string{"tls.insecure"}, want: Cfg{TLS: &CfgTLS{InsecureSkipVerify: true}}},
 		{name: "empty boolean unsets", start: tlsOn(), opts: []string{"tls.insecure="}, want: Cfg{TLS: &CfgTLS{CACert: "/ca"}}},
 		{name: "bad boolean", opts: []string{"tls.insecure=maybe"}, wantErr: "invalid boolean"},
-		{name: "empty string unsets and keeps the table", start: sasl(), opts: []string{"sasl.user="}, want: Cfg{SASL: &CfgSASL{Method: "plain", Pass: "p"}}},
+		{name: "empty string unsets and keeps the table", start: sasl(), opts: []string{"sasl.user="}, want: Cfg{SASL: &CfgSASL{Mechanism: "plain", Pass: "p"}}},
 		{name: "unsetting in an absent table stays absent", opts: []string{"sasl.user="}, want: Cfg{}},
 		{name: "table removal", start: sasl(), opts: []string{"sasl="}, want: Cfg{}},
 		{name: "table with a value", opts: []string{"sasl=x"}, wantErr: "is a table"},
@@ -738,6 +760,14 @@ func TestXListAndHelpCoverEveryKey(t *testing.T) {
 	help := XHelp()
 	for _, k := range CfgKeys() {
 		line := k.Name + "=" + k.Example
+		if k.Type == "table" {
+			// A table has no example; the list says what is under it.
+			line = k.Name + "=  (a table of " + k.Name + ".{"
+			if !strings.Contains(list, "\n"+line) {
+				t.Errorf("-X list lacks %q", line)
+			}
+			continue
+		}
 		if !strings.Contains(list, line+"\n") {
 			t.Errorf("-X list lacks %q", line)
 		}
@@ -748,8 +778,11 @@ func TestXListAndHelpCoverEveryKey(t *testing.T) {
 	if strings.Contains(list, "timeout_ms") || strings.Contains(help, "timeout_ms=") {
 		t.Error("the renamed timeout_ms is listed")
 	}
-	if !strings.Contains(list, "sasl=\n") {
-		t.Error("a table key should print as NAME= with nothing after")
+	if !strings.Contains(list, "sasl=  (a table of sasl.{is_token,mechanism,pass,user,zid}; bare sasl= removes them all)\n") {
+		t.Error("a table key should name the keys under it")
+	}
+	if !strings.Contains(list, "registry=  (a table of registry.{bearer_token,context,pass,tls.*,urls,user};") {
+		t.Error("a table under a table should be named with .*")
 	}
 	if !strings.Contains(help, "(-X sasl.pass=) unsets the key") {
 		t.Error("help does not say how to unset a bool")
@@ -758,7 +791,7 @@ func TestXListAndHelpCoverEveryKey(t *testing.T) {
 	if !slices.IsSortedFunc(keys, func(a, b CfgKey) int { return strings.Compare(a.Name, b.Name) }) {
 		t.Error("keys are not sorted by name")
 	}
-	if i := strings.Index(list, "\nregistry.tls=\n"); i < 0 || !strings.HasPrefix(list[i+len("\nregistry.tls=\n"):], "registry.tls.ca_cert_path=") {
+	if i := strings.Index(list, "\nregistry.tls=  "); i < 0 || !strings.HasPrefix(list[strings.Index(list[i+1:], "\n")+i+2:], "registry.tls.ca_cert_path=") {
 		t.Error("a table key should directly precede its own keys")
 	}
 	for _, line := range strings.Split(help, "\n") {
@@ -813,12 +846,12 @@ func TestMaybeXHelp(t *testing.T) {
 
 func TestDiskCfgKeepsReferences(t *testing.T) {
 	t.Setenv("KCL_TEST_PASS", "s3cret")
-	c := &Client{noCfgFile: true, format: "text", envPfx: "KCL_", flagOverrides: []string{"sasl.method=plain", "sasl.pass=${KCL_TEST_PASS}", "seed_brokers=${KCL_TEST_PASS}.example:1"}, cfg: defaultCfg()}
+	c := &Client{noCfgFile: true, format: "text", envPfx: "KCL_", flagOverrides: []string{"sasl.mechanism=plain", "sasl.pass=${KCL_TEST_PASS}", "seed_brokers=${KCL_TEST_PASS}.example:1"}, cfg: defaultCfg()}
 	c.loadCfg()
 	if c.cfg.SASL.Pass != "s3cret" || c.cfg.SeedBrokers[0] != "s3cret.example:1" {
 		t.Errorf("running cfg not expanded: %+v %v", c.cfg.SASL, c.cfg.SeedBrokers)
 	}
-	if c.cfgWritten.SASL.Pass != "${KCL_TEST_PASS}" || c.cfgWritten.SeedBrokers[0] != "${KCL_TEST_PASS}.example:1" || c.cfgWritten.SASL.Method != "plain" {
+	if c.cfgWritten.SASL.Pass != "${KCL_TEST_PASS}" || c.cfgWritten.SeedBrokers[0] != "${KCL_TEST_PASS}.example:1" || c.cfgWritten.SASL.Mechanism != "plain" {
 		t.Errorf("written cfg changed: %+v %v", c.cfgWritten.SASL, c.cfgWritten.SeedBrokers)
 	}
 }
@@ -850,7 +883,7 @@ func TestCfgCloneIsDeep(t *testing.T) {
 // TestDiskCfgNeedsNoSecrets pins that dump can read a config whose ${NAME}
 // references are unset, and that a client built from it still fails.
 func TestDiskCfgNeedsNoSecrets(t *testing.T) {
-	c := &Client{noCfgFile: true, format: "text", envPfx: "KCL_", flagOverrides: []string{"sasl.method=plain", "sasl.pass=${KCL_TEST_DEFINITELY_UNSET}"}, cfg: defaultCfg()}
+	c := &Client{noCfgFile: true, format: "text", envPfx: "KCL_", flagOverrides: []string{"sasl.mechanism=plain", "sasl.pass=${KCL_TEST_DEFINITELY_UNSET}"}, cfg: defaultCfg()}
 	if got := c.DiskCfg(); got.SASL == nil || got.SASL.Pass != "${KCL_TEST_DEFINITELY_UNSET}" {
 		t.Errorf("DiskCfg = %+v", got.SASL)
 	}
@@ -922,5 +955,216 @@ func TestXListSaysTheValuesAreExamples(t *testing.T) {
 	}
 	if !strings.Contains(XHelp(), "is an example of its shape") {
 		t.Error("-X help does not say the value with each key is an example")
+	}
+}
+
+// captureStderr runs fn and returns what it wrote to stderr.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stderr
+	os.Stderr = w
+	fn()
+	w.Close()
+	os.Stderr = old
+	b, _ := io.ReadAll(r)
+	return string(b)
+}
+
+// TestRegistrySectionAliases pins that [registry] is the section and
+// [schema_registry] its old name: either loads, [registry] wins when a file has
+// both and the file is warned about, and the loaded file carries the value
+// under SR only, so that writing it back writes [registry].
+func TestRegistrySectionAliases(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		file     string
+		profile  string
+		wantURL  string
+		wantWarn string
+	}{
+		{
+			name:    "registry in a profile",
+			file:    "current_profile = \"p\"\n[profiles.p.registry]\nurls = [\"http://new\"]\n",
+			profile: "p",
+			wantURL: "http://new",
+		},
+		{
+			name:    "schema_registry in a profile",
+			file:    "current_profile = \"p\"\n[profiles.p.schema_registry]\nurls = [\"http://old\"]\n",
+			profile: "p",
+			wantURL: "http://old",
+		},
+		{
+			name:     "both in a profile",
+			file:     "current_profile = \"p\"\n[profiles.p.registry]\nurls = [\"http://new\"]\n[profiles.p.schema_registry]\nurls = [\"http://old\"]\n",
+			profile:  "p",
+			wantURL:  "http://new",
+			wantWarn: `config key "profiles.p.schema_registry" in PATH is ignored; "profiles.p.registry" is also set and wins`,
+		},
+		{
+			name:    "flat schema_registry",
+			file:    "[schema_registry]\nurls = [\"http://old\"]\n",
+			wantURL: "http://old",
+		},
+		{
+			name:     "flat both",
+			file:     "[registry]\nurls = [\"http://new\"]\n[schema_registry]\nurls = [\"http://old\"]\n",
+			wantURL:  "http://new",
+			wantWarn: `config key "schema_registry" in PATH is ignored; "registry" is also set and wins`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(test.file), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			c := &Client{cfgPath: path, format: "text", cfg: defaultCfg()}
+			stderr := captureStderr(t, c.parseCfgFile)
+			if c.cfg.SR == nil || len(c.cfg.SR.URLs) != 1 || c.cfg.SR.URLs[0] != test.wantURL {
+				t.Errorf("SR = %+v, want urls [%s]", c.cfg.SR, test.wantURL)
+			}
+			if c.cfg.SchemaRegistry != nil {
+				t.Errorf("SchemaRegistry still set after loading: %+v", c.cfg.SchemaRegistry)
+			}
+			loaded := c.cfgFile.Cfg
+			if test.profile != "" {
+				loaded = c.cfgFile.Profiles[test.profile]
+			}
+			if loaded.SchemaRegistry != nil || loaded.SR == nil || loaded.SR.URLs[0] != test.wantURL {
+				t.Errorf("loaded file: SR = %+v, SchemaRegistry = %+v", loaded.SR, loaded.SchemaRegistry)
+			}
+			want := strings.ReplaceAll(test.wantWarn, "PATH", path)
+			switch {
+			case want == "" && stderr != "":
+				t.Errorf("unexpected stderr: %s", stderr)
+			case want != "" && !strings.Contains(stderr, want):
+				t.Errorf("stderr = %q, want containing %q", stderr, want)
+			case want != "" && strings.Count(stderr, "warning") != 1:
+				t.Errorf("want one warning, got: %s", stderr)
+			}
+		})
+	}
+}
+
+// TestRegistryKeyAliases pins that -X and the environment take
+// schema_registry.* as the old spelling of registry.*, that the current
+// spelling wins when both are set, and that only registry.* is listed.
+func TestRegistryKeyAliases(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		start Cfg
+		opts  []string
+		env   map[string]string
+		want  *CfgSR
+	}{
+		{name: "-X old name", opts: []string{"schema_registry.urls=http://x"}, want: &CfgSR{URLs: []string{"http://x"}}},
+		{name: "-X old tls name", opts: []string{"schema_registry.tls.insecure"}, want: &CfgSR{TLS: &CfgTLS{InsecureSkipVerify: true}}},
+		{name: "-X old table removes", start: Cfg{SR: &CfgSR{URLs: []string{"http://x"}}}, opts: []string{"schema_registry="}, want: nil},
+		{name: "-X both in order", opts: []string{"schema_registry.urls=http://old", "registry.urls=http://new"}, want: &CfgSR{URLs: []string{"http://new"}}},
+		{name: "env old name", env: map[string]string{"KCL_SCHEMA_REGISTRY_URLS": "http://old"}, want: &CfgSR{URLs: []string{"http://old"}}},
+		{name: "env current name", env: map[string]string{"KCL_REGISTRY_URLS": "http://new"}, want: &CfgSR{URLs: []string{"http://new"}}},
+		{name: "env both, current wins", env: map[string]string{"KCL_SCHEMA_REGISTRY_URLS": "http://old", "KCL_REGISTRY_URLS": "http://new"}, want: &CfgSR{URLs: []string{"http://new"}}},
+		{name: "env old user with current urls", env: map[string]string{"KCL_SCHEMA_REGISTRY_USER": "me", "KCL_REGISTRY_URLS": "http://new"}, want: &CfgSR{URLs: []string{"http://new"}, User: "me"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for k, v := range test.env {
+				t.Setenv(k, v)
+			}
+			c := &Client{noCfgFile: true, envPfx: "KCL_", format: "text", flagOverrides: test.opts, cfg: test.start}
+			c.processOverrides()
+			if !reflect.DeepEqual(c.cfg.SR, test.want) {
+				t.Errorf("SR = %+v, want %+v", c.cfg.SR, test.want)
+			}
+		})
+	}
+	for name, text := range map[string]string{"-X list": XList(), "-X help": XHelp(), "completions": strings.Join(XCompletions(), "\n")} {
+		if strings.Contains(text, "schema_registry.") {
+			t.Errorf("%s lists the old schema_registry.* names", name)
+		}
+	}
+	if !strings.Contains(XHelp(), "[schema_registry] is its old name") {
+		t.Error("-X help does not say the section's old name is still read")
+	}
+}
+
+// TestSASLMechanismAlias pins that sasl.mechanism is the key and sasl.method
+// its old name, from -X, the environment, and a file, with the current name
+// winning when a file has both.
+func TestSASLMechanismAlias(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		file     string
+		opts     []string
+		env      map[string]string
+		want     string
+		wantWarn string
+	}{
+		{name: "-X current", opts: []string{"sasl.mechanism=plain"}, want: "plain"},
+		{name: "-X old", opts: []string{"sasl.method=plain"}, want: "plain"},
+		{name: "-X old underscore form", opts: []string{"sasl_method=plain"}, want: "plain"},
+		{name: "env current", env: map[string]string{"KCL_SASL_MECHANISM": "plain"}, want: "plain"},
+		{name: "env old", env: map[string]string{"KCL_SASL_METHOD": "plain"}, want: "plain"},
+		{name: "env both, current wins", env: map[string]string{"KCL_SASL_METHOD": "plain", "KCL_SASL_MECHANISM": "scram-sha-256"}, want: "scram-sha-256"},
+		{name: "file current", file: "[sasl]\nmechanism = \"plain\"\n", want: "plain"},
+		{name: "file old", file: "[sasl]\nmethod = \"plain\"\n", want: "plain"},
+		{name: "file both", file: "[sasl]\nmethod = \"plain\"\nmechanism = \"scram-sha-256\"\n", want: "scram-sha-256", wantWarn: `config key "sasl.method" in PATH is ignored; "sasl.mechanism" is also set and wins`},
+		{name: "profile old", file: "current_profile = \"p\"\n[profiles.p.sasl]\nmethod = \"plain\"\n", want: "plain"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for k, v := range test.env {
+				t.Setenv(k, v)
+			}
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if test.file != "" {
+				if err := os.WriteFile(path, []byte(test.file), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			c := &Client{cfgPath: path, noCfgFile: test.file == "", envPfx: "KCL_", format: "text", flagOverrides: test.opts, cfg: defaultCfg()}
+			stderr := captureStderr(t, c.loadCfg)
+			if c.cfg.SASL == nil || c.cfg.SASL.Mechanism != test.want || c.cfg.SASL.Method != "" {
+				t.Errorf("SASL = %+v, want mechanism %q and no method", c.cfg.SASL, test.want)
+			}
+			want := strings.ReplaceAll(test.wantWarn, "PATH", path)
+			if want == "" && stderr != "" || want != "" && !strings.Contains(stderr, want) {
+				t.Errorf("stderr = %q, want %q", stderr, want)
+			}
+		})
+	}
+	if list := XList(); strings.Contains(list, "sasl.method") || !strings.Contains(list, "sasl.mechanism=") {
+		t.Errorf("-X list: %s", list)
+	}
+}
+
+// TestKCLProfileEnv pins that KCL_PROFILE selects the profile the way -C does,
+// and that -C wins when both are set.
+func TestKCLProfileEnv(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("current_profile = \"prod\"\n[profiles.prod]\nseed_brokers = [\"p:9092\"]\n[profiles.dev]\nseed_brokers = [\"d:9092\"]\n[profiles.ci]\nseed_brokers = [\"c:9092\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name string
+		env  string
+		flag string
+		want string
+	}{
+		{"current_profile", "", "", "p:9092"},
+		{"env", "dev", "", "d:9092"},
+		{"flag", "", "dev", "d:9092"},
+		{"flag wins", "ci", "dev", "d:9092"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("KCL_PROFILE", test.env)
+			c := &Client{cfgPath: path, format: "text", profileName: test.flag, cfg: defaultCfg()}
+			c.parseCfgFile()
+			if len(c.cfg.SeedBrokers) != 1 || c.cfg.SeedBrokers[0] != test.want {
+				t.Errorf("seed_brokers = %v, want [%s]", c.cfg.SeedBrokers, test.want)
+			}
+		})
 	}
 }

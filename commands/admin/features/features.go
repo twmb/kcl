@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -26,14 +27,26 @@ func Command(cl *client.Client) *cobra.Command {
 	return cmd
 }
 
+var (
+	describeHeaders = []string{"KIND", "NAME", "MIN-VERSION", "MAX-VERSION"}
+	updateHeaders   = []string{"FEATURE", "ERROR", "MESSAGE"}
+)
+
 func describeCommand(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "describe",
 		Short: "Describe cluster feature flags (Kafka 3.3+).",
 		Long: `Describe cluster feature flags (Kafka 3.3+).
 
 This command uses the ApiVersions response to print supported feature
-version ranges and finalized feature version ranges.
+version ranges and finalized feature version ranges. SUPPORTED rows come
+first, then FINALIZED, each sorted by name.
+
+EXAMPLES:
+  kcl cluster features describe
+
+SEE ALSO:
+  kcl cluster features update    update finalized feature versions
 `,
 		Args: cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
@@ -51,22 +64,33 @@ version ranges and finalized feature version ranges.
 				return fmt.Errorf("%v", err)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "features",
-				"KIND", "NAME", "MIN-VERSION", "MAX-VERSION")
-			for _, f := range resp.SupportedFeatures {
+			supported := slices.Clone(resp.SupportedFeatures)
+			slices.SortFunc(supported, func(a, b kmsg.ApiVersionsResponseSupportedFeature) int {
+				return strings.Compare(a.Name, b.Name)
+			})
+			finalized := slices.Clone(resp.FinalizedFeatures)
+			slices.SortFunc(finalized, func(a, b kmsg.ApiVersionsResponseFinalizedFeature) int {
+				return strings.Compare(a.Name, b.Name)
+			})
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "features", describeHeaders...)
+			for _, f := range supported {
 				table.Row("SUPPORTED", f.Name, f.MinVersion, f.MaxVersion)
 			}
-			for _, f := range resp.FinalizedFeatures {
+			for _, f := range finalized {
 				table.Row("FINALIZED", f.Name, f.MinVersionLevel, f.MaxVersionLevel)
 			}
-			table.Flush()
+			if err := table.Flush(); err != nil {
+				return err
+			}
 
-			if len(resp.SupportedFeatures) == 0 && len(resp.FinalizedFeatures) == 0 {
+			if len(supported) == 0 && len(finalized) == 0 && cl.Format() == out.FormatText {
 				fmt.Fprintln(os.Stderr, "No feature flags found.")
 			}
 			return nil
 		},
 	}
+	out.Columns(cmd, describeHeaders...)
+	return cmd
 }
 
 func updateCommand(cl *client.Client) *cobra.Command {
@@ -85,14 +109,24 @@ form FEATURE=VERSION, where VERSION is the new max version level for the
 feature. Set VERSION to 0 to delete a feature flag.
 
 --upgrade-type controls whether downgrades are permitted (v1+ of the API):
-  upgrade         only allow version increases (default)
-  safe-downgrade  allow lossless downgrades
+  upgrade           only allow version increases (default)
+  safe-downgrade    allow lossless downgrades
   unsafe-downgrade  allow lossy downgrades
 
-Use --dry-run to preview without applying.
+The result prints one row per feature with ERROR and MESSAGE. --dry-run
+validates the request without applying it; the rows then carry what the
+validation answered. A broker answering UpdateFeatures v2 reports only a
+request-wide error, so on success every feature prints as OK and on failure
+the command errors as a whole.
+
+EXAMPLES:
+  kcl cluster features update metadata.version=17
+  kcl cluster features update metadata.version=16 --upgrade-type safe-downgrade --dry-run
+
+SEE ALSO:
+  kcl cluster features describe    describe feature versions
 `,
-		Example: "kcl cluster features update metadata.version=17",
-		Args:    cobra.MinimumNArgs(1),
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			var upgrade int8
 			switch upgradeType {
@@ -103,7 +137,7 @@ Use --dry-run to preview without applying.
 			case "unsafe-downgrade":
 				upgrade = 3
 			default:
-				return fmt.Errorf("invalid --upgrade-type %q: want upgrade, safe-downgrade, unsafe-downgrade", upgradeType)
+				return out.Errf(out.ExitUsage, "invalid --upgrade-type %q: want upgrade, safe-downgrade, unsafe-downgrade", upgradeType)
 			}
 
 			req := kmsg.NewPtrUpdateFeaturesRequest()
@@ -113,11 +147,11 @@ Use --dry-run to preview without applying.
 			for _, arg := range args {
 				parts := strings.SplitN(arg, "=", 2)
 				if len(parts) != 2 {
-					return fmt.Errorf("invalid argument %q: expected FEATURE=VERSION", arg)
+					return out.Errf(out.ExitUsage, "invalid argument %q: expected FEATURE=VERSION", arg)
 				}
 				version, err := strconv.ParseInt(parts[1], 10, 16)
 				if err != nil {
-					return fmt.Errorf("invalid version in %q: %v", arg, err)
+					return out.Errf(out.ExitUsage, "invalid version in %q: %v", arg, err)
 				}
 				req.FeatureUpdates = append(req.FeatureUpdates, kmsg.UpdateFeaturesRequestFeatureUpdate{
 					Feature:         parts[0],
@@ -140,24 +174,35 @@ Use --dry-run to preview without applying.
 				return fmt.Errorf("%s%s", err, additional)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
-				"FEATURE", "ERROR", "MESSAGE")
-			for _, result := range resp.Results {
-				var errStr, msg string
-				if err := kerr.ErrorForCode(result.ErrorCode); err != nil {
-					errStr = err.Error()
-				}
-				if result.ErrorMessage != nil {
-					msg = *result.ErrorMessage
-				}
-				table.Row(result.Feature, errStr, msg)
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results", updateHeaders...).ResultColumns()
+			table.SetDryRun(dryRun)
+			for _, r := range resultRows(req, resp) {
+				table.Row(r...)
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
+	out.Columns(cmd, updateHeaders...)
 
 	cmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "validate the request without applying changes")
 	cmd.Flags().StringVar(&upgradeType, "upgrade-type", "upgrade", "upgrade | safe-downgrade | unsafe-downgrade")
 	return cmd
+}
+
+// resultRows is one row per feature. Through v1 the response answers each
+// feature; v2 dropped the per-feature results for one request-wide error,
+// so a v2 response that reached here (no top-level error) means every
+// feature in the request succeeded.
+func resultRows(req *kmsg.UpdateFeaturesRequest, resp *kmsg.UpdateFeaturesResponse) [][]any {
+	var rows [][]any
+	if resp.Version >= 2 {
+		for _, f := range req.FeatureUpdates {
+			rows = append(rows, []any{f.Feature, "", ""})
+		}
+		return rows
+	}
+	for _, r := range resp.Results {
+		rows = append(rows, []any{r.Feature, out.ErrName(r.ErrorCode), out.BrokerMessage(r.ErrorMessage)})
+	}
+	return rows
 }

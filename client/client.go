@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -51,7 +52,14 @@ type CfgTLS struct {
 }
 
 type CfgSASL struct {
-	Method  string `toml:"method,omitempty"`
+	// Mechanism is plain, scram-sha-256, scram-sha-512, or aws_msk_iam, the
+	// key every other Kafka tool spells sasl.mechanism.
+	Mechanism string `toml:"mechanism,omitempty"`
+
+	// Method is the old name of Mechanism. It is read forever and folded
+	// into Mechanism by FoldAliases; nothing writes it.
+	Method string `toml:"method,omitempty"`
+
 	Zid     string `toml:"zid,omitempty"`
 	User    string `toml:"user,omitempty"`
 	Pass    string `toml:"pass,omitempty"`
@@ -138,8 +146,39 @@ type Cfg struct {
 	TLS  *CfgTLS  `toml:"tls,omitzero"`
 	SASL *CfgSASL `toml:"sasl,omitempty"`
 
-	// SR configures the Schema Registry client.
-	SR *CfgSR `toml:"schema_registry,omitzero"`
+	// SR configures the Schema Registry client. Its section is [registry],
+	// the word -X and -R use.
+	SR *CfgSR `toml:"registry,omitzero"`
+
+	// SchemaRegistry is the old name of the [registry] section. It is read
+	// forever and folded into SR by FoldAliases; nothing writes it.
+	SchemaRegistry *CfgSR `toml:"schema_registry,omitzero"`
+}
+
+// FoldAliases moves what a file said under an old key to its current key,
+// [schema_registry] into [registry] and sasl.method into sasl.mechanism, and
+// clears the old one so that writing the config back writes the current name.
+// Where both were set the current key wins, and the old one is returned with
+// the key that won, as dotted paths under prefix ("profiles.prod."), for the
+// caller to warn about.
+func (c *Cfg) FoldAliases(prefix string) (dropped [][2]string) {
+	if c.SchemaRegistry != nil {
+		if c.SR == nil {
+			c.SR = c.SchemaRegistry
+		} else {
+			dropped = append(dropped, [2]string{prefix + "schema_registry", prefix + "registry"})
+		}
+		c.SchemaRegistry = nil
+	}
+	if c.SASL != nil && c.SASL.Method != "" {
+		if c.SASL.Mechanism == "" {
+			c.SASL.Mechanism = c.SASL.Method
+		} else {
+			dropped = append(dropped, [2]string{prefix + "sasl.method", prefix + "sasl.mechanism"})
+		}
+		c.SASL.Method = ""
+	}
+	return dropped
 }
 
 // CfgFile represents the full config file, which may contain named profiles.
@@ -150,6 +189,37 @@ type CfgFile struct {
 
 	// Flat fields for backward compat (single-profile config).
 	Cfg
+}
+
+// FoldAliases folds the old key names at the top level and in every profile;
+// see Cfg.FoldAliases.
+func (f *CfgFile) FoldAliases() (dropped [][2]string) {
+	dropped = f.Cfg.FoldAliases("")
+	for _, name := range slices.Sorted(maps.Keys(f.Profiles)) {
+		p := f.Profiles[name]
+		dropped = append(dropped, p.FoldAliases("profiles."+name+".")...)
+		f.Profiles[name] = p
+	}
+	return dropped
+}
+
+// DecodeCfgFile decodes the config file at path into f, folds the old key
+// names, and warns on stderr about any it dropped. The profile commands read
+// the file with this rather than toml.DecodeFile, so that an old name works
+// there too and is written back under its current name.
+func DecodeCfgFile(path string, f *CfgFile) (toml.MetaData, error) {
+	md, err := toml.DecodeFile(path, f)
+	if err != nil {
+		return md, err
+	}
+	warnDropped(path, f.FoldAliases())
+	return md, nil
+}
+
+func warnDropped(path string, dropped [][2]string) {
+	for _, d := range dropped {
+		fmt.Fprintf(os.Stderr, "kcl: warning: config key %q in %s is ignored; %q is also set and wins\n", d[0], path, d[1])
+	}
 }
 
 // Client contains kgo client options and a kgo client.
@@ -218,13 +288,15 @@ func (c *Client) dieErr(err error) {
 	out.HandleError(err, c.dieFormat(), c.command)
 }
 
-// Format returns the output format: "text", "json", or "awk".
-// If --dump-json is set and --format is not explicitly set, returns "json".
+// Format returns the output format: "text", "json", or "awk". If --dump-json
+// is set and --format is not explicitly set, returns "json". The fourth
+// value, awk-header, is answered in the persistent pre-run and never reaches
+// a running command.
 func (c *Client) Format() string {
 	switch c.format {
-	case "text", "json", "awk":
+	case out.FormatText, out.FormatJSON, out.FormatAWK, out.FormatAwkHeader:
 	default:
-		out.HandleError(out.Errf(out.ExitUsage, "invalid --format %q: must be text, json, or awk", c.format), out.FormatText, c.command)
+		out.HandleError(out.Errf(out.ExitUsage, "invalid --format %q: must be text, json, awk, or awk-header", c.format), out.FormatText, c.command)
 	}
 	if c.format != "text" {
 		return c.format
@@ -307,11 +379,10 @@ func New(root *cobra.Command) *Client {
 	root.PersistentFlags().StringSliceVarP(&c.bootstrapServers, "bootstrap-servers", "B", nil, "comma-separated list of seed brokers (overrides profile/config); shorthand for -X seed_brokers=...")
 	root.PersistentFlags().StringSliceVarP(&c.registryURLs, "registry", "R", nil, "comma-separated list of schema registry URLs (overrides profile/config); shorthand for -X registry.urls=...")
 	root.PersistentFlags().StringVar(&c.asVersion, "as-version", "", "if nonempty, which version of Kafka versions to use (e.g. '0.8.0', '2.3.0')")
-	root.PersistentFlags().StringVar(&c.format, "format", "text", "output format (text, json, awk)")
-	root.PersistentFlags().StringVarP(&c.profileName, "profile", "C", "", "use a specific config profile")
+	root.PersistentFlags().StringVar(&c.format, "format", "text", "output format (text, json, awk, awk-header)")
+	root.PersistentFlags().StringVarP(&c.profileName, "profile", "C", "", "use a specific config profile (also KCL_PROFILE; -C wins)")
 	root.PersistentFlags().BoolVarP(&c.asJSON, "dump-json", "j", false, "dump response as json if supported")
 	root.PersistentFlags().MarkDeprecated("dump-json", "use --format json instead")
-
 	// -X help and -X list are answered here, after cobra has parsed the
 	// flags so that --format applies. The registry group has a persistent
 	// pre-run of its own, and cobra runs only the nearest one unless told
@@ -321,12 +392,24 @@ func New(root *cobra.Command) *Client {
 	// client, and it reports the command we know from here rather than an
 	// error document with no _command. Every command reads it back with
 	// Command to name itself in what it prints.
+	//
+	// --format awk-header is answered first, before RunE builds a client:
+	// the header row is what the command registered with out.Columns, so
+	// nothing is dialed and no config is read. A command that registered
+	// no table prints nothing. The value is read off the command's own
+	// flags, so that consume and produce, whose local --format shadows
+	// the root's, answer it too.
 	cobra.EnableTraverseRunHooks = true
 	root.PersistentPreRun = func(cmd *cobra.Command, _ []string) {
-		c.SetCommand(out.CommandName(cmd.CommandPath()))
+		c.SetCommand(out.CommandOf(cmd))
+		if format, _ := cmd.Flags().GetString("format"); format == out.FormatAwkHeader {
+			fmt.Print(out.AwkHeader(cmd))
+			os.Exit(0)
+		}
 		if c.MaybeXHelp() {
 			os.Exit(0)
 		}
+		out.SetRunning(cmd)
 	}
 
 	return c
@@ -529,6 +612,7 @@ func (c *Client) parseCfgFile() {
 		}
 		c.cfgFile.Profiles[name] = p
 	}
+	warnDropped(c.cfgPath, c.cfgFile.FoldAliases())
 
 	// Warn on unknown keys so typos and stale names from old configs do
 	// not get silently dropped. This catches "timeout_ms" after the
@@ -542,8 +626,8 @@ func (c *Client) parseCfgFile() {
 
 	if len(raw.Profiles) > 0 {
 		name := raw.CurrentProfile
-		if c.profileName != "" {
-			name = c.profileName
+		if p := c.ProfileName(); p != "" {
+			name = p
 		}
 		if name == "" {
 			c.die(out.ExitUsage, "config has profiles but no current_profile set; use --profile or set current_profile in config")
@@ -555,6 +639,7 @@ func (c *Client) parseCfgFile() {
 		if err := md.PrimitiveDecode(prim, &c.cfg); err != nil {
 			c.die(out.ExitUsage, "unable to decode profile %q in %s: %v", name, c.cfgPath, err)
 		}
+		c.cfg.FoldAliases("") // already warned about above, in cfgFile
 		return
 	}
 
@@ -563,6 +648,7 @@ func (c *Client) parseCfgFile() {
 	if _, err := toml.DecodeFile(c.cfgPath, &c.cfg); err != nil {
 		c.die(out.ExitUsage, "unable to decode config file %q: %v", c.cfgPath, err)
 	}
+	c.cfg.FoldAliases("")
 }
 
 // CfgFilePath returns the path to the config file.
@@ -570,9 +656,14 @@ func (c *Client) CfgFilePath() string {
 	return c.cfgPath
 }
 
-// ProfileName returns the profile named by -C, or "" if none was given.
+// ProfileName returns the profile named by -C, else by KCL_PROFILE, or "" if
+// neither names one. KCL_PROFILE is for the shell that would otherwise pass
+// -C to every command, and -C wins over it.
 func (c *Client) ProfileName() string {
-	return c.profileName
+	if c.profileName != "" {
+		return c.profileName
+	}
+	return os.Getenv("KCL_PROFILE")
 }
 
 // LoadedCfgFile returns the full loaded config file (may include contexts).
@@ -592,7 +683,7 @@ type CfgKey struct {
 	Type    string
 
 	set    func(*Cfg, string) error
-	hidden bool // an old name that only errors
+	hidden bool // an old name: an alias that still works, or one that only errors
 }
 
 // xListHeader labels the column the values are in, which the json and awk
@@ -608,10 +699,32 @@ takes; "kcl -X help" describes each key and names its default.
 func XList() string {
 	var b strings.Builder
 	b.WriteString(xListHeader)
-	for _, k := range CfgKeys() {
+	keys := CfgKeys()
+	for _, k := range keys {
+		if k.Type == "table" {
+			fmt.Fprintf(&b, "%s=%s\n", k.Name, tableNote(k.Name, keys))
+			continue
+		}
 		fmt.Fprintf(&b, "%s=%s\n", k.Name, k.Example)
 	}
 	return b.String()
+}
+
+// tableNote is what -X list prints after a table key's "=", which has no
+// example of its own: the keys under it, and that the bare key removes them.
+func tableNote(name string, keys []CfgKey) string {
+	var under []string
+	for _, k := range keys {
+		rest, ok := strings.CutPrefix(k.Name, name+".")
+		if !ok || strings.Contains(rest, ".") {
+			continue
+		}
+		if k.Type == "table" {
+			rest += ".*"
+		}
+		under = append(under, rest)
+	}
+	return fmt.Sprintf("  (a table of %s.{%s}; bare %s= removes them all)", name, strings.Join(under, ","), name)
 }
 
 // XCompletions returns completions for the -X flag: each key with a
@@ -911,12 +1024,12 @@ var cfgKeys = func() []CfgKey {
 	keys = append(keys, tlsKeys("tls", tlsTable, func(c *Cfg) *CfgTLS { return c.TLS }, "TLS")...)
 	keys = append(keys,
 		table("sasl", "Turns SASL off (removes every sasl.* key).", saslTable),
-		str("sasl.method", "scram-sha-256", "plain, scram-sha-256, scram-sha-512, or aws_msk_iam.", saslTable, func(c *Cfg) *string { return &c.SASL.Method }),
+		str("sasl.mechanism", "scram-sha-256", "plain, scram-sha-256, scram-sha-512, or aws_msk_iam. sasl.method is its old name and still read.", saslTable, func(c *Cfg) *string { return &c.SASL.Mechanism }),
 		str("sasl.zid", "", "Authorization id, if not the user.", saslTable, func(c *Cfg) *string { return &c.SASL.Zid }),
 		str("sasl.user", "alice", "User name.", saslTable, func(c *Cfg) *string { return &c.SASL.User }),
 		str("sasl.pass", "${KAFKA_PASS}", "Password.", saslTable, func(c *Cfg) *string { return &c.SASL.Pass }),
 		boolean("sasl.is_token", "The password is a delegation token.", saslTable, func(c *Cfg) *bool { return &c.SASL.IsToken }),
-		table("registry", "Removes every registry.* key.", srTable),
+		table("registry", "Removes every registry.* key. The config section is [registry]; [schema_registry] is its old name and still read.", srTable),
 		list("registry.urls", "http://localhost:8081", "Registry URLs, comma separated. Default http://localhost:8081.", srTable, func(c *Cfg) *[]string { return &c.SR.URLs }),
 		str("registry.user", "alice", "Basic auth user name.", srTable, func(c *Cfg) *string { return &c.SR.User }),
 		str("registry.pass", "${SR_PASS}", "Basic auth password.", srTable, func(c *Cfg) *string { return &c.SR.Pass }),
@@ -924,6 +1037,18 @@ var cfgKeys = func() []CfgKey {
 		str("registry.context", ".mycontext", "Registry context.", srTable, func(c *Cfg) *string { return &c.SR.Context }),
 	)
 	keys = append(keys, tlsKeys("registry.tls", srTLSTable, func(c *Cfg) *CfgTLS { return c.SR.TLS }, "registry TLS")...)
+
+	// The old names still work from -X, the environment, and the file, and
+	// are shown nowhere: schema_registry.* for registry.*, and sasl.method
+	// for sasl.mechanism.
+	for _, k := range keys {
+		switch {
+		case k.Name == "registry" || strings.HasPrefix(k.Name, "registry."):
+			keys = append(keys, CfgKey{Name: "schema_" + k.Name, Type: k.Type, set: k.set, hidden: true})
+		case k.Name == "sasl.mechanism":
+			keys = append(keys, CfgKey{Name: "sasl.method", Type: k.Type, set: k.set, hidden: true})
+		}
+	}
 	return keys
 }()
 
@@ -1027,29 +1152,56 @@ func expandRefs(s string) (string, error) {
 }
 
 // applyShorthandFlags applies -B and -R, which win over any other setting
-// of seed_brokers and registry.urls.
-func (c *Client) applyShorthandFlags(cfg *Cfg) {
-	if len(c.bootstrapServers) > 0 {
+// of seed_brokers and registry.urls. A flag given with nothing in it, an
+// empty -B or -B a:9092, with a trailing comma, is a usage error: it used to
+// leave the setting alone, so the command ran against whatever the config
+// named.
+func (c *Client) applyShorthandFlags(cfg *Cfg) error {
+	if c.bootstrapServers != nil {
+		if err := checkAddrs("-B", c.bootstrapServers); err != nil {
+			return err
+		}
 		cfg.SeedBrokers = c.bootstrapServers
 	}
-	if len(c.registryURLs) > 0 {
+	if c.registryURLs != nil {
+		if err := checkAddrs("-R", c.registryURLs); err != nil {
+			return err
+		}
 		if cfg.SR == nil {
 			cfg.SR = new(CfgSR)
 		}
 		cfg.SR.URLs = c.registryURLs
 	}
+	return nil
+}
+
+func checkAddrs(flag string, addrs []string) error {
+	if len(addrs) == 0 {
+		return out.Errf(out.ExitUsage, "%s needs at least one address", flag)
+	}
+	for _, a := range addrs {
+		if strings.TrimSpace(a) == "" {
+			return out.Errf(out.ExitUsage, "%s has an empty address in %q", flag, strings.Join(addrs, ","))
+		}
+	}
+	return nil
 }
 
 func (c *Client) processOverrides() {
 	// Environment variables use the flattened (underscore) form, uppercased,
 	// since env var names cannot contain dots: KCL_REGISTRY_TLS_SERVER_NAME.
+	// The old names are read first, so that the current name wins when both
+	// are set.
 	var envOverrides []string
-	for k, key := range cfgSetters {
-		if key.Type == "table" {
-			continue
-		}
-		if v, exists := os.LookupEnv(c.envPfx + strings.ToUpper(k)); exists {
-			envOverrides = append(envOverrides, k+"="+v)
+	for _, old := range []bool{true, false} {
+		for _, key := range cfgKeys {
+			if key.hidden != old || key.Type == "table" {
+				continue
+			}
+			k := normCfgKey(key.Name)
+			if v, exists := os.LookupEnv(c.envPfx + strings.ToUpper(k)); exists {
+				envOverrides = append(envOverrides, k+"="+v)
+			}
 		}
 	}
 	if err := ApplyCfgOpts(&c.cfg, envOverrides); err != nil {
@@ -1058,7 +1210,9 @@ func (c *Client) processOverrides() {
 	if err := ApplyCfgOpts(&c.cfg, c.flagOverrides); err != nil {
 		c.dieErr(err)
 	}
-	c.applyShorthandFlags(&c.cfg)
+	if err := c.applyShorthandFlags(&c.cfg); err != nil {
+		c.dieErr(err)
+	}
 }
 
 // ApplyFlags applies the -X, -B, and -R flags to cfg, in that order so the
@@ -1076,21 +1230,24 @@ func (c *Client) ApplyFlags(cfg *Cfg) (set, unset []string, err error) {
 			set = append(set, k)
 		}
 	}
-	if len(c.bootstrapServers) > 0 {
+	if err := c.applyShorthandFlags(cfg); err != nil {
+		return nil, nil, err
+	}
+	if c.bootstrapServers != nil {
 		set = append(set, "seed_brokers")
 	}
-	if len(c.registryURLs) > 0 {
+	if c.registryURLs != nil {
 		set = append(set, "registry.urls")
 	}
-	c.applyShorthandFlags(cfg)
 	return set, unset, nil
 }
 
-// FlagCfg returns the defaults with the -X, -B, and -R flags laid over them.
-// This is what "kcl profile create" saves, so a new profile spells out what
-// it runs with.
+// FlagCfg returns the -X, -B, and -R flags laid over an empty Cfg: the keys
+// you gave and nothing else. This is what "kcl profile create" saves, so a
+// key you did not set takes the default of the kcl that loads the profile
+// rather than the default of the one that wrote it.
 func (c *Client) FlagCfg() (Cfg, error) {
-	cfg := defaultCfg()
+	var cfg Cfg
 	if _, _, err := c.ApplyFlags(&cfg); err != nil {
 		return Cfg{}, err
 	}
@@ -1112,9 +1269,7 @@ func (c *Client) maybeAddSASL() error {
 		return nil
 	}
 
-	method := Strnorm(c.cfg.SASL.Method)
-
-	switch method {
+	switch Strnorm(c.cfg.SASL.Mechanism) {
 	case "":
 	case "plain":
 		c.AddOpt(kgo.SASL(plain.Plain(func(context.Context) (plain.Auth, error) {
@@ -1157,7 +1312,7 @@ func (c *Client) maybeAddSASL() error {
 		})))
 
 	default:
-		return out.Errf(out.ExitUsage, "unrecognized / unhandled sasl method %q", c.cfg.SASL.Method)
+		return out.Errf(out.ExitUsage, "unrecognized / unhandled sasl mechanism %q", c.cfg.SASL.Mechanism)
 	}
 	return nil
 }

@@ -1,8 +1,10 @@
 package clientquotas
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -53,7 +55,16 @@ client-id, or ip, and value is the name to be matched. Default entities and
 omitted (any) entities just use the key.
 
 This command is a filtering type of command, where anything that passes the
-filter specified by flags is returned.
+filter specified by flags is returned. Rows are sorted by entity.
+
+EXAMPLES:
+  kcl quota describe                              # every quota
+  kcl quota describe --name user=alice            # quotas for user alice
+  kcl quota describe --default user               # the default user quota
+  kcl quota describe --any client-id --strict     # any client-id entity, and nothing else
+
+SEE ALSO:
+  kcl quota alter    alter client quotas
 `,
 		Args: cobra.ExactArgs(0),
 
@@ -111,34 +122,38 @@ filter specified by flags is returned.
 			}
 			resp := kresp.(*kmsg.DescribeClientQuotasResponse)
 
-			if resp.ErrorCode != 0 {
-				additional := ""
-				if resp.ErrorMessage != nil {
-					additional = ": " + *resp.ErrorMessage
-				}
-				return fmt.Errorf("%s%s", kerr.ErrorForCode(resp.ErrorCode), additional)
+			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+				return out.BrokerErr(err, resp.ErrorMessage)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "quotas",
-				"ENTITY", "KEY", "VALUE")
+			type row struct {
+				entity string
+				key    string
+				value  float64
+			}
+			var rows []row
 			for _, entry := range resp.Entries {
-				var entityParts []string
-				for _, entity := range entry.Entity {
-					name := "<default>"
-					if entity.Name != nil {
-						name = *entity.Name
-					}
-					entityParts = append(entityParts, entity.Type+"="+name)
+				var parts []entityPart
+				for _, e := range entry.Entity {
+					parts = append(parts, entityPart{e.Type, e.Name})
 				}
-				entityStr := "{" + strings.Join(entityParts, ", ") + "}"
+				entity := entityString(parts)
 				for _, value := range entry.Values {
-					table.Row(entityStr, value.Key, value.Value)
+					rows = append(rows, row{entity, value.Key, value.Value})
 				}
 			}
-			table.Flush()
-			return nil
+			slices.SortFunc(rows, func(a, b row) int {
+				return cmp.Or(strings.Compare(a.entity, b.entity), strings.Compare(a.key, b.key))
+			})
+
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "quotas", describeHeaders...)
+			for _, r := range rows {
+				table.Row(r.entity, r.key, r.value)
+			}
+			return table.Flush()
 		},
 	}
+	out.Columns(cmd, describeHeaders...)
 
 	cmd.Flags().StringArrayVar(&names, "name", nil, "type=name pair for exact name matching, where type is user, client-id, or ip; repeatable")
 	cmd.Flags().StringArrayVar(&defaults, "default", nil, "type for default matching, where type is user, client-id, or ip; repeatable")
@@ -146,6 +161,31 @@ filter specified by flags is returned.
 	cmd.Flags().BoolVar(&strict, "strict", false, "whether matches are strict, if true, entities with unspecified entity types are excluded")
 
 	return cmd
+}
+
+var (
+	describeHeaders = []string{"ENTITY", "KEY", "VALUE"}
+	alterHeaders    = []string{"ENTITY", "ERROR", "MESSAGE"}
+)
+
+// entityPart is one type=name of a quota entity; a nil name is the default
+// for the type.
+type entityPart struct {
+	typ  string
+	name *string
+}
+
+// entityString prints a quota entity as {user=alice, client-id=<default>}.
+func entityString(parts []entityPart) string {
+	strs := make([]string, len(parts))
+	for i, p := range parts {
+		name := "<default>"
+		if p.name != nil {
+			name = *p.name
+		}
+		strs[i] = p.typ + "=" + name
+	}
+	return "{" + strings.Join(strs, ", ") + "}"
 }
 
 func alterClientQuotas(cl *client.Client) *cobra.Command {
@@ -170,6 +210,17 @@ quotas, see the help text for client-quotas or read KIP-546.
 Similar to describing, this command matches. Where describing filters for only
 matches, this runs an alter on anything that matches.
 
+The result prints one row per entity with ERROR and MESSAGE. --dry-run
+validates the request without applying it; the row then carries what the
+validation answered.
+
+EXAMPLES:
+  kcl quota alter --name user=alice --add producer_byte_rate=1048576
+  kcl quota alter --default client-id --add consumer_byte_rate=2097152
+  kcl quota alter --name user=alice --delete producer_byte_rate
+
+SEE ALSO:
+  kcl quota describe    describe client quotas
 `,
 		Args: cobra.ExactArgs(0),
 
@@ -227,7 +278,7 @@ matches, this runs an alter on anything that matches.
 				k, v := split[0], split[1]
 				f, err := strconv.ParseFloat(v, 64)
 				if err != nil {
-					return fmt.Errorf("unable to parse add %q: %v", k, err)
+					return out.Errf(out.ExitUsage, "unable to parse add %q: %v", k, err)
 				}
 				ent.Ops = append(ent.Ops, kmsg.AlterClientQuotasRequestEntryOp{
 					Key:   k,
@@ -248,34 +299,19 @@ matches, this runs an alter on anything that matches.
 			}
 			resp := kresp.(*kmsg.AlterClientQuotasResponse)
 
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
-				"ENTITY", "STATUS", "MESSAGE")
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results", alterHeaders...).ResultColumns()
+			table.SetDryRun(dryRun)
 			for _, entry := range resp.Entries {
-				var entityParts []string
-				for _, entity := range entry.Entity {
-					name := "<default>"
-					if entity.Name != nil {
-						name = *entity.Name
-					}
-					entityParts = append(entityParts, entity.Type+"="+name)
+				var parts []entityPart
+				for _, e := range entry.Entity {
+					parts = append(parts, entityPart{e.Type, e.Name})
 				}
-				entityStr := "{" + strings.Join(entityParts, ", ") + "}"
-
-				code := "OK"
-				if err := kerr.ErrorForCode(entry.ErrorCode); err != nil {
-					code = err.Error()
-				}
-
-				msg := ""
-				if entry.ErrorMessage != nil {
-					msg = *entry.ErrorMessage
-				}
-				table.Row(entityStr, code, msg)
+				table.Row(entityString(parts), out.ErrName(entry.ErrorCode), out.BrokerMessage(entry.ErrorMessage))
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
+	out.Columns(cmd, alterHeaders...)
 
 	cmd.Flags().StringArrayVar(&names, "name", nil, "type=name pair for exact name matching, where type is user, client-id, or ip; repeatable")
 	cmd.Flags().StringArrayVar(&defaults, "default", nil, "type for default matching, where type is user, client-id, or ip; repeatable")

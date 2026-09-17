@@ -2,10 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"runtime"
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -104,6 +107,85 @@ func isPseudoVersion(v string) bool {
 	return false
 }
 
+// versionCommand prints what this kcl is: the version main resolves, and the
+// build details the Go toolchain stamps into the binary. It touches no
+// network.
+func versionCommand(cl *client.Client) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "version",
+		Short: "Print the kcl version and build details.",
+		Long: `Print the kcl version and build details.
+
+The version is the release this binary was built as, or dev plus the commit
+for a build from source. The git ref and build date come from the VCS stamp
+the Go toolchain adds to a build, and are "-" when a build carries none,
+such as a go install from the module proxy.
+
+EXAMPLES:
+  kcl version                      # aligned key and value lines
+  kcl version --format json        # {version, git_ref, build_date, go_version, os_arch}
+  kcl version --format awk         # one KEY<tab>value row per line
+`,
+		Args: cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			details := buildDetails()
+			switch cl.Format() {
+			case out.FormatJSON:
+				fields := make(map[string]any, len(details))
+				for _, d := range details {
+					fields[d.key] = d.value
+				}
+				out.MarshalJSON(cl.Command(), 1, fields)
+			case out.FormatAWK:
+				for _, d := range details {
+					out.AwkRow(d.key, d.value)
+				}
+			default:
+				tw := out.BeginTabWrite()
+				for _, d := range details {
+					fmt.Fprintf(tw, "%s\t%v\n", d.label, d.value)
+				}
+				tw.Flush()
+			}
+			return nil
+		},
+	}
+	out.Columns(cmd, "KEY", "VALUE")
+	return cmd
+}
+
+// buildDetail is one line of kcl version: the label text prints, the key JSON
+// and awk print, and the value, which is out.Unknown for a detail the build
+// does not carry.
+type buildDetail struct {
+	label string
+	key   string
+	value any
+}
+
+func buildDetails() []buildDetail {
+	var ref, date any = out.Unknown, out.Unknown
+	goVersion := runtime.Version()
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		goVersion = bi.GoVersion
+		for _, s := range bi.Settings {
+			switch s.Key {
+			case "vcs.revision":
+				ref = s.Value
+			case "vcs.time":
+				date = s.Value
+			}
+		}
+	}
+	return []buildDetail{
+		{"version", "version", resolveVersion()},
+		{"git ref", "git_ref", ref},
+		{"build date", "build_date", date},
+		{"go version", "go_version", goVersion},
+		{"os/arch", "os_arch", runtime.GOOS + "/" + runtime.GOARCH},
+	}
+}
+
 // buildRoot builds the whole command tree with the client it shares.
 func buildRoot() (*cobra.Command, *client.Client) {
 	v := resolveVersion()
@@ -147,15 +229,18 @@ Command completion is available at:
 	metadataCmd := metadata.Command(cl)
 	metadataCmd.Deprecated = "use 'kcl cluster metadata' instead"
 	metadataCmd.Hidden = true
+	out.AliasOf(metadataCmd, "cluster.metadata")
 
 	// Add hidden consume/produce aliases under topic.
 	topicCmd := topic.Command(cl)
 	topicConsume := consume.Command(cl)
 	topicConsume.Deprecated = "use 'kcl consume' instead"
 	topicConsume.Hidden = true
+	out.AliasOf(topicConsume, "consume")
 	topicProduce := produce.Command(cl)
 	topicProduce.Deprecated = "use 'kcl produce' instead"
 	topicProduce.Hidden = true
+	out.AliasOf(topicProduce, "produce")
 	topicCmd.AddCommand(topicConsume, topicProduce)
 
 	root.AddCommand(
@@ -183,6 +268,7 @@ Command completion is available at:
 		userscram.Command(cl),
 		txn.Command(cl),
 		fake.Command(),
+		versionCommand(cl),
 	)
 
 	allCommands(root, func(cmd *cobra.Command) {
@@ -217,7 +303,7 @@ func main() {
 	root, cl := buildRoot()
 
 	if wantsHelpJSON(os.Args[1:]) {
-		tree := buildCommandJSON(root, false)
+		tree := helpJSON{Version: 1, commandJSON: buildCommandJSON(root, false)}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		enc.Encode(tree)
@@ -225,12 +311,23 @@ func main() {
 	}
 
 	if cmd, err := root.ExecuteC(); err != nil {
-		var path string
-		if cmd != nil {
-			path = cmd.CommandPath()
-		}
-		out.HandleError(asUsageError(err), errFormat(root, cl), out.CommandName(path))
+		out.HandleError(asUsageError(err), errFormat(root, cmd, cl), errCommand(cmd, cl))
 	}
+}
+
+// errCommand is the _command an error document from a failed Execute
+// carries: the name the client recorded, which a command reached through a
+// hidden alias sets to its new path, or else cobra's path to the command,
+// which is all we have when the arguments failed to validate before any hook
+// ran. It is "" for a failure at the bare root.
+func errCommand(cmd *cobra.Command, cl *client.Client) string {
+	if name := cl.Command(); name != "" {
+		return name
+	}
+	if cmd != nil {
+		return out.CommandOf(cmd)
+	}
+	return ""
 }
 
 // errFormat is the format to report a failed Execute in. Flag parsing stops
@@ -238,13 +335,24 @@ func main() {
 // reaches --format and cl still holds the default. When that happens we scan
 // the arguments for the format you asked for, the same way wantsHelpJSON
 // scans for --help-json.
-func errFormat(root *cobra.Command, cl *client.Client) string {
-	if !root.PersistentFlags().Changed("format") {
+//
+// consume and produce own a --format of their own, the record format, which
+// shadows the root's; a "--format json" in their arguments asks for JSON
+// records, not a JSON error document, so for a leaf with a local format flag
+// we do not scan.
+func errFormat(root *cobra.Command, leaf *cobra.Command, cl *client.Client) string {
+	if !root.PersistentFlags().Changed("format") && !ownsFormat(leaf) {
 		if format := formatFromArgs(os.Args[1:]); format != "" {
 			return format
 		}
 	}
 	return cl.Format()
+}
+
+// ownsFormat reports whether cmd declares a --format flag of its own, which
+// shadows the root's persistent one.
+func ownsFormat(cmd *cobra.Command) bool {
+	return cmd != nil && cmd.LocalNonPersistentFlags().Lookup("format") != nil
 }
 
 // usageErrors wraps every command's argument validator and the flag error
@@ -254,6 +362,10 @@ func errFormat(root *cobra.Command, cl *client.Client) string {
 // itself only reports those at the root, and answered "kcl profile nope"
 // with the help text and exit 0. A bare group also runs checkFlags, so that
 // "kcl -X hlep" reports the bad key rather than printing the help.
+//
+// The validator is skipped under --format awk-header: the header row does
+// not depend on the arguments, and cobra validates them before the
+// persistent pre-run that answers the format.
 func usageErrors(root *cobra.Command, checkFlags func() error) {
 	allCommands(root, func(cmd *cobra.Command) {
 		if cmd.HasSubCommands() && !cmd.Runnable() {
@@ -274,15 +386,55 @@ func usageErrors(root *cobra.Command, checkFlags func() error) {
 			return
 		}
 		cmd.Args = func(c *cobra.Command, args []string) error {
+			if format, _ := c.Flags().GetString("format"); format == out.FormatAwkHeader {
+				return nil
+			}
 			if err := validate(c, args); err != nil {
 				return out.Errf(out.ExitUsage, "%v", err)
 			}
 			return nil
 		}
 	})
-	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+	root.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
+		if hint := boolFlagValueHint(cmd, err); hint != "" {
+			return out.Errf(out.ExitUsage, "%s", hint)
+		}
 		return out.Errf(out.ExitUsage, "%v", err)
 	})
+}
+
+// boolFlagValueHint rewrites pflag's error for a boolean flag given a value,
+// "--regex=PATTERN" on topic list, which pflag reports as a strconv.ParseBool
+// failure. A flag that used to take the pattern and now marks the arguments
+// as patterns is the case this is for, so the hint says where the value goes.
+// It returns "" for any other error.
+func boolFlagValueHint(cmd *cobra.Command, err error) string {
+	msg := err.Error()
+	if !strings.Contains(msg, "strconv.ParseBool") {
+		return ""
+	}
+	// pflag: invalid argument "PATTERN" for "-r, --regex" flag: strconv.ParseBool: ...
+	_, rest, ok := strings.Cut(msg, ` for "`)
+	if !ok {
+		return ""
+	}
+	names, _, ok := strings.Cut(rest, `" flag`)
+	if !ok {
+		return ""
+	}
+	name := names
+	if _, long, ok := strings.Cut(names, ", "); ok {
+		name = long
+	}
+	f := cmd.Flags().Lookup(strings.TrimPrefix(name, "--"))
+	if f == nil || f.Value.Type() != "bool" {
+		return ""
+	}
+	hint := fmt.Sprintf("flag %s takes no value", name)
+	if f.Name == "regex" {
+		hint += "; pass the pattern as an argument"
+	}
+	return hint
 }
 
 // asUsageError marks cobra's unknown command error, which no hook of ours
@@ -299,6 +451,13 @@ func allCommands(root *cobra.Command, fn func(*cobra.Command)) {
 		allCommands(cmd, fn)
 	}
 	fn(root)
+}
+
+// helpJSON is the --help-json document: the command tree, with _version so
+// that a consumer can tell this shape from the next one.
+type helpJSON struct {
+	Version int `json:"_version"`
+	commandJSON
 }
 
 type commandJSON struct {
@@ -322,6 +481,10 @@ type flagJSON struct {
 	Type        string `json:"type"`
 	Default     string `json:"default,omitempty"`
 	Description string `json:"description"`
+	// Hidden and Deprecated mark the old name of a renamed flag, kept so a
+	// script keeps working, so that tooling can leave it out.
+	Hidden     bool   `json:"hidden,omitempty"`
+	Deprecated string `json:"deprecated,omitempty"`
 }
 
 func buildCommandJSON(cmd *cobra.Command, parentHidden bool) commandJSON {
@@ -338,14 +501,7 @@ func buildCommandJSON(cmd *cobra.Command, parentHidden bool) commandJSON {
 	if len(cmd.Aliases) > 0 {
 		c.Aliases = cmd.Aliases
 	}
-	if cmd.Example != "" {
-		for _, line := range strings.Split(strings.TrimSpace(cmd.Example), "\n") {
-			line = strings.TrimSpace(line)
-			if line != "" {
-				c.Examples = append(c.Examples, line)
-			}
-		}
-	}
+	c.Examples = examples(cmd)
 
 	// Flags.
 	cmd.LocalFlags().VisitAll(func(f *pflag.Flag) {
@@ -356,6 +512,8 @@ func buildCommandJSON(cmd *cobra.Command, parentHidden bool) commandJSON {
 			Type:        f.Value.Type(),
 			Default:     f.DefValue,
 			Description: f.Usage,
+			Hidden:      f.Hidden,
+			Deprecated:  f.Deprecated,
 		}
 		if f.Shorthand != "" {
 			fj.Short = f.Shorthand
@@ -377,6 +535,44 @@ func buildCommandJSON(cmd *cobra.Command, parentHidden bool) commandJSON {
 		c.Commands[sub.Name()] = buildCommandJSON(sub, hidden)
 	}
 	return c
+}
+
+// examples returns the command lines of the EXAMPLES: block in cmd's long
+// help, the ones a user can paste, trimmed of their indent and with the
+// comment that follows a command kept. The block runs to the next heading
+// (SEE ALSO:) or the end of the help; its indented lines are the examples, a
+// line that is only a comment is skipped, and a line ending in a backslash
+// continues on the next. Every command writes its examples there rather than
+// in cobra's Example field, so that the help reads in one order.
+func examples(cmd *cobra.Command) []string {
+	var lines []string
+	var in, cont bool
+	for line := range strings.SplitSeq(cmd.Long, "\n") {
+		switch {
+		case line == "EXAMPLES:":
+			in = true
+		case !in:
+		case isHelpHeading(line):
+			in = false
+		case cont:
+			// The rest of a command that ended in a backslash.
+			cont = strings.HasSuffix(line, "\\")
+			lines[len(lines)-1] += " " + strings.TrimSpace(strings.TrimSuffix(line, "\\"))
+		case strings.HasPrefix(line, "  ") && !strings.HasPrefix(strings.TrimSpace(line), "#"):
+			cont = strings.HasSuffix(line, "\\")
+			lines = append(lines, strings.TrimSpace(strings.TrimSuffix(line, "\\")))
+		}
+	}
+	return lines
+}
+
+// isHelpHeading reports whether line is a heading of the long help, such as
+// EXAMPLES: or SEE ALSO:, capitals at the margin ending in a colon.
+func isHelpHeading(line string) bool {
+	if !strings.HasSuffix(line, ":") || line != strings.ToUpper(line) {
+		return false
+	}
+	return strings.ContainsFunc(line, unicode.IsLetter)
 }
 
 const usageTmpl = `USAGE:{{if and .Runnable (not .HasAvailableSubCommands)}}
@@ -446,9 +642,11 @@ func formatFromArgs(args []string) string {
 }
 
 // knownFormat returns v if it is a format out can print, otherwise "".
+// awk-header counts: an error under it is reported as text, not as a JSON
+// document.
 func knownFormat(v string) string {
 	switch v {
-	case out.FormatText, out.FormatJSON, out.FormatAWK:
+	case out.FormatText, out.FormatJSON, out.FormatAWK, out.FormatAwkHeader:
 		return v
 	}
 	return ""

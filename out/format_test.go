@@ -3,9 +3,15 @@ package out
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 func captureStdout(fn func()) string {
@@ -286,85 +292,6 @@ func TestFormattedTableTextAlignment(t *testing.T) {
 	}
 }
 
-func TestDieJSON(t *testing.T) {
-	// DieJSON calls os.Exit, so we can't test it directly.
-	// But we can test the JSON output it would produce via writeJSON.
-	output := captureStdout(func() {
-		writeJSON(map[string]any{
-			"_command": "test.cmd",
-			"error":    "NOT_FOUND",
-			"message":  "resource not found",
-		})
-	})
-
-	var result map[string]any
-	if err := json.Unmarshal([]byte(output), &result); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	if result["error"] != "NOT_FOUND" {
-		t.Errorf("error = %v", result["error"])
-	}
-	if result["message"] != "resource not found" {
-		t.Errorf("message = %v", result["message"])
-	}
-}
-
-func TestNumber(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		n      Number
-		expStr string
-		expRaw string
-	}{
-		{"a number", Num(5), "5", "5"},
-		{"zero", Num(0), "0", "0"},
-		{"negative", Num(int64(-1)), "-1", "-1"},
-		{"not reported", NoNum, "-", "null"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if got := test.n.String(); got != test.expStr {
-				t.Errorf("String() = %s != exp %s", got, test.expStr)
-			}
-			raw, err := json.Marshal(test.n)
-			if err != nil {
-				t.Fatalf("Marshal: %v", err)
-			}
-			if string(raw) != test.expRaw {
-				t.Errorf("Marshal = %s != exp %s", raw, test.expRaw)
-			}
-		})
-	}
-}
-
-func TestNumberInTable(t *testing.T) {
-	rows := func(format string) string {
-		return captureStdout(func() {
-			table := NewFormattedTable(format, "test.cmd", 1, "data", "NAME", "SIZE", "LAG")
-			table.Row("alpha", Num(395), NoNum)
-			table.Flush()
-		})
-	}
-
-	if got, exp := rows("awk"), "alpha\t395\t-\n"; got != exp {
-		t.Errorf("awk = %q != exp %q", got, exp)
-	}
-	if got := rows("text"); !strings.Contains(got, "alpha  395   -") {
-		t.Errorf("text = %q", got)
-	}
-
-	var result map[string]any
-	if err := json.Unmarshal([]byte(rows("json")), &result); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	first := result["data"].([]any)[0].(map[string]any)
-	if first["size"] != float64(395) {
-		t.Errorf("size = %v (type %T), want a JSON number", first["size"], first["size"])
-	}
-	if first["lag"] != nil {
-		t.Errorf("lag = %v (type %T), want null", first["lag"], first["lag"])
-	}
-}
-
 // TestEmptyCommandOmitted pins that a document with no command to name leaves
 // _command out rather than carrying an empty one, the rule ErrorDoc follows.
 // Only the bare root has no command.
@@ -395,4 +322,448 @@ func TestEmptyCommandOmitted(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCellRules pins how one cell prints per format: Unknown is "-" in text
+// and awk and null in JSON; "" is "-" in awk only; 0 and false are values.
+func TestCellRules(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		cell     any
+		text     string
+		awk      string
+		jsonText string
+	}{
+		{"unknown", Unknown, "-", "-", "null"},
+		{"nil", nil, "-", "-", "null"},
+		{"empty string", "", "", "-", `""`},
+		{"string", "x", "x", "x", `"x"`},
+		{"zero", 0, "0", "0", "0"},
+		{"false", false, "false", "false", "false"},
+		{"int64", int64(-1), "-1", "-1", "-1"},
+		{"int32 slice", []int32{0, 1, 2}, "0,1,2", "0,1,2", "[0,1,2]"},
+		{"int64 slice", []int64{5}, "5", "5", "[5]"},
+		{"string slice", []string{"a", "b"}, "a,b", "a,b", `["a","b"]`},
+		{"any slice", []any{"a", 1, nil}, "a,1,-", "a,1,-", `["a",1,null]`},
+		{"empty slice", []int32{}, "", "-", "[]"},
+		{"nil string pointer", (*string)(nil), "-", "-", "null"},
+		{"nil int64 pointer", (*int64)(nil), "-", "-", "null"},
+		{"string pointer", ptr("x"), "x", "x", `"x"`},
+		{"int64 pointer", ptr(int64(7)), "7", "7", "7"},
+		{"empty string pointer", ptr(""), "", "-", `""`},
+		{"bytes", []byte("raw"), "cmF3", "cmF3", `"cmF3"`},
+		{"bytes with a tab", []byte("a\tb\n"), "YQliCg==", "YQliCg==", `"YQliCg=="`},
+		{"stringer", stringer("s"), "s", "s", `"s"`},
+		{"kmsg enum", kmsg.ConfigSourceDynamicTopicConfig, "DYNAMIC_TOPIC_CONFIG", "DYNAMIC_TOPIC_CONFIG", `"DYNAMIC_TOPIC_CONFIG"`},
+		{"duration", 90 * time.Second, "1m30s", "1m30s", `"1m30s"`},
+		{"marshaler wins over stringer", marshaler{}, "s", "s", `{"m":1}`},
+		{"nil stringer pointer", (*marshaler)(nil), "-", "-", "null"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := textCell(test.cell); got != test.text {
+				t.Errorf("text = %q, want %q", got, test.text)
+			}
+			if got := awkCell(test.cell); got != test.awk {
+				t.Errorf("awk = %q, want %q", got, test.awk)
+			}
+			raw, err := json.Marshal(jsonCell(test.cell))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(raw) != test.jsonText {
+				t.Errorf("json = %s, want %s", raw, test.jsonText)
+			}
+		})
+	}
+}
+
+// marshaler is both a Stringer and a json.Marshaler; JSON is what it
+// marshals, not its String.
+type marshaler struct{}
+
+func (marshaler) String() string               { return "s" }
+func (marshaler) MarshalJSON() ([]byte, error) { return []byte(`{"m":1}`), nil }
+
+func ptr[T any](v T) *T { return &v }
+
+type stringer string
+
+func (s stringer) String() string { return string(s) }
+
+// TestSliceInTable pins that a list cell is one awk field with no brackets,
+// the same in text, and an array in JSON, with a nil slice printed as [].
+func TestSliceInTable(t *testing.T) {
+	rows := func(format string) string {
+		return captureStdout(func() {
+			table := NewFormattedTable(format, "topic.describe", 1, "partitions", "PARTITION", "REPLICAS", "ISR", "OFFLINE-REPLICAS", "NIL")
+			table.Row(0, []int32{0, 1, 2}, []int32{1}, []int32{}, []int32(nil))
+			table.Flush()
+		})
+	}
+	if got, exp := rows("awk"), "0\t0,1,2\t1\t-\t-\n"; got != exp {
+		t.Errorf("awk = %q, want %q", got, exp)
+	}
+	if got := rows("text"); !strings.Contains(got, "0          0,1,2     1") || strings.Contains(got, "[") {
+		t.Errorf("text = %q", got)
+	}
+	got := rows("json")
+	for _, want := range []string{`"replicas":[0,1,2]`, `"isr":[1]`, `"offline_replicas":[]`, `"nil":[]`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("json = %s, want %s", got, want)
+		}
+	}
+}
+
+// TestUnknownInTable drives the cell rules through the three writers, and
+// pins that the awk dash never reaches JSON: the "" a command wrote is the ""
+// JSON prints.
+func TestUnknownInTable(t *testing.T) {
+	rows := func(format string) string {
+		return captureStdout(func() {
+			table := NewFormattedTable(format, "test.cmd", 1, "data", "NAME", "SIZE", "LAG", "ERROR", "N", "B")
+			table.Row("alpha", int64(395), Unknown, "", 0, false)
+			table.Flush()
+		})
+	}
+	if got, exp := rows("awk"), "alpha\t395\t-\t-\t0\tfalse\n"; got != exp {
+		t.Errorf("awk = %q, want %q", got, exp)
+	}
+	if got := rows("text"); !strings.Contains(got, "alpha  395   -            0     false") {
+		t.Errorf("text = %q", got)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(rows("json")), &result); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	first := result["data"].([]any)[0].(map[string]any)
+	if first["size"] != float64(395) || first["lag"] != nil || first["error"] != "" || first["n"] != float64(0) || first["b"] != false {
+		t.Errorf("json row = %v", first)
+	}
+	if _, ok := first["lag"]; !ok {
+		t.Error("lag is absent, want null")
+	}
+}
+
+func TestAwkRow(t *testing.T) {
+	got := captureStdout(func() { AwkRow("topic", 0, "", Unknown, nil, false) })
+	if want := "topic\t0\t-\t-\t-\tfalse\n"; got != want {
+		t.Errorf("AwkRow = %q, want %q", got, want)
+	}
+}
+
+func TestWithKeys(t *testing.T) {
+	output := captureStdout(func() {
+		table := NewFormattedTable("json", "group.describe", 1, "groups", "GROUP", "STATE", "MEMBERS", "PARTITIONS", "LAG").
+			WithKeys(map[string]string{"MEMBERS": "member_count", "PARTITIONS": "partition_count", "LAG": "total_lag"})
+		table.Row("g", "Stable", 2, 4, 10)
+		table.Flush()
+	})
+	var result map[string]any
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("Unmarshal: %v: %s", err, output)
+	}
+	row := result["groups"].([]any)[0].(map[string]any)
+	for key, want := range map[string]any{"group": "g", "state": "Stable", "member_count": float64(2), "partition_count": float64(4), "total_lag": float64(10)} {
+		if row[key] != want {
+			t.Errorf("%s = %v, want %v", key, row[key], want)
+		}
+	}
+	for _, gone := range []string{"members", "partitions", "lag"} {
+		if _, ok := row[gone]; ok {
+			t.Errorf("derived key %q is still present: %v", gone, row)
+		}
+	}
+
+	defer func() {
+		if recover() == nil {
+			t.Error("WithKeys with a header the table lacks did not panic")
+		}
+	}()
+	NewFormattedTable("json", "x", 1, "rows", "A").WithKeys(map[string]string{"B": "b"})
+}
+
+// TestResultColumns pins the result shape: text prints OK for a "" ERROR,
+// awk prints "-", JSON keeps "", and Flush returns ErrSilent only when a row
+// carries an error. An Unknown ERROR, a plan row not yet run, is no error.
+func TestResultColumns(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		headers []string
+		rows    [][]any
+		wantErr bool
+		text    string
+		awk     string
+	}{
+		{
+			name:    "all ok",
+			headers: []string{"TOPIC", "ERROR", "MESSAGE"},
+			rows:    [][]any{{"a", "", ""}, {"b", "", ""}},
+			text:    "TOPIC  ERROR  MESSAGE\na      OK     \nb      OK     \n",
+			awk:     "a\t-\t-\nb\t-\t-\n",
+		},
+		{
+			name:    "one error",
+			headers: []string{"TOPIC", "ERROR", "MESSAGE"},
+			rows:    [][]any{{"a", "", ""}, {"b", "UNKNOWN_TOPIC_OR_PARTITION", "no such topic"}},
+			wantErr: true,
+			text:    "TOPIC  ERROR                       MESSAGE\na      OK                          \nb      UNKNOWN_TOPIC_OR_PARTITION  no such topic\n",
+			awk:     "a\t-\t-\nb\tUNKNOWN_TOPIC_OR_PARTITION\tno such topic\n",
+		},
+		{
+			name:    "unknown is not an error",
+			headers: []string{"TOPIC", "ERROR", "MESSAGE"},
+			rows:    [][]any{{"a", Unknown, Unknown}},
+			text:    "TOPIC  ERROR  MESSAGE\na      -      -\n",
+			awk:     "a\t-\t-\n",
+		},
+		{
+			name:    "error alone",
+			headers: []string{"TOPIC", "ERROR"},
+			rows:    [][]any{{"a", ""}, {"b", "boom"}},
+			wantErr: true,
+			text:    "TOPIC  ERROR\na      OK\nb      boom\n",
+			awk:     "a\t-\nb\tboom\n",
+		},
+		{
+			name:    "no rows",
+			headers: []string{"TOPIC", "ERROR", "MESSAGE"},
+			text:    "TOPIC  ERROR  MESSAGE\n",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, format := range []string{"text", "awk", "json"} {
+				var err error
+				got := captureStdout(func() {
+					table := NewFormattedTable(format, "topic.delete", 1, "results", test.headers...).ResultColumns()
+					for _, row := range test.rows {
+						table.Row(row...)
+					}
+					err = table.Flush()
+				})
+				if (err == ErrSilent) != test.wantErr || (err != nil && err != ErrSilent) {
+					t.Errorf("%s: Flush = %v, want ErrSilent %v", format, err, test.wantErr)
+				}
+				switch format {
+				case "text":
+					if got != test.text {
+						t.Errorf("text = %q, want %q", got, test.text)
+					}
+				case "awk":
+					if got != test.awk {
+						t.Errorf("awk = %q, want %q", got, test.awk)
+					}
+				case "json":
+					var doc map[string]any
+					if err := json.Unmarshal([]byte(got), &doc); err != nil {
+						t.Fatalf("json: %v: %s", err, got)
+					}
+					for i, row := range doc["results"].([]any) {
+						cell := row.(map[string]any)["error"]
+						switch want := test.rows[i][1]; want {
+						case Unknown:
+							if cell != nil {
+								t.Errorf("row %d error = %v, want null", i, cell)
+							}
+						default:
+							if cell != want {
+								t.Errorf("row %d error = %v, want %v", i, cell, want)
+							}
+						}
+					}
+				}
+			}
+		})
+	}
+
+	defer func() {
+		if recover() == nil {
+			t.Error("ResultColumns on a table that does not end in ERROR did not panic")
+		}
+	}()
+	NewFormattedTable("json", "x", 1, "rows", "ERROR", "TOPIC").ResultColumns()
+}
+
+// TestErrorColumn pins the read-only variant: a "" ERROR prints as nothing in
+// text rather than OK, "-" in awk, "" in JSON, and Flush still returns
+// ErrSilent when a row carries an error.
+func TestErrorColumn(t *testing.T) {
+	rows := [][]any{{"a", "", ""}, {"b", "NOT_LEADER_FOR_PARTITION", "moved"}}
+	for _, test := range []struct {
+		format string
+		want   string
+	}{
+		{"text", "TOPIC  ERROR                     MESSAGE\na                                \nb      NOT_LEADER_FOR_PARTITION  moved\n"},
+		{"awk", "a\t-\t-\nb\tNOT_LEADER_FOR_PARTITION\tmoved\n"},
+	} {
+		var err error
+		got := captureStdout(func() {
+			table := NewFormattedTable(test.format, "txn.list", 1, "rows", "TOPIC", "ERROR", "MESSAGE").ErrorColumn()
+			for _, row := range rows {
+				table.Row(row...)
+			}
+			err = table.Flush()
+		})
+		if err != ErrSilent {
+			t.Errorf("%s: Flush = %v, want ErrSilent", test.format, err)
+		}
+		if got != test.want {
+			t.Errorf("%s = %q, want %q", test.format, got, test.want)
+		}
+	}
+	var err error
+	got := captureStdout(func() {
+		table := NewFormattedTable("json", "txn.list", 1, "rows", "TOPIC", "ERROR").ErrorColumn()
+		table.Row("a", "")
+		err = table.Flush()
+	})
+	if err != nil || !strings.Contains(got, `"error":""`) {
+		t.Errorf("json: Flush = %v, out = %q", err, got)
+	}
+}
+
+// TestErrorCellTypes pins that a ResultColumns or ErrorColumn table's ERROR
+// and MESSAGE cells are strings by the time they print, whatever a command
+// handed Row: an error is its kerr name or its text, a Stringer its String,
+// a *string what it points to, and only a non-empty string is a failure. A
+// type Row cannot turn into a string panics under go test.
+func TestErrorCellTypes(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		err     any
+		msg     any
+		wantErr bool
+		awk     string
+		json    string
+	}{
+		{"strings", "UNKNOWN_TOPIC_OR_PARTITION", "gone", true, "a\tUNKNOWN_TOPIC_OR_PARTITION\tgone\n", `"error":"UNKNOWN_TOPIC_OR_PARTITION","message":"gone"`},
+		{"kerr", kerr.UnknownTopicOrPartition, ptr("gone"), true, "a\tUNKNOWN_TOPIC_OR_PARTITION\tgone\n", `"error":"UNKNOWN_TOPIC_OR_PARTITION","message":"gone"`},
+		{"wrapped kerr", fmt.Errorf("commit: %w", kerr.NotCoordinator), "", true, "a\tNOT_COORDINATOR\t-\n", `"error":"NOT_COORDINATOR","message":""`},
+		{"other error", errors.New("dial tcp: refused"), (*string)(nil), true, "a\tdial tcp: refused\t-\n", `"error":"dial tcp: refused","message":""`},
+		{"stringer", stringer("boom"), "", true, "a\tboom\t-\n", `"error":"boom","message":""`},
+		{"unknown", Unknown, Unknown, false, "a\t-\t-\n", `"error":null,"message":null`},
+		{"nil", nil, nil, false, "a\t-\t-\n", `"error":null,"message":null`},
+		{"nil kerr pointer", (*kerr.Error)(nil), (*int64)(nil), false, "a\t-\t-\n", `"error":null,"message":null`},
+		{"enum ERROR", kmsg.ConfigSourceDefaultConfig, "", true, "a\tDEFAULT_CONFIG\t-\n", `"error":"DEFAULT_CONFIG","message":""`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var err error
+			awk := captureStdout(func() {
+				table := NewFormattedTable("awk", "topic.delete", 1, "results", "TOPIC", "ERROR", "MESSAGE").ResultColumns()
+				table.Row("a", test.err, test.msg)
+				err = table.Flush()
+			})
+			if (err == ErrSilent) != test.wantErr || (err != nil && err != ErrSilent) {
+				t.Errorf("Flush = %v, want ErrSilent %v", err, test.wantErr)
+			}
+			if awk != test.awk {
+				t.Errorf("awk = %q, want %q", awk, test.awk)
+			}
+			js := captureStdout(func() {
+				table := NewFormattedTable("json", "topic.delete", 1, "results", "TOPIC", "ERROR", "MESSAGE").ResultColumns()
+				table.Row("a", test.err, test.msg)
+				table.Flush()
+			})
+			if !strings.Contains(js, test.json) {
+				t.Errorf("json = %s, want %s", js, test.json)
+			}
+		})
+	}
+
+	// The ERROR column alone is normalized the same way, and a row that the
+	// caller reuses is not written to.
+	row := []any{"a", kerr.NotController}
+	var err error
+	awk := captureStdout(func() {
+		table := NewFormattedTable("awk", "x", 1, "rows", "TOPIC", "ERROR").ErrorColumn()
+		table.Row(row...)
+		err = table.Flush()
+	})
+	if err != ErrSilent || awk != "a\tNOT_CONTROLLER\n" {
+		t.Errorf("ERROR alone: Flush = %v, awk = %q", err, awk)
+	}
+	if row[1] != kerr.NotController {
+		t.Errorf("Row wrote %v into the caller's slice", row[1])
+	}
+
+	for _, test := range []struct {
+		name string
+		row  []any
+	}{
+		{"int16 ERROR", []any{"a", int16(0), ""}},
+		{"bool ERROR", []any{"a", false, ""}},
+		{"error MESSAGE", []any{"a", "", errors.New("x")}},
+		{"int MESSAGE", []any{"a", "", 3}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("Row(%v) did not panic", test.row)
+				}
+			}()
+			NewFormattedTable("awk", "x", 1, "rows", "TOPIC", "ERROR", "MESSAGE").ResultColumns().Row(test.row...)
+		})
+	}
+}
+
+// TestDryRun pins the one phrasing: "dry_run":true at the top level of a JSON
+// document, the text line first, and nothing at all in awk.
+func TestDryRun(t *testing.T) {
+	table := func(format string, dry bool) string {
+		return captureStdout(func() {
+			table := NewFormattedTable(format, "topic.delete", 1, "results", "TOPIC", "ERROR", "MESSAGE").ResultColumns()
+			table.SetDryRun(dry)
+			table.Row("a", "", "")
+			table.Flush()
+		})
+	}
+	if got := table("text", true); got != "Dry run: nothing was changed.\nTOPIC  ERROR  MESSAGE\na      OK     \n" {
+		t.Errorf("text = %q", got)
+	}
+	if got := table("text", false); strings.Contains(got, "Dry run") {
+		t.Errorf("text without dry run = %q", got)
+	}
+	if got := table("awk", true); got != "a\t-\t-\n" {
+		t.Errorf("awk = %q", got)
+	}
+	for _, test := range []struct {
+		name string
+		out  string
+		want any
+	}{
+		{"table dry", table("json", true), true},
+		{"table real", table("json", false), nil},
+		{"MarshalJSON dry", captureStdout(func() { MarshalJSON("group.seek", 1, map[string]any{"group": "g"}, DryRun(true)) }), true},
+		{"MarshalJSON real", captureStdout(func() { MarshalJSON("group.seek", 1, map[string]any{"group": "g"}, DryRun(false)) }), nil},
+		{"MarshalJSON no opt", captureStdout(func() { MarshalJSON("group.seek", 1, map[string]any{"group": "g"}) }), nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var doc map[string]any
+			if err := json.Unmarshal([]byte(test.out), &doc); err != nil {
+				t.Fatalf("json: %v: %s", err, test.out)
+			}
+			got, ok := doc["dry_run"]
+			if test.want == nil && ok {
+				t.Errorf("dry_run is %v, want absent", got)
+			}
+			if test.want != nil && got != test.want {
+				t.Errorf("dry_run = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+// TestRowWidth pins that a row must have one cell per header: under go test
+// a short or long row panics, since a script counts on every column.
+func TestRowWidth(t *testing.T) {
+	for _, row := range [][]any{{"a"}, {"a", "b", "c"}} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("Row(%v) under two headers did not panic", row)
+				}
+			}()
+			NewFormattedTable("awk", "x", 1, "rows", "A", "B").Row(row...)
+		}()
+	}
+	NewFormattedTable("awk", "x", 1, "rows", "A", "B").Row("a", "b")
 }

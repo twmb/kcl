@@ -39,6 +39,7 @@ This installs kcl from the latest release. You can optionally suffix with
 `@v#.#.#` to install a specific version. When installed this way, kcl
 automatically reports itself to brokers as `kcl/<version>` via the Kafka
 protocol's client ID (useful for ACL audit logs and broker-side metrics).
+`kcl version` prints the version and build details of the binary you have.
 
 Otherwise, download a release from the
 [releases](https://github.com/twmb/kcl/releases) page.
@@ -70,7 +71,8 @@ Priority (highest wins):
 1. `-B/--bootstrap-servers` (seed brokers only)
 2. `-X key=value` flags (repeatable; any config key)
 3. `KCL_<KEY>` environment variables
-4. Active profile in the config file (`--profile/-C` or `current_profile`)
+4. Active profile in the config file (`--profile/-C`, `KCL_PROFILE`, or
+   `current_profile`)
 5. Top-level config file keys (flat layout)
 6. Built-in defaults
 
@@ -89,7 +91,7 @@ takes:
 
 ```
 kcl profile create prod -B kafka-prod-1:9092,kafka-prod-2:9092
-kcl profile create cicd -B kafka-staging:9092 -X dial_timeout=2s -X sasl.method=plain -X sasl.user=ci -X sasl.pass=secret
+kcl profile create cicd -B kafka-staging:9092 -X dial_timeout=2s -X sasl.mechanism=plain -X sasl.user=ci -X sasl.pass=secret
 ```
 
 If nothing is current yet, the new profile is; otherwise `kcl profile use NAME`.
@@ -172,7 +174,7 @@ acknowledged:
 
 The Schema Registry is a separate HTTP service from the Kafka brokers. Point
 kcl at it with `-R/--registry` (comma-separated URLs), `-X registry.urls=...`,
-or a `schema_registry` config section; it defaults to `http://localhost:8081`
+or a `registry` config section; it defaults to `http://localhost:8081`
 (mirroring the `localhost:9092` broker default). Auth is optional: basic auth
 (`registry.user` / `registry.pass`), a bearer token (`registry.bearer_token`),
 and TLS for `https` URLs (`registry.tls.*`, mirroring the Kafka `tls.*` keys).
@@ -181,20 +183,21 @@ and TLS for `https` URLs (`registry.tls.*`, mirroring the Kafka `tls.*` keys).
 `pkg/sr` API:
 
 ```
-kcl registry subjects                          # list subjects
-kcl registry versions mytopic-value            # list a subject's versions
+kcl registry subject list                      # list subjects
+kcl registry schema list mytopic-value         # list a subject's versions
 kcl registry schema list                       # all schemas across all subjects
 kcl registry schema create mytopic-value -s schema.avsc   # register (avro by default)
 kcl registry schema get -S mytopic-value       # latest schema for a subject
 kcl registry schema get --id 5                 # schema by global id
-kcl registry references mytopic-value          # schemas that reference this one
-kcl registry delete mytopic-value -v 3         # soft-delete a version (--permanent to hard)
-kcl registry compat set BACKWARD mytopic-value # set per-subject compatibility
-kcl registry compat get                        # global compatibility
-kcl registry compat test mytopic-value -s new.avsc --verbose   # check a candidate schema
+kcl registry schema references mytopic-value   # schemas that reference this one
+kcl registry schema delete mytopic-value -v 3  # soft-delete a version (--permanent to hard)
+kcl registry subject delete mytopic-value      # soft-delete a whole subject
+kcl registry compatibility set BACKWARD mytopic-value   # set per-subject compatibility
+kcl registry compatibility get                 # global compatibility
+kcl registry schema check-compatibility mytopic-value -s new.avsc --verbose   # check a candidate schema
 kcl registry mode get                          # global mode
 kcl registry context list                      # list contexts (namespaces)
-kcl registry --context myctx subjects          # scope to a context
+kcl registry --context myctx subject list      # scope to a context
 ```
 
 (`schema create` is also available as `schema register`.)
@@ -254,7 +257,7 @@ Redpanda (registry on 8081):
 docker run -d --name redpanda -p 9092:9092 -p 8081:8081 \
   redpandadata/redpanda redpanda start --schema-registry-addr 0.0.0.0:8081 \
   --kafka-addr 0.0.0.0:9092 --advertise-kafka-addr localhost:9092
-kcl -R http://localhost:8081 registry subjects
+kcl -R http://localhost:8081 registry subject list
 ```
 
 ## Local Fake Cluster
@@ -274,7 +277,7 @@ requests and is not performance-tuned. It's great for probing, learning,
 integration tests, CI pipelines, and demos without Docker.
 
 ```
-kcl fake                                 # 3 brokers on kfake-picked ports
+kcl fake                                 # 3 brokers on 9092,9093,9094
 kcl fake --ports 9092,9093,9094          # 3 brokers on specific ports
 kcl fake --ports 9092                    # single-broker cluster
 kcl fake -d /tmp/kfake --sync            # persistent, durable
@@ -327,25 +330,30 @@ kcl
  fake           -- start a local in-process kfake cluster for testing
  group          -- classic / KIP-848 consumer group operations
  logdirs        -- per-partition log directory operations
- misc           -- api-versions, list-offsets, raw-req, error lookups, completion
+ misc           -- api-versions, raw-req, error lookups, completion
  produce        -- produce records
  profile        -- manage connection profiles / config
  quota          -- alter/describe/resolve client quotas
  reassign       -- alter/list partition reassignments
  registry       -- schema registry: schemas, subjects, compatibility, mode
  share-group    -- share group operations (KIP-932)
- topic          -- list/create/describe/delete/add-partitions/trim-prefix
+ topic          -- list/create/describe/delete/add-partitions/trim-prefix/list-offsets
  txn            -- describe active transactions / producers
  user           -- SCRAM user credential management
 ```
 
 Output format for every command is controlled by the global `--format` flag
 (`text`, `json`, or `awk`). JSON output is stable (`{_command, _version, ...}`
-envelope) and suitable for piping into `jq`. Text output is tab-aligned;
-column names are hyphen-delimited (`GROUP-ID`, `LEADER-EPOCH`, etc.) so awk
-pipelines are straightforward. Note that `consume` and `produce`
-deliberately repurpose `--format` as the per-record format string
-(records don't fit the table envelope).
+envelope) and suitable for piping into `jq`. Text output is tab-aligned and
+may change between releases; awk output is headerless TSV with a stable
+column order, and an empty or unknown cell prints as `-` so every row has
+every field. To learn a command's columns, run it with `--format awk-header`:
+it prints the header row for the flags you gave and exits without connecting.
+Column names are hyphen-delimited (`TOPIC-ID`, `LEADER-EPOCH`, etc.). Every
+row that reports a per-item result ends in `ERROR` and `MESSAGE`: the Kafka
+error name and the text the broker attached, both empty on success. Note that
+`consume` and `produce` deliberately repurpose `--format` as the per-record
+format string (records don't fit the table envelope).
 
 For tooling and agents that want to introspect kcl's entire command tree
 programmatically (names, flags, examples, help text), use the global
@@ -357,7 +365,10 @@ kcl --help-json | jq '.commands[] | .name'
 
 Interactive confirmation prompts on destructive commands (`group seek`,
 `share-group seek`, `topic trim-prefix`, `config alter`, `acl delete`)
-are skipped with `--yes/-y`.
+are skipped with `--yes/-y`. When stdin is not a terminal the prompt answers
+no and the command prints the plan it would have carried out and exits 0, so
+`< /dev/null` is a scriptable dry run. Commands with `--dry-run/-d` mark the
+document with `"dry_run":true`.
 
 ## Examples
 
@@ -429,7 +440,8 @@ kcl topic create foo -p 6 -r 3                    # 6 partitions, 3 replicas
 kcl topic describe foo                            # partitions, configs, health
 kcl topic describe --topic-id <uuid>              # lookup by UUID (KIP-516)
 kcl cluster metadata                              # broker list, controller
-kcl cluster describe-cluster                      # admin view with fenced brokers
+kcl cluster describe                              # the DescribeCluster view
+kcl topic list-offsets foo --at -1h               # the offset an hour ago
 kcl cluster features describe                     # feature flags (KIP-584)
 kcl cluster features update share.version=1 --upgrade-type safe-downgrade
 kcl group list                                    # classic + KIP-848 + share groups
@@ -451,9 +463,9 @@ echo '{"id":"a","n":1}' | kcl produce foo --schema topic
 kcl consume foo -o start --decode
 
 # Inspect the registry:
-kcl registry subjects
+kcl registry subject list
 kcl registry schema get -S foo-value
-kcl registry compat get foo-value
+kcl registry compatibility get foo-value
 ```
 
 ### Probing against a local fake cluster
@@ -480,7 +492,9 @@ kcl -C fake topic list
 
 ### Error and exit codes
 
-Commands exit non-zero on any per-item failure (e.g. deleting one topic
-out of three, where one doesn't exist, exits 1). `--format json` output
-on stdout is always valid JSON; all errors go to stderr. This makes kcl
-safe to script against.
+Commands exit 0 on success, 1 on any Kafka-level or per-item failure (e.g.
+deleting one topic out of three, where one doesn't exist, exits 1), and 2
+on a usage error. Under `--format json` stdout is always one valid JSON
+document, an error included: a failed command prints
+`{_command, _version, code, error}`. Under text and awk, errors go to
+stderr. This makes kcl safe to script against.

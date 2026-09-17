@@ -1,14 +1,18 @@
 package sharegroup
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
@@ -21,45 +25,37 @@ func TestDeleteGroupResult(t *testing.T) {
 	for _, test := range []struct {
 		name        string
 		group       kmsg.DeleteGroupsResponseGroup
-		wantStatus  string
+		wantErr     string
 		wantMessage string
-		wantErr     bool
 	}{
 		{
-			name:       "ok",
-			group:      kmsg.DeleteGroupsResponseGroup{Group: "g"},
-			wantStatus: "OK",
+			name:  "ok",
+			group: kmsg.DeleteGroupsResponseGroup{Group: "g"},
 		},
 		{
-			name:       "error, no message",
-			group:      kmsg.DeleteGroupsResponseGroup{Group: "g", ErrorCode: kerr.NonEmptyGroup.Code},
-			wantStatus: "NON_EMPTY_GROUP: The group is not empty.",
-			wantErr:    true,
+			name:    "error, no message",
+			group:   kmsg.DeleteGroupsResponseGroup{Group: "g", ErrorCode: kerr.NonEmptyGroup.Code},
+			wantErr: "NON_EMPTY_GROUP",
 		},
 		{
 			name:        "error with a message",
 			group:       kmsg.DeleteGroupsResponseGroup{Group: "g", ErrorCode: kerr.NonEmptyGroup.Code, ErrorMessage: &msg},
-			wantStatus:  "NON_EMPTY_GROUP: The group is not empty.",
+			wantErr:     "NON_EMPTY_GROUP",
 			wantMessage: msg,
-			wantErr:     true,
 		},
 		{
-			name:       "an empty message is not a message",
-			group:      kmsg.DeleteGroupsResponseGroup{Group: "g", ErrorCode: kerr.NonEmptyGroup.Code, ErrorMessage: &empty},
-			wantStatus: "NON_EMPTY_GROUP: The group is not empty.",
-			wantErr:    true,
+			name:    "an empty message is not a message",
+			group:   kmsg.DeleteGroupsResponseGroup{Group: "g", ErrorCode: kerr.NonEmptyGroup.Code, ErrorMessage: &empty},
+			wantErr: "NON_EMPTY_GROUP",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			status, message, err := deleteGroupResult(test.group)
-			if status != test.wantStatus {
-				t.Errorf("status = %q, want %q", status, test.wantStatus)
+			errStr, message := deleteGroupResult(test.group)
+			if errStr != test.wantErr {
+				t.Errorf("error = %q, want %q", errStr, test.wantErr)
 			}
 			if message != test.wantMessage {
 				t.Errorf("message = %q, want %q", message, test.wantMessage)
-			}
-			if (err != nil) != test.wantErr {
-				t.Errorf("err = %v, want an error: %v", err, test.wantErr)
 			}
 		})
 	}
@@ -110,7 +106,7 @@ func TestDeleteJSONShape(t *testing.T) {
 		t.Fatalf("doc = %+v\n%s", doc, b)
 	}
 	got := doc.Results[0]
-	if got.Group != "nosuchgroup" || got.Error != "GROUP_ID_NOT_FOUND: The group id does not exist." || got.Message != "" {
+	if got.Group != "nosuchgroup" || got.Error != "GROUP_ID_NOT_FOUND" || got.Message != "" {
 		t.Errorf("result = %+v", got)
 	}
 	var keys map[string]any
@@ -118,5 +114,48 @@ func TestDeleteJSONShape(t *testing.T) {
 	results := keys["results"].([]any)
 	if _, ok := results[0].(map[string]any)["message"]; !ok {
 		t.Errorf("no message key: %s", b)
+	}
+}
+
+// TestDeleteLiveGroup pins the delete against a share group that exists:
+// an Empty one, whose member left, deletes cleanly, and one with a member
+// answers NON_EMPTY_GROUP and exits 1. kfake answered GROUP_ID_NOT_FOUND for
+// every share group before franz-go #1457.
+func TestDeleteLiveGroup(t *testing.T) {
+	c, cl := newTestCluster(t)
+	adm := kadm.NewClient(cl)
+	if _, err := adm.CreateTopic(t.Context(), 1, 1, nil, "t"); err != nil {
+		t.Fatal(err)
+	}
+	produceN(t, cl, "t", 2)
+
+	// The member leaves when joinShareGroup returns.
+	joinShareGroup(t, c, "sg-empty", 2, "t")
+	stdout, err := runShareGroup(t, c, "", "share-group", "delete", "sg-empty", "--format", "awk")
+	if err != nil {
+		t.Fatalf("delete sg-empty: %v\n%s", err, stdout)
+	}
+	if rows := awkRows(stdout); len(rows) != 1 || rows[0][1] != "sg-empty" || rows[0][2] != "-" {
+		t.Errorf("rows = %q, want sg-empty deleted with no error", rows)
+	}
+
+	// A member that stays.
+	c.SetGroupConfigs("sg-live", map[string]string{"share.auto.offset.reset": "earliest"})
+	m, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...), kgo.ShareGroup("sg-live"), kgo.ConsumeTopics("t"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if fs := m.PollFetches(ctx); fs.Err() != nil {
+		t.Fatal(fs.Err())
+	}
+	stdout, err = runShareGroup(t, c, "", "share-group", "delete", "sg-live", "--format", "awk")
+	if err != out.ErrSilent {
+		t.Fatalf("delete sg-live: err = %v, want ErrSilent\n%s", err, stdout)
+	}
+	if rows := awkRows(stdout); len(rows) != 1 || rows[0][1] != "sg-live" || rows[0][2] != "NON_EMPTY_GROUP" {
+		t.Errorf("rows = %q, want sg-live refused with NON_EMPTY_GROUP", rows)
 	}
 }

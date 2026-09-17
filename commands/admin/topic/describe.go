@@ -2,12 +2,11 @@ package topic
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -19,20 +18,52 @@ import (
 	"github.com/twmb/kcl/out"
 )
 
+// DescribeOpts are the flags of "kcl topic describe". "kcl topic list
+// --detailed" and "kcl cluster metadata --detailed" run Describe with the
+// defaults.
+type DescribeOpts struct {
+	Section         string // "", summary, partitions, or configs
+	Stable          bool
+	WithOverrides   bool
+	UnderReplicated bool
+	Unavailable     bool
+	UnderMinISR     bool
+	AtMinISR        bool
+	TopicIDs        [][16]byte
+}
+
+var (
+	describeSummaryHeaders    = []string{"TOPIC", "TOPIC-ID", "PARTITIONS", "REPLICATION", "ERROR"}
+	describePartitionsHeaders = []string{"TOPIC", "PARTITION", "LEADER", "LEADER-EPOCH", "REPLICAS", "ISR", "OFFLINE-REPLICAS", "START-OFFSET", "END-OFFSET", "STABLE-OFFSET", "ERROR"}
+	describeConfigsHeaders    = []string{"TOPIC", "KEY", "VALUE", "SOURCE", "SENSITIVE", "ERROR"}
+)
+
+// DescribeHeaders are the awk columns of a describe section, partitions when
+// section is "".
+func DescribeHeaders(section string) []string {
+	return describeHeaders(section)
+}
+
+// describeHeaders are the awk columns of a describe section; the default
+// section is partitions.
+func describeHeaders(section string) []string {
+	switch section {
+	case "summary":
+		return describeSummaryHeaders
+	case "configs":
+		return describeConfigsHeaders
+	}
+	return describePartitionsHeaders
+}
+
 func topicDescribeCommand(cl *client.Client) *cobra.Command {
 	var (
-		stable          bool
-		withOverrides   bool
-		underReplicated bool
-		unavailable     bool
-		underMinISR     bool
-		atMinISR        bool
-		section         string
-		topicIDs        []string
+		opts     DescribeOpts
+		topicIDs []string
 	)
 
 	cmd := &cobra.Command{
-		Use:     "describe TOPICS...",
+		Use:     "describe [TOPICS...]",
 		Aliases: []string{"d"},
 		Short:   "Describe topics with partition detail.",
 		Long: `Describe topics with partition detail.
@@ -40,14 +71,23 @@ func topicDescribeCommand(cl *client.Client) *cobra.Command {
 Describe topics showing summary, partitions, and optionally configs.
 
 By default in text mode, shows all sections. Use --section to select one.
-JSON always includes all sections.
+JSON carries the sections asked for, all of them by default.
 
---format awk prints the partition rows and nothing else: one row per
-partition, no headers, and a dash in a column we have no value for. The
-configs a topic runs with come from "kcl config describe TOPIC -tt", or from
---section configs here.
+--format awk prints one section: the partition rows by default, one row per
+partition, or the rows of the --section given. A partition row is TOPIC
+PARTITION LEADER LEADER-EPOCH REPLICAS ISR OFFLINE-REPLICAS START-OFFSET
+END-OFFSET STABLE-OFFSET ERROR; the offsets come from ListOffsets, and
+STABLE-OFFSET is filled only with --stable. A summary row is TOPIC TOPIC-ID
+PARTITIONS REPLICATION ERROR, and a configs row is TOPIC KEY VALUE SOURCE
+SENSITIVE ERROR. The configs a topic runs with also come from "kcl config
+describe TOPIC -tt". Text marks an internal topic with a * after its name;
+json carries internal as a key.
 
-Health filters show only partitions matching the condition.
+Health filters show only partitions matching the condition; the min ISR
+filters read min.insync.replicas from the topic's configs.
+
+A topic the broker answers with an error keeps its row, with the error in
+ERROR, and the command exits 1.
 
 An argument is a topic name; one shaped like a topic id that names no topic is
 looked up as an id instead. A name wins over an id, so --topic-id is how to
@@ -55,7 +95,7 @@ mean the id when a topic is named after one. Ids are 32 hex characters with
 optional dashes.
 
 EXAMPLES:
-  kcl topic describe foo                         # all sections
+  kcl topic describe foo                          # all sections
   kcl topic describe foo --section configs        # configs only
   kcl topic describe foo --under-replicated       # unhealthy partitions
   kcl topic describe foo --format json            # JSON output
@@ -63,495 +103,459 @@ EXAMPLES:
   kcl topic describe --topic-id 15fc1bf40a5c1c3cdd363ec28f5c0c69
 
 SEE ALSO:
-  kcl topic list         list topics
-  kcl topic create       create topics
-  kcl config describe    describe any resource config
+  kcl topic list          list topics
+  kcl topic list-offsets  start, stable, and end offsets with their epochs
+  kcl topic create        create topics
+  kcl config describe     describe any resource config
 `,
 		RunE: func(_ *cobra.Command, topics []string) error {
 			if len(topics) == 0 && len(topicIDs) == 0 {
 				return out.Errf(out.ExitUsage, "at least one topic name or --topic-id is required")
 			}
-			topics, err := flagutil.ResolveTopics(context.Background(), cl.Client(), topics)
-			if err != nil {
-				return err
-			}
-			// Parse and validate topic IDs up front.
-			parsedIDs := make([][16]byte, 0, len(topicIDs))
+			opts.TopicIDs = opts.TopicIDs[:0]
 			for _, raw := range topicIDs {
 				id, err := flagutil.ParseTopicID(raw)
 				if err != nil {
 					return out.Errf(out.ExitUsage, "invalid --topic-id %q: %v", raw, err)
 				}
-				parsedIDs = append(parsedIDs, id)
+				opts.TopicIDs = append(opts.TopicIDs, id)
 			}
-			// Validate --section.
-			switch section {
+			switch opts.Section {
 			case "", "summary", "partitions", "configs":
 			default:
-				return out.Errf(out.ExitUsage, "invalid --section %q: must be summary, partitions, or configs", section)
+				return out.Errf(out.ExitUsage, "invalid --section %q: must be summary, partitions, or configs", opts.Section)
 			}
-
-			// --section implies showing the requested data.
-			showSummary := section == "" || section == "summary"
-			showPartitions := section == "" || section == "partitions"
-			showConfigSection := section == "" || section == "configs"
-
-			kclClient := cl.Client()
-			ctx := context.Background()
-
-			// Fetch metadata for topics (by name or ID).
-			metaReq := kmsg.NewPtrMetadataRequest()
-			for _, t := range topics {
-				rt := kmsg.NewMetadataRequestTopic()
-				rt.Topic = kmsg.StringPtr(t)
-				metaReq.Topics = append(metaReq.Topics, rt)
-			}
-			for _, id := range parsedIDs {
-				rt := kmsg.NewMetadataRequestTopic()
-				rt.TopicID = id
-				// Topic left nil: broker resolves name via TopicID (v10+).
-				metaReq.Topics = append(metaReq.Topics, rt)
-			}
-			metaResp, err := metaReq.RequestWith(ctx, kclClient)
+			topics, err := flagutil.ResolveTopics(context.Background(), cl.Client(), topics)
 			if err != nil {
-				return fmt.Errorf("unable to request metadata: %v", err)
+				return err
 			}
-
-			// After resolution, operate on the response's topic names so
-			// downstream config/offset lookups work uniformly for
-			// name-referenced and ID-referenced topics. Dedupe the
-			// metadata response entries (the same topic shows up twice
-			// when a caller passes both its name and its ID).
-			if len(parsedIDs) > 0 {
-				inTopics := make(map[string]bool, len(topics))
-				for _, t := range topics {
-					inTopics[t] = true
-				}
-				emitted := make(map[string]bool, len(metaResp.Topics))
-				deduped := make([]kmsg.MetadataResponseTopic, 0, len(metaResp.Topics))
-				for _, mt := range metaResp.Topics {
-					name := strval(mt.Topic)
-					if mt.ErrorCode == 0 && name != "" {
-						if emitted[name] {
-							continue
-						}
-						emitted[name] = true
-						if !inTopics[name] {
-							topics = append(topics, name)
-							inTopics[name] = true
-						}
-					}
-					deduped = append(deduped, mt)
-				}
-				metaResp.Topics = deduped
-			}
-
-			// Optionally fetch configs.
-			var configsByTopic map[string][]kmsg.DescribeConfigsResponseResourceConfig
-			if showConfigSection || withOverrides {
-				var err error
-				configsByTopic, err = fetchTopicConfigs(ctx, kclClient, topics)
-				if err != nil {
-					return err
-				}
-			}
-
-			// --with-overrides: filter to topics that have non-default config values.
-			if withOverrides && configsByTopic != nil {
-				overridden := make(map[string]bool)
-				for t, cfgs := range configsByTopic {
-					for _, c := range cfgs {
-						if c.Source == 1 { // DYNAMIC_TOPIC
-							overridden[t] = true
-							break
-						}
-					}
-				}
-				var filtered []kmsg.MetadataResponseTopic
-				for _, t := range metaResp.Topics {
-					if overridden[strval(t.Topic)] {
-						filtered = append(filtered, t)
-					}
-				}
-				metaResp.Topics = filtered
-			}
-
-			// --stable: resolve committed (read_committed) offsets per partition.
-			var stableOffsets map[string]map[int32]int64
-			if stable {
-				stableOffsets = make(map[string]map[int32]int64)
-				for _, t := range topics {
-					req := kmsg.NewPtrListOffsetsRequest()
-					req.IsolationLevel = 1 // read_committed
-					rt := kmsg.NewListOffsetsRequestTopic()
-					rt.Topic = t
-					// We need partition IDs -- get them from metadata.
-					for _, mt := range metaResp.Topics {
-						if strval(mt.Topic) == t {
-							for _, p := range mt.Partitions {
-								rp := kmsg.NewListOffsetsRequestTopicPartition()
-								rp.Partition = p.Partition
-								rp.Timestamp = -1 // latest
-								rt.Partitions = append(rt.Partitions, rp)
-							}
-						}
-					}
-					req.Topics = append(req.Topics, rt)
-					shards := kclClient.RequestSharded(ctx, req)
-					for _, shard := range shards {
-						if shard.Err != nil {
-							continue
-						}
-						resp := shard.Resp.(*kmsg.ListOffsetsResponse)
-						for _, rt := range resp.Topics {
-							if stableOffsets[rt.Topic] == nil {
-								stableOffsets[rt.Topic] = make(map[int32]int64)
-							}
-							for _, rp := range rt.Partitions {
-								if kerr.ErrorForCode(rp.ErrorCode) == nil {
-									stableOffsets[rt.Topic][rp.Partition] = rp.Offset
-								}
-							}
-						}
-					}
-				}
-			}
-
-			// Build filtered partition lists for each topic.
-			type topicPartitions struct {
-				topic      kmsg.MetadataResponseTopic
-				partitions []kmsg.MetadataResponseTopicPartition
-			}
-			var described []topicPartitions
-			var anyTopicErr bool
-			for _, topic := range metaResp.Topics {
-				if err := kerr.ErrorForCode(topic.ErrorCode); err != nil {
-					anyTopicErr = true
-					if cl.Format() == "text" {
-						fmt.Fprintf(os.Stderr, "TOPIC %s: %v\n", strval(topic.Topic), err)
-					}
-					continue
-				}
-
-				// Apply health filters.
-				var partitions []kmsg.MetadataResponseTopicPartition
-				for _, p := range topic.Partitions {
-					if underReplicated && len(p.ISR) >= len(p.Replicas) {
-						continue
-					}
-					if unavailable && p.Leader >= 0 {
-						continue
-					}
-					if underMinISR || atMinISR {
-						// We'd need min.insync.replicas from configs.
-						// For now, just include all if these are set.
-					}
-					partitions = append(partitions, p)
-				}
-				if !underReplicated && !unavailable && !underMinISR && !atMinISR {
-					partitions = topic.Partitions
-				}
-				sort.Slice(partitions, func(i, j int) bool {
-					return partitions[i].Partition < partitions[j].Partition
-				})
-				described = append(described, topicPartitions{topic, partitions})
-			}
-
-			switch cl.Format() {
-			case "json":
-				type partJSON struct {
-					Partition       int32   `json:"partition"`
-					Leader          int32   `json:"leader"`
-					Epoch           int32   `json:"epoch"`
-					Replicas        []int32 `json:"replicas"`
-					ISR             []int32 `json:"isr"`
-					OfflineReplicas []int32 `json:"offline_replicas"`
-					Error           string  `json:"error,omitempty"`
-					StableOffset    *int64  `json:"stable_offset,omitempty"`
-				}
-				type configJSON struct {
-					Key       string `json:"key"`
-					Value     string `json:"value"`
-					Source    string `json:"source"`
-					Sensitive bool   `json:"sensitive"`
-				}
-				type topicJSON struct {
-					Topic       string       `json:"topic"`
-					TopicID     string       `json:"topic_id,omitempty"`
-					Partitions  int          `json:"partition_count"`
-					Replication int          `json:"replication_factor"`
-					Internal    bool         `json:"internal,omitempty"`
-					Details     []partJSON   `json:"partitions"`
-					Configs     []configJSON `json:"configs,omitempty"`
-				}
-				var topicsOut []topicJSON
-				for _, d := range described {
-					topicName := strval(d.topic.Topic)
-					tj := topicJSON{
-						Topic:      topicName,
-						Partitions: len(d.topic.Partitions),
-						Internal:   d.topic.IsInternal,
-					}
-					if d.topic.TopicID != [16]byte{} {
-						tj.TopicID = hex.EncodeToString(d.topic.TopicID[:])
-					}
-					if len(d.topic.Partitions) > 0 {
-						tj.Replication = len(d.topic.Partitions[0].Replicas)
-					}
-					for _, p := range d.partitions {
-						pj := partJSON{
-							Partition:       p.Partition,
-							Leader:          p.Leader,
-							Epoch:           p.LeaderEpoch,
-							Replicas:        p.Replicas,
-							ISR:             p.ISR,
-							OfflineReplicas: p.OfflineReplicas,
-						}
-						if pj.Replicas == nil {
-							pj.Replicas = []int32{}
-						}
-						if pj.ISR == nil {
-							pj.ISR = []int32{}
-						}
-						if pj.OfflineReplicas == nil {
-							pj.OfflineReplicas = []int32{}
-						}
-						if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
-							pj.Error = err.Error()
-						}
-						if stable {
-							if m, ok := stableOffsets[topicName]; ok {
-								if v, ok := m[p.Partition]; ok {
-									pj.StableOffset = &v
-								}
-							}
-						}
-						tj.Details = append(tj.Details, pj)
-					}
-					if showConfigSection && configsByTopic != nil {
-						if configs, ok := configsByTopic[topicName]; ok {
-							for _, c := range configs {
-								val := ""
-								if c.Value != nil {
-									val = *c.Value
-								}
-								tj.Configs = append(tj.Configs, configJSON{
-									Key:       c.Name,
-									Value:     val,
-									Source:    c.Source.String(),
-									Sensitive: c.IsSensitive,
-								})
-							}
-						}
-					}
-					topicsOut = append(topicsOut, tj)
-				}
-				out.MarshalJSON(cl.Command(), 1, map[string]any{
-					"topics": topicsOut,
-				})
-
-			case "awk":
-				awkSection := section
-				if awkSection == "" {
-					awkSection = "partitions"
-				}
-				for _, d := range described {
-					topicName := strval(d.topic.Topic)
-					switch awkSection {
-					case "summary":
-						replicas := 0
-						if len(d.topic.Partitions) > 0 {
-							replicas = len(d.topic.Partitions[0].Replicas)
-						}
-						fmt.Printf("%s\t%d\t%d\t%v\n",
-							topicName,
-							len(d.topic.Partitions),
-							replicas,
-							d.topic.IsInternal,
-						)
-					case "partitions":
-						for _, p := range d.partitions {
-							// Every column carries a value so that a
-							// row never ends in a tab: a dash is what
-							// the text columns already show for a
-							// value we do not have.
-							errStr := "-"
-							if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
-								errStr = err.Error()
-							}
-							if stable {
-								so := "-"
-								if m, ok := stableOffsets[topicName]; ok {
-									if v, ok := m[p.Partition]; ok {
-										so = fmt.Sprintf("%d", v)
-									}
-								}
-								fmt.Printf("%s\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%s\n",
-									topicName,
-									p.Partition,
-									p.Leader,
-									p.LeaderEpoch,
-									int32sToString(p.Replicas),
-									int32sToString(p.ISR),
-									int32sToString(p.OfflineReplicas),
-									so,
-									errStr,
-								)
-							} else {
-								fmt.Printf("%s\t%d\t%d\t%d\t%s\t%s\t%s\t%s\n",
-									topicName,
-									p.Partition,
-									p.Leader,
-									p.LeaderEpoch,
-									int32sToString(p.Replicas),
-									int32sToString(p.ISR),
-									int32sToString(p.OfflineReplicas),
-									errStr,
-								)
-							}
-						}
-					case "configs":
-						if configsByTopic != nil {
-							if configs, ok := configsByTopic[topicName]; ok {
-								for _, c := range configs {
-									val := ""
-									if c.Value != nil {
-										val = *c.Value
-									}
-									fmt.Printf("%s\t%s\t%s\t%s\t%v\n",
-										topicName,
-										c.Name,
-										val,
-										c.Source.String(),
-										c.IsSensitive,
-									)
-								}
-							}
-						}
-					}
-				}
-
-			default: // text
-				for ti, d := range described {
-					topicName := strval(d.topic.Topic)
-
-					// Summary section.
-					if showSummary {
-						tw := out.NewTabWriter()
-						fmt.Fprintf(tw, "TOPIC\t%s\n", topicName)
-						if d.topic.TopicID != [16]byte{} {
-							fmt.Fprintf(tw, "TOPIC-ID\t%x\n", d.topic.TopicID)
-						}
-						fmt.Fprintf(tw, "PARTITIONS\t%d\n", len(d.topic.Partitions))
-						if len(d.topic.Partitions) > 0 {
-							fmt.Fprintf(tw, "REPLICATION\t%d\n", len(d.topic.Partitions[0].Replicas))
-						}
-						if d.topic.IsInternal {
-							fmt.Fprintf(tw, "INTERNAL\ttrue\n")
-						}
-						tw.Flush()
-					}
-
-					// Partition table.
-					if showPartitions && len(d.partitions) > 0 {
-						headers := []string{"PARTITION", "LEADER", "EPOCH", "REPLICAS", "ISR", "OFFLINE-REPLICAS"}
-						if stable {
-							headers = append(headers, "STABLE-OFFSET")
-						}
-						table := out.NewTable(headers...)
-						for _, p := range d.partitions {
-							errSuffix := ""
-							if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
-								errSuffix = " (" + err.Error() + ")"
-							}
-							row := []any{
-								p.Partition,
-								p.Leader,
-								p.LeaderEpoch,
-								int32sToString(p.Replicas),
-								int32sToString(p.ISR),
-								int32sToString(p.OfflineReplicas) + errSuffix,
-							}
-							if stable {
-								so := "-"
-								if m, ok := stableOffsets[topicName]; ok {
-									if v, ok := m[p.Partition]; ok {
-										so = fmt.Sprintf("%d", v)
-									}
-								}
-								row = append(row, so)
-							}
-							table.Print(row...)
-						}
-						table.Flush()
-					}
-
-					// Configs section.
-					if showConfigSection && configsByTopic != nil {
-						if configs, ok := configsByTopic[topicName]; ok && len(configs) > 0 {
-							fmt.Println()
-							fmt.Println("CONFIGS:")
-							configTw := out.NewTable("KEY", "VALUE", "SOURCE", "SENSITIVE")
-							for _, c := range configs {
-								val := ""
-								if c.Value != nil {
-									val = *c.Value
-								}
-								source := c.Source.String()
-								configTw.Print(c.Name, val, source, c.IsSensitive)
-							}
-							configTw.Flush()
-						}
-					}
-
-					if ti < len(described)-1 {
-						fmt.Println()
-					}
-				}
-			}
-			if anyTopicErr {
-				// Exit non-zero so scripts can detect partial/total
-				// failure. The per-topic errors are already on stderr.
-				return out.ErrSilent
-			}
-			return nil
+			return Describe(cl, opts, topics)
 		},
 	}
+	out.ColumnsFunc(cmd, func() []string { return describeHeaders(opts.Section) })
 
-	cmd.Flags().StringVar(&section, "section", "", "output section (summary, partitions, configs; default: all for text, partitions for awk)")
-	cmd.Flags().BoolVar(&stable, "stable", false, "include stable (read_committed) offset column for transactional topics")
-	cmd.Flags().BoolVar(&withOverrides, "with-overrides", false, "only show topics with non-default config overrides (implies config fetching)")
-	cmd.Flags().BoolVar(&underReplicated, "under-replicated", false, "only show partitions where ISR < replicas")
-	cmd.Flags().BoolVar(&unavailable, "unavailable", false, "only show partitions with no leader")
-	cmd.Flags().BoolVar(&underMinISR, "under-min-isr", false, "only show partitions where ISR < min.insync.replicas")
-	cmd.Flags().BoolVar(&atMinISR, "at-min-isr", false, "only show partitions where ISR = min.insync.replicas")
+	cmd.Flags().StringVar(&opts.Section, "section", "", "output section (summary, partitions, configs; default: all for text, partitions for awk)")
+	cmd.Flags().BoolVar(&opts.Stable, "stable", false, "fill STABLE-OFFSET, the last stable (read_committed) offset, for transactional topics")
+	cmd.Flags().BoolVar(&opts.WithOverrides, "with-overrides", false, "only show topics with non-default config overrides (implies config fetching)")
+	cmd.Flags().BoolVar(&opts.UnderReplicated, "under-replicated", false, "only show partitions where ISR < replicas")
+	cmd.Flags().BoolVar(&opts.Unavailable, "unavailable", false, "only show partitions with no leader")
+	cmd.Flags().BoolVar(&opts.UnderMinISR, "under-min-isr", false, "only show partitions where ISR < min.insync.replicas")
+	cmd.Flags().BoolVar(&opts.AtMinISR, "at-min-isr", false, "only show partitions where ISR = min.insync.replicas")
 	cmd.Flags().StringArrayVar(&topicIDs, "topic-id", nil, "topic UUID to describe (repeatable; 32 hex chars with optional dashes)")
 
 	return cmd
 }
 
-func fetchTopicConfigs(ctx context.Context, cl kmsg.Requestor, topics []string) (map[string][]kmsg.DescribeConfigsResponseResourceConfig, error) {
+// describedTopic is one topic as describe prints it: its metadata, the
+// partitions the health filters kept, and its configs when asked for.
+type describedTopic struct {
+	meta       kmsg.MetadataResponseTopic
+	err        error
+	partitions []kmsg.MetadataResponseTopicPartition
+	configs    []kmsg.DescribeConfigsResponseResourceConfig
+}
+
+func (d *describedTopic) name() any {
+	if d.meta.Topic == nil {
+		return out.Unknown
+	}
+	return *d.meta.Topic
+}
+
+func (d *describedTopic) nameStr() string {
+	if d.meta.Topic == nil {
+		return ""
+	}
+	return *d.meta.Topic
+}
+
+func (d *describedTopic) replication() int {
+	if len(d.meta.Partitions) > 0 {
+		return len(d.meta.Partitions[0].Replicas)
+	}
+	return 0
+}
+
+// Describe is "kcl topic describe" for topics, which are names; ids come
+// through opts. The document names topic.describe from whichever command
+// ran it.
+func Describe(cl *client.Client, opts DescribeOpts, topics []string) error {
+	cl.SetCommand("topic.describe")
+
+	showSummary := opts.Section == "" || opts.Section == "summary"
+	showPartitions := opts.Section == "" || opts.Section == "partitions"
+	showConfigs := opts.Section == "" || opts.Section == "configs"
+	needConfigs := showConfigs || opts.WithOverrides || opts.UnderMinISR || opts.AtMinISR
+
+	kclClient := cl.Client()
+	ctx := context.Background()
+
+	metaReq := kmsg.NewPtrMetadataRequest()
+	for _, t := range topics {
+		rt := kmsg.NewMetadataRequestTopic()
+		rt.Topic = kmsg.StringPtr(t)
+		metaReq.Topics = append(metaReq.Topics, rt)
+	}
+	for _, id := range opts.TopicIDs {
+		rt := kmsg.NewMetadataRequestTopic()
+		rt.TopicID = id // Topic left nil: the broker resolves the name (v10+)
+		metaReq.Topics = append(metaReq.Topics, rt)
+	}
+	metaResp, err := metaReq.RequestWith(ctx, kclClient)
+	if err != nil {
+		return fmt.Errorf("unable to request metadata: %v", err)
+	}
+	SortTopics(metaResp.Topics)
+
+	// The same topic answers twice when you pass both its name and its id;
+	// keep the first. Downstream lookups go by name, so a topic resolved
+	// from an id joins the names.
+	var described []*describedTopic
+	seen := make(map[string]bool)
+	for _, mt := range metaResp.Topics {
+		d := &describedTopic{meta: mt, err: kerr.ErrorForCode(mt.ErrorCode)}
+		if name := d.nameStr(); name != "" && d.err == nil {
+			if seen[name] {
+				continue
+			}
+			seen[name] = true
+			if !slices.Contains(topics, name) {
+				topics = append(topics, name)
+			}
+		}
+		described = append(described, d)
+	}
+
+	var configsFailed bool
+	if needConfigs {
+		configsByTopic, failed, err := fetchTopicConfigs(ctx, kclClient, topics)
+		if err != nil {
+			return err
+		}
+		configsFailed = failed
+		for _, d := range described {
+			d.configs = configsByTopic[d.nameStr()]
+		}
+		if opts.WithOverrides {
+			described = slices.DeleteFunc(described, func(d *describedTopic) bool {
+				return d.err == nil && !slices.ContainsFunc(d.configs, func(c kmsg.DescribeConfigsResponseResourceConfig) bool {
+					return c.Source == kmsg.ConfigSourceDynamicTopicConfig
+				})
+			})
+		}
+	}
+
+	// Health filters.
+	for _, d := range described {
+		minISR, haveMinISR := minInsyncReplicas(d.configs)
+		for _, p := range d.meta.Partitions {
+			switch {
+			case opts.UnderReplicated && len(p.ISR) >= len(p.Replicas):
+			case opts.Unavailable && p.Leader >= 0:
+			case opts.UnderMinISR && (!haveMinISR || len(p.ISR) >= minISR):
+			case opts.AtMinISR && (!haveMinISR || len(p.ISR) != minISR):
+			default:
+				d.partitions = append(d.partitions, p)
+			}
+		}
+	}
+
+	// One start and one end listing for every partition kept, and the
+	// stable offsets only when asked, since that is a third request. No
+	// partition kept, every topic errored say, is no request; the nil
+	// listings answer nothing, and nothing asks them.
+	var starts, ends, stables listedOffsets
+	tps := make(map[string][]int32)
+	if showPartitions {
+		for _, d := range described {
+			for _, p := range d.partitions {
+				tps[d.nameStr()] = append(tps[d.nameStr()], p.Partition)
+			}
+		}
+	}
+	if len(tps) > 0 {
+		listings := []listOffsetsAt{{readUncommitted, tsStart}, {readUncommitted, tsEnd}}
+		if opts.Stable {
+			listings = append(listings, listOffsetsAt{readCommitted, tsEnd})
+		}
+		listed := listOffsetsAll(ctx, kclClient, tps, listings...)
+		starts, ends = listed[0], listed[1]
+		if opts.Stable {
+			stables = listed[2]
+		}
+	}
+
+	// partitionRow is one partition in the shape every format prints.
+	partitionRow := func(d *describedTopic, p kmsg.MetadataResponseTopicPartition) []any {
+		topic := d.nameStr()
+		var leader, epoch any = out.Unknown, out.Unknown
+		if p.Leader >= 0 {
+			leader = p.Leader
+		}
+		if p.LeaderEpoch >= 0 {
+			epoch = p.LeaderEpoch
+		}
+		var start, end, stable any = out.Unknown, out.Unknown, out.Unknown
+		errs := []error{kerr.ErrorForCode(p.ErrorCode)}
+		if showPartitions {
+			s, e := starts.get(topic, p.Partition), ends.get(topic, p.Partition)
+			start, end = s.cell(), e.cell()
+			errs = append(errs, s.err, e.err)
+			if opts.Stable {
+				st := stables.get(topic, p.Partition)
+				stable = st.cell()
+				errs = append(errs, st.err)
+			}
+		}
+		errStr := ""
+		for _, err := range errs {
+			if err != nil {
+				errStr = out.ErrCell(err)
+				break
+			}
+		}
+		return []any{
+			topic, p.Partition, leader, epoch,
+			orEmpty(p.Replicas), orEmpty(p.ISR), orEmpty(p.OfflineReplicas),
+			start, end, stable, errStr,
+		}
+	}
+	// failed is the exit: a topic or partition error in any branch, and a
+	// DescribeConfigs failure that has no row to carry it, so it is one
+	// flag rather than the awk table's Flush, which would cover only the
+	// rows of one format.
+	failed := configsFailed
+	for _, d := range described {
+		if d.err != nil {
+			failed = true
+		}
+	}
+
+	switch cl.Format() {
+	case out.FormatJSON:
+		type partJSON struct {
+			Partition       int32   `json:"partition"`
+			Leader          any     `json:"leader"`
+			LeaderEpoch     any     `json:"leader_epoch"`
+			Replicas        []int32 `json:"replicas"`
+			ISR             []int32 `json:"isr"`
+			OfflineReplicas []int32 `json:"offline_replicas"`
+			StartOffset     any     `json:"start_offset"`
+			EndOffset       any     `json:"end_offset"`
+			StableOffset    any     `json:"stable_offset"`
+			Error           string  `json:"error"`
+		}
+		type configJSON struct {
+			Key       string `json:"key"`
+			Value     string `json:"value"`
+			Source    string `json:"source"`
+			Sensitive bool   `json:"sensitive"`
+		}
+		type topicJSON struct {
+			Topic             any          `json:"topic"`
+			TopicID           any          `json:"topic_id"`
+			PartitionCount    any          `json:"partition_count"`
+			ReplicationFactor any          `json:"replication_factor"`
+			Internal          any          `json:"internal"`
+			Error             string       `json:"error"`
+			Partitions        []partJSON   `json:"partitions,omitzero"`
+			Configs           []configJSON `json:"configs,omitzero"`
+		}
+		topicsOut := make([]topicJSON, 0, len(described))
+		for _, d := range described {
+			tj := topicJSON{
+				Topic:             d.name(),
+				TopicID:           topicIDCell(d.meta.TopicID),
+				PartitionCount:    len(d.meta.Partitions),
+				ReplicationFactor: d.replication(),
+				Internal:          d.meta.IsInternal,
+			}
+			if d.err != nil {
+				tj.Error = out.ErrCell(d.err)
+				tj.PartitionCount, tj.ReplicationFactor, tj.Internal = out.Unknown, out.Unknown, out.Unknown
+			}
+			if showPartitions {
+				tj.Partitions = make([]partJSON, 0, len(d.partitions))
+				for _, p := range d.partitions {
+					row := partitionRow(d, p)
+					if row[10] != "" {
+						failed = true
+					}
+					tj.Partitions = append(tj.Partitions, partJSON{
+						Partition:       p.Partition,
+						Leader:          row[2],
+						LeaderEpoch:     row[3],
+						Replicas:        row[4].([]int32),
+						ISR:             row[5].([]int32),
+						OfflineReplicas: row[6].([]int32),
+						StartOffset:     row[7],
+						EndOffset:       row[8],
+						StableOffset:    row[9],
+						Error:           row[10].(string),
+					})
+				}
+			}
+			if showConfigs {
+				tj.Configs = make([]configJSON, 0, len(d.configs))
+				for _, c := range d.configs {
+					tj.Configs = append(tj.Configs, configJSON{
+						Key:       c.Name,
+						Value:     strval(c.Value),
+						Source:    c.Source.String(),
+						Sensitive: c.IsSensitive,
+					})
+				}
+			}
+			topicsOut = append(topicsOut, tj)
+		}
+		out.MarshalJSON(cl.Command(), 1, map[string]any{"topics": topicsOut})
+
+	case out.FormatAWK:
+		section := opts.Section
+		if section == "" {
+			section = "partitions"
+		}
+		table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "topics", describeHeaders(section)...)
+		for _, d := range described {
+			errStr := out.ErrCell(d.err)
+			switch section {
+			case "summary":
+				if d.err != nil {
+					table.Row(d.name(), topicIDCell(d.meta.TopicID), out.Unknown, out.Unknown, errStr)
+					continue
+				}
+				table.Row(d.name(), topicIDCell(d.meta.TopicID), len(d.meta.Partitions), d.replication(), errStr)
+			case "partitions":
+				if d.err != nil {
+					table.Row(d.name(), out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, errStr)
+					continue
+				}
+				for _, p := range d.partitions {
+					row := partitionRow(d, p)
+					if row[10] != "" {
+						failed = true
+					}
+					table.Row(row...)
+				}
+			case "configs":
+				if d.err != nil {
+					table.Row(d.name(), out.Unknown, out.Unknown, out.Unknown, out.Unknown, errStr)
+					continue
+				}
+				for _, c := range d.configs {
+					table.Row(d.name(), c.Name, strval(c.Value), c.Source.String(), c.IsSensitive, "")
+				}
+			}
+		}
+		table.Flush()
+
+	default:
+		for ti, d := range described {
+			if ti > 0 {
+				fmt.Println()
+			}
+			if showSummary || d.err != nil {
+				tw := out.NewTabWriter()
+				name := fmt.Sprint(d.name())
+				if d.meta.IsInternal {
+					name += "*"
+				}
+				fmt.Fprintf(tw, "TOPIC\t%s\n", name)
+				if d.meta.TopicID != [16]byte{} {
+					fmt.Fprintf(tw, "TOPIC-ID\t%x\n", d.meta.TopicID)
+				}
+				if d.err != nil {
+					fmt.Fprintf(tw, "ERROR\t%s\n", out.ErrCell(d.err))
+					tw.Flush()
+					continue
+				}
+				fmt.Fprintf(tw, "PARTITIONS\t%d\n", len(d.meta.Partitions))
+				fmt.Fprintf(tw, "REPLICATION\t%d\n", d.replication())
+				tw.Flush()
+			}
+
+			if showPartitions && len(d.partitions) > 0 {
+				if showSummary {
+					fmt.Println()
+				}
+				// The topic is the summary's; STABLE-OFFSET is hidden
+				// unless --stable filled it.
+				keep := []int{1, 2, 3, 4, 5, 6, 7, 8, 10}
+				if opts.Stable {
+					keep = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+				}
+				table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "partitions", pick(describePartitionsHeaders, keep)...)
+				for _, p := range d.partitions {
+					row := partitionRow(d, p)
+					if row[10] != "" {
+						failed = true
+					}
+					table.Row(pick(row, keep)...)
+				}
+				table.Flush()
+			}
+
+			if showConfigs && len(d.configs) > 0 {
+				fmt.Println()
+				fmt.Println("CONFIGS:")
+				table := out.NewTable("KEY", "VALUE", "SOURCE", "SENSITIVE")
+				for _, c := range d.configs {
+					table.Print(c.Name, strval(c.Value), c.Source.String(), c.IsSensitive)
+				}
+				table.Flush()
+			}
+		}
+	}
+	if failed {
+		return out.ErrSilent
+	}
+	return nil
+}
+
+// minInsyncReplicas is the topic's min.insync.replicas, if its configs carry
+// one we can read.
+func minInsyncReplicas(configs []kmsg.DescribeConfigsResponseResourceConfig) (int, bool) {
+	for _, c := range configs {
+		if c.Name != "min.insync.replicas" || c.Value == nil {
+			continue
+		}
+		n, err := strconv.Atoi(*c.Value)
+		return n, err == nil
+	}
+	return 0, false
+}
+
+func orEmpty(vals []int32) []int32 {
+	if vals == nil {
+		return []int32{}
+	}
+	return vals
+}
+
+// fetchTopicConfigs describes the configs of topics. A missing topic was
+// already reported from the metadata response and is skipped; any other
+// per-resource error goes to stderr, since the configs rows have no place
+// for it, and failed reports it so the command exits 1.
+func fetchTopicConfigs(ctx context.Context, cl kmsg.Requestor, topics []string) (configs map[string][]kmsg.DescribeConfigsResponseResourceConfig, failed bool, err error) {
 	req := kmsg.NewPtrDescribeConfigsRequest()
 	for _, t := range topics {
 		r := kmsg.NewDescribeConfigsRequestResource()
-		r.ResourceType = 2 // TOPIC
+		r.ResourceType = kmsg.ConfigResourceTypeTopic
 		r.ResourceName = t
 		req.Resources = append(req.Resources, r)
 	}
 
 	resp, err := req.RequestWith(ctx, cl)
 	if err != nil {
-		return nil, fmt.Errorf("unable to describe configs: %v", err)
+		return nil, false, fmt.Errorf("unable to describe configs: %v", err)
 	}
 
 	result := make(map[string][]kmsg.DescribeConfigsResponseResourceConfig)
 	for _, r := range resp.Resources {
 		if err := kerr.ErrorForCode(r.ErrorCode); err != nil {
-			// A missing topic was already reported from the metadata
-			// response. Route other per-resource errors to stderr so they
-			// don't contaminate JSON/awk output on stdout.
 			if err != kerr.UnknownTopicOrPartition {
-				fmt.Fprintf(os.Stderr, "config error for %s: %v\n", r.ResourceName, err)
+				fmt.Fprintf(os.Stderr, "unable to describe configs for %s: %v\n", r.ResourceName, out.BrokerErr(err, r.ErrorMessage))
+				failed = true
 			}
 			continue
 		}
@@ -564,20 +568,12 @@ func fetchTopicConfigs(ctx context.Context, cl kmsg.Requestor, topics []string) 
 		})
 		result[r.ResourceName] = r.Configs
 	}
-	return result, nil
-}
-
-func int32sToString(vals []int32) string {
-	strs := make([]string, len(vals))
-	for i, v := range vals {
-		strs[i] = strconv.FormatInt(int64(v), 10)
-	}
-	return "[" + strings.Join(strs, ",") + "]"
+	return result, failed, nil
 }
 
 func strval(s *string) string {
 	if s == nil {
-		return "<nil>"
+		return ""
 	}
 	return *s
 }

@@ -3,7 +3,10 @@ package partas
 import (
 	"context"
 	"fmt"
-	"sort"
+	"os"
+	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -25,9 +28,48 @@ func Command(cl *client.Client) *cobra.Command {
 	return cmd
 }
 
+var (
+	resultHeaders = []string{"TOPIC", "PARTITION", "ERROR", "MESSAGE"}
+	listHeaders   = []string{"TOPIC", "PARTITION", "CURRENT-REPLICAS", "ADDING", "REMOVING"}
+)
+
+// resultRows adds one row per partition of an AlterPartitionAssignments
+// response, sorted by topic and partition.
+func resultRows(table *out.FormattedTable, resp *kmsg.AlterPartitionAssignmentsResponse) {
+	type row struct {
+		topic     string
+		partition int32
+		err       string
+		msg       string
+	}
+	var rows []row
+	for _, topic := range resp.Topics {
+		for _, p := range topic.Partitions {
+			var errName, msg string
+			if p.ErrorCode != 0 {
+				errName = kerr.TypedErrorForCode(p.ErrorCode).Message
+				if p.ErrorMessage != nil {
+					msg = *p.ErrorMessage
+				}
+			}
+			rows = append(rows, row{topic.Topic, p.Partition, errName, msg})
+		}
+	}
+	slices.SortFunc(rows, func(a, b row) int {
+		if a.topic != b.topic {
+			return strings.Compare(a.topic, b.topic)
+		}
+		return int(a.partition - b.partition)
+	})
+	for _, r := range rows {
+		table.Row(r.topic, r.partition, r.err, r.msg)
+	}
+}
+
 func alterPartitionAssignments(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
-		Use:   "alter",
+	var throttle int64
+	cmd := &cobra.Command{
+		Use:   "alter 'TOPIC:P->R,R...'...",
 		Short: "Alter partition assignments.",
 		Long: `Alter partition assignments.
 
@@ -39,16 +81,55 @@ The syntax for each topic is
 
 where the first number is the partition, and -> points to the replicas you
 want to move the partition to. Note that since this contains a >, you likely
-need to quote your input to the flag.
+need to quote your input.
 
 If a replica list is empty for a specific partition, this cancels any active
 reassignment for that partition.
+
+--throttle BYTES limits replication for the move to BYTES per second, the
+way kafka-reassign-partitions.sh --throttle does: before the reassignment is
+requested, leader.replication.throttled.rate and
+follower.replication.throttled.rate are set to BYTES on every broker the
+move touches, and leader.replication.throttled.replicas and
+follower.replication.throttled.replicas are set on every topic to the
+partition:broker pairs moving out of and into each broker. Kafka's tool
+clears these when its --verify sees the move complete; kcl has no --verify,
+so the configs stay until you clear them:
+
+  kcl config alter -tb ID --delete leader.replication.throttled.rate --delete follower.replication.throttled.rate
+  kcl config alter -tt TOPIC --delete leader.replication.throttled.replicas --delete follower.replication.throttled.replicas
+
+"kcl reassign list" says when the move is done.
+
+The result prints one row per partition with ERROR and MESSAGE.
+
+EXAMPLES:
+  kcl reassign alter 'foo:1->1,2,3' 'bar:2->3,4,5;5->3,4,5'
+  kcl reassign alter 'foo:0->2,3' --throttle 10485760    # move at 10MB/s
+
+SEE ALSO:
+  kcl reassign list      list reassignments in progress
+  kcl reassign cancel    cancel reassignments in progress
 `,
-		Example: "kcl reassign alter 'foo:1->1,2,3' 'bar:2->3,4,5;5->3,4,5'",
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, topicPartReplicas []string) error {
 			tprs, err := flagutil.ParseTopicPartitionReplicas(topicPartReplicas)
 			if err != nil {
-				return fmt.Errorf("unable to parse topic partitions replicas: %v", err)
+				return out.Errf(out.ExitUsage, "unable to parse topic partitions replicas: %v", err)
+			}
+
+			if throttle >= 0 {
+				m, err := applyThrottle(cl, tprs, throttle)
+				if err != nil {
+					return err
+				}
+				if cl.Format() == out.FormatText {
+					brokers := make([]string, 0, len(m.brokers()))
+					for _, b := range m.brokers() {
+						brokers = append(brokers, strconv.FormatInt(int64(b), 10))
+					}
+					fmt.Fprintf(os.Stderr, "Replication throttled to %d bytes/s on brokers %s; clear the throttle configs when the move completes.\n", throttle, strings.Join(brokers, ","))
+				}
 			}
 
 			req := &kmsg.AlterPartitionAssignmentsRequest{
@@ -72,39 +153,23 @@ reassignment for that partition.
 				return fmt.Errorf("unable to alter partition assignments: %v", err)
 			}
 			resp := kresp.(*kmsg.AlterPartitionAssignmentsResponse)
-
-			if resp.ErrorCode != 0 {
-				additional := ""
-				if resp.ErrorMessage != nil {
-					additional = ": " + *resp.ErrorMessage
-				}
-				return fmt.Errorf("%s%s", kerr.ErrorForCode(resp.ErrorCode), additional)
+			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+				return out.BrokerErr(err, resp.ErrorMessage)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
-				"TOPIC", "PARTITION", "STATUS", "DETAIL")
-			for _, topic := range resp.Topics {
-				for _, partition := range topic.Partitions {
-					msg := "OK"
-					if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
-						msg = err.Error()
-					}
-					detail := ""
-					if partition.ErrorMessage != nil {
-						detail = *partition.ErrorMessage
-					}
-					table.Row(topic.Topic, partition.Partition, msg, detail)
-				}
-			}
-			table.Flush()
-			return nil
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results", resultHeaders...).ResultColumns()
+			resultRows(table, resp)
+			return table.Flush()
 		},
 	}
+	out.Columns(cmd, resultHeaders...)
+	cmd.Flags().Int64Var(&throttle, "throttle", -1, "replication throttle in bytes per second to set on the brokers and topics the move touches, or -1 for none")
+	return cmd
 }
 
 func cancelPartitionReassignments(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
-		Use:   "cancel",
+	cmd := &cobra.Command{
+		Use:   "cancel TOPIC:P...",
 		Short: "Cancel in-progress partition reassignments.",
 		Long: `Cancel in-progress partition reassignments.
 
@@ -120,13 +185,21 @@ which partitions are currently being reassigned.
 
 At least one topic:partitions must be given; this does not cancel everything at
 once by default.
+
+The result prints one row per partition with ERROR and MESSAGE.
+
+EXAMPLES:
+  kcl reassign cancel 'foo:1,2,3' 'bar:0'
+
+SEE ALSO:
+  kcl reassign list     list reassignments in progress
+  kcl reassign alter    start a reassignment
 `,
-		Example: "kcl reassign cancel 'foo:1,2,3' 'bar:0'",
-		Args:    cobra.MinimumNArgs(1),
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, topicParts []string) error {
 			tps, err := flagutil.ParseTopicPartitions(topicParts)
 			if err != nil {
-				return fmt.Errorf("unable to parse topic partitions: %v", err)
+				return out.Errf(out.ExitUsage, "unable to parse topic partitions: %v", err)
 			}
 
 			req := &kmsg.AlterPartitionAssignmentsRequest{
@@ -134,7 +207,7 @@ once by default.
 			}
 			for topic, partitions := range tps {
 				if len(partitions) == 0 {
-					return fmt.Errorf("topic %s has no partitions specified to cancel", topic)
+					return out.Errf(out.ExitUsage, "topic %s has no partitions specified to cancel", topic)
 				}
 				t := kmsg.AlterPartitionAssignmentsRequestTopic{Topic: topic}
 				for _, partition := range partitions {
@@ -153,39 +226,22 @@ once by default.
 				return fmt.Errorf("unable to cancel partition reassignments: %v", err)
 			}
 			resp := kresp.(*kmsg.AlterPartitionAssignmentsResponse)
-
-			if resp.ErrorCode != 0 {
-				additional := ""
-				if resp.ErrorMessage != nil {
-					additional = ": " + *resp.ErrorMessage
-				}
-				return fmt.Errorf("%s%s", kerr.ErrorForCode(resp.ErrorCode), additional)
+			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+				return out.BrokerErr(err, resp.ErrorMessage)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
-				"TOPIC", "PARTITION", "STATUS", "DETAIL")
-			for _, topic := range resp.Topics {
-				for _, partition := range topic.Partitions {
-					msg := "OK"
-					if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
-						msg = err.Error()
-					}
-					detail := ""
-					if partition.ErrorMessage != nil {
-						detail = *partition.ErrorMessage
-					}
-					table.Row(topic.Topic, partition.Partition, msg, detail)
-				}
-			}
-			table.Flush()
-			return nil
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results", resultHeaders...).ResultColumns()
+			resultRows(table, resp)
+			return table.Flush()
 		},
 	}
+	out.Columns(cmd, resultHeaders...)
+	return cmd
 }
 
 func listPartitionReassignments(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
-		Use:     "list",
+	cmd := &cobra.Command{
+		Use:     "list [TOPIC:P...]",
 		Aliases: []string{"ls"},
 		Short:   "List partition reassignments.",
 		Long: `List partition reassignments.
@@ -198,12 +254,21 @@ The syntax for each topic is
 
 where the numbers correspond to partitions for a topic.
 
-If no topics are specified, this lists all active reassignments.
+If no topics are specified, this lists all active reassignments. Rows are
+sorted by topic and partition.
+
+EXAMPLES:
+  kcl reassign list                # every reassignment in progress
+  kcl reassign list foo:0,1        # two partitions of foo
+
+SEE ALSO:
+  kcl reassign alter     start a reassignment
+  kcl reassign cancel    cancel reassignments in progress
 `,
 		RunE: func(_ *cobra.Command, topicParts []string) error {
 			tps, err := flagutil.ParseTopicPartitions(topicParts)
 			if err != nil {
-				return fmt.Errorf("unable to parse topic partitions: %v", err)
+				return out.Errf(out.ExitUsage, "unable to parse topic partitions: %v", err)
 			}
 
 			req := &kmsg.ListPartitionReassignmentsRequest{
@@ -211,7 +276,7 @@ If no topics are specified, this lists all active reassignments.
 			}
 			for topic, partitions := range tps {
 				if len(partitions) == 0 {
-					return fmt.Errorf("topic %s has no partitions specified to list", topic)
+					return out.Errf(out.ExitUsage, "topic %s has no partitions specified to list", topic)
 				}
 				req.Topics = append(req.Topics, kmsg.ListPartitionReassignmentsRequestTopic{
 					Topic:      topic,
@@ -224,27 +289,40 @@ If no topics are specified, this lists all active reassignments.
 				return fmt.Errorf("unable to list partition reassignments: %v", err)
 			}
 			resp := kresp.(*kmsg.ListPartitionReassignmentsResponse)
-
-			if resp.ErrorCode != 0 {
-				additional := ""
-				if resp.ErrorMessage != nil {
-					additional = ": " + *resp.ErrorMessage
-				}
-				return fmt.Errorf("%s%s", kerr.ErrorForCode(resp.ErrorCode), additional)
+			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+				return out.BrokerErr(err, resp.ErrorMessage)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "reassignments",
-				"TOPIC", "PARTITION", "CURRENT-REPLICAS", "ADDING", "REMOVING")
+			type row struct {
+				topic     string
+				partition int32
+				replicas  []int32
+				adding    []int32
+				removing  []int32
+			}
+			var rows []row
 			for _, topic := range resp.Topics {
 				for _, p := range topic.Partitions {
-					sort.Slice(p.Replicas, func(i, j int) bool { return p.Replicas[i] < p.Replicas[j] })
-					sort.Slice(p.AddingReplicas, func(i, j int) bool { return p.AddingReplicas[i] < p.AddingReplicas[j] })
-					sort.Slice(p.RemovingReplicas, func(i, j int) bool { return p.RemovingReplicas[i] < p.RemovingReplicas[j] })
-					table.Row(topic.Topic, p.Partition, fmt.Sprint(p.Replicas), fmt.Sprint(p.AddingReplicas), fmt.Sprint(p.RemovingReplicas))
+					rows = append(rows, row{
+						topic.Topic, p.Partition,
+						sortedSet(p.Replicas), sortedSet(p.AddingReplicas), sortedSet(p.RemovingReplicas),
+					})
 				}
 			}
-			table.Flush()
-			return nil
+			slices.SortFunc(rows, func(a, b row) int {
+				if a.topic != b.topic {
+					return strings.Compare(a.topic, b.topic)
+				}
+				return int(a.partition - b.partition)
+			})
+
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "reassignments", listHeaders...)
+			for _, r := range rows {
+				table.Row(r.topic, r.partition, r.replicas, r.adding, r.removing)
+			}
+			return table.Flush()
 		},
 	}
+	out.Columns(cmd, listHeaders...)
+	return cmd
 }

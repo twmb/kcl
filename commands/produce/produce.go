@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -15,6 +16,23 @@ import (
 	"github.com/twmb/kcl/out"
 	"github.com/twmb/kcl/serde"
 )
+
+// recordReader is what the produce loop reads from: kgo's format string
+// reader, or ours for -f json.
+type recordReader interface {
+	ReadRecord() (*kgo.Record, error)
+}
+
+// formatReader reads with kgo's format string reader into a record whose
+// partition starts at -1, so that a %p in the format sets it and a format
+// without one leaves the record for the partitioner. kgo's own ReadRecord
+// starts at 0, which would send every record to partition 0.
+type formatReader struct{ *kgo.RecordReader }
+
+func (r formatReader) ReadRecord() (*kgo.Record, error) {
+	rec := &kgo.Record{Partition: -1}
+	return rec, r.ReadRecordInto(rec)
+}
 
 func Command(cl *client.Client) *cobra.Command {
 	var (
@@ -30,6 +48,7 @@ func Command(cl *client.Client) *cobra.Command {
 		maxMessageBytes      int32
 		allowAutoTopicCreate bool
 		headers              []string
+		key                  string
 
 		valueSchemaSpec string
 		keySchemaSpec   string
@@ -44,12 +63,22 @@ Produce records, optionally to a specific topic, from stdin.
 
 By default, producing reads newline delimited, unkeyed records from stdin.
 The input format (-f) can be specified with delimiters or with sized numbers,
-and the format can parse a topic, key, value, and header keys and values.
+and the format can parse a topic, key, value, and header keys and values. The
+bare word "json" reads JSON objects instead; see JSON INPUT below.
+
+The topic comes from the argument, -t/--topic, a %t in the input format, or
+the "topic" of a JSON input object; with none of those, producing is an error
+before stdin is read.
+
+-k/--key gives a key to every record whose input carries none. A %k in the
+input format wins over -k, as does a key in a JSON input object; -k fills in
+where the input has no key at all.
 
 The output format (-o) controls what is printed after each record is produced
 (e.g., to confirm topic/partition/offset). The output format uses the same
 syntax as "kcl consume --format"; see "kcl consume --help" for full output
-format documentation.
+format documentation. The bare word "json" prints one JSON object per record;
+see JSON OUTPUT below.
 
 Slash escapes:
   \t    tab
@@ -67,7 +96,7 @@ Percent verbs for reading records from stdin:
   %V    value length
   %h    begin the header specification
   %H    number of headers
-  %p    partition
+  %p    partition (honored unless -p is given)
   %o    offset
   %e    leader epoch
   %d    timestamp (read as milliseconds)
@@ -137,38 +166,45 @@ As well, these text options can be parsed with regular expressions:
   %k{re[\d*]}%v{re[\s+]}
 
 
-EXAMPLES:
+JSON INPUT
 
-To read a newline delimited file, each line a record (no keys):
-  -f '%v\n'
+As a special case, -f/--format set to exactly "json" reads one JSON object per
+record, the objects "kcl consume -f json" writes, so a consume can be piped
+into a produce:
 
-To read that same file, with each line alternating key/value:
-  -f '%k\n%v\n'
+  {"topic":"orders","partition":3,"key":"user-1","value":"...","headers":[...]}
 
-To read a file where each line has a key and value beginning with "key: " and
-", value: ":
-  -f 'key: %k, value: %v\n'
+Only the exact word is reserved; -f 'json%v' is still an ordinary format.
 
-To read a binary file with keys and values having four byte big endian
-prefixes:
-  -f '%K{big32}%k%V{big32}%v'
+The fields, and what each one does:
+  topic         used unless a topic is given as the argument or -t, which then
+                applies to every object; no topic anywhere is an error
+  partition     honored unless -p is given, so a dump replays onto the
+                partitions it came from; drop it (jq 'del(.partition)') to let
+                the partitioner place the records
+  timestamp     milliseconds, kept when present
+  key, value    a string is its bytes; null stays null (a tombstone), distinct
+                from ""; an object or array (what --decode writes) is produced
+                as its compact text, which --schema can then encode
+  key_base64, value_base64
+                bytes that are not UTF-8, as consume writes them
+  headers       [{"key":..,"value":..}], with value_base64 as above
+  offset, leader_epoch, delivery_count
+                accepted and ignored; the cluster assigns them
 
-To read a similar file that also has a count of headers (big endian short) and
-then headers (also sized with big endian shorts) following the value:
-  -f '%K{big32}%k%V{big32}%v%H{big16}%h{%K{big16}%k%V{big16}%v}'
+A misspelled field is an error.
 
-To read a similar file that has the topic to produce to before the key, also
-sized with a big endian short:
-  -f '%T{big16}%t%K{big32}%k%V{big32}%v%H{big16}%h{%K{big16}%k%V{big16}%v}'
 
-To read a compact key, value, and single header, with each piece being 3 bytes:
-  -f '%K{3}%V{3}%H{1}%k%v%h{%K{3}%k%V{3}%v}'
+JSON OUTPUT
 
-To read JSON-encoded values:
-  -f '%v{json}\n'
+-o/--output-format set to exactly "json" prints one JSON object per record as
+it is produced:
 
-To show partition and offset for each produced record:
-  -o 'produced to %t[%p]@%o\n'
+  {"topic":"orders","partition":3,"offset":1482,"timestamp":1755645291123,"error":""}
+
+"error" is "" on success and the error text on failure, where "offset" and
+"timestamp" are null. Every record is attempted; the exit code is 1 if any
+failed. Without -o json a failure stops producing at the first error.
 
 
 SCHEMA REGISTRY
@@ -189,24 +225,48 @@ The flag value is a small spec:
 
 VERSION is a number or "latest" (default). Any form may add a trailing
 #MESSAGE to pick the protobuf message in a multi-message schema. The "topic"
-strategy cannot be used when the input format parses a per-record topic (%t);
-use id: or subject: instead.
+strategy cannot be used when the topic is parsed per record (%t, or -f json
+with no topic given); use id: or subject: instead.
 
-Examples:
+
+EXAMPLES:
+  kcl produce foo < lines.txt                        # a record per line, no keys
+  kcl produce foo -k k1 < lines.txt                  # every record keyed k1
+  kcl produce foo -f '%k\n%v\n'                      # lines alternate key, value
+  kcl produce foo -f 'key: %k, value: %v\n'          # delimited key and value
+  kcl produce foo -f '%v{json}\n'                    # JSON values, compacted
+  kcl produce foo -f '%K{big32}%k%V{big32}%v'        # big endian sized key, value
+  kcl produce foo -o 'produced to %t[%p]@%o\n'       # confirm each record
+  kcl produce foo -o json                            # a JSON object per record
+  kcl consume foo -f json | kcl produce bar -f json  # copy a topic
+
+  # Sized key and value, then a big endian short count of headers, each sized
+  # the same way:
+  kcl produce foo -f '%K{big32}%k%V{big32}%v%H{big16}%h{%K{big16}%k%V{big16}%v}'
+
+  # The same, with the topic before the key, sized with a big endian short:
+  kcl produce -f '%T{big16}%t%K{big32}%k%V{big32}%v%H{big16}%h{%K{big16}%k%V{big16}%v}'
+
+  # A compact key, value, and one header, each piece three bytes:
+  kcl produce foo -f '%K{3}%V{3}%H{1}%k%v%h{%K{3}%k%V{3}%v}'
 
   # Encode values with the latest registered orders-value schema:
   echo '{"id":"a","age":3}' | kcl produce orders --schema topic
 
-  # By explicit subject/version, or by id:
+  # By explicit subject and version, or by id:
   kcl produce orders --schema orders-value@3
   kcl produce orders --schema id:8
 
   # Protobuf, selecting the message; and encoding the key too:
   kcl produce orders --schema topic#com.acme.Order
   kcl produce orders -f '%k %v\n' --key-schema id:7 --schema topic
+
+SEE ALSO:
+  kcl consume                  consume records; its -f json writes what -f json reads
+  kcl registry schema create   register a schema to produce against
 `,
 		Args: cobra.MaximumNArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			if topicFlag != "" {
 				if len(args) > 0 {
 					return out.Errf(out.ExitUsage, "topic specified both as -t flag and positional argument")
@@ -214,17 +274,33 @@ Examples:
 				args = []string{topicFlag}
 			}
 
-			reader, err := kgo.NewRecordReader(os.Stdin, informat)
-			if err != nil {
-				return fmt.Errorf("unable to parse in format: %v", err)
+			isJSON := informat == jsonFormatName
+			// A per-record topic comes from %t, or from -f json with no
+			// topic given. Without any of those, there is no topic at
+			// all, and we say so before reading stdin.
+			perRecordTopic := layoutParses(informat, 't') || (isJSON && len(args) == 0)
+			if len(args) == 0 && !isJSON && !layoutParses(informat, 't') {
+				return out.Errf(out.ExitUsage, "no topic: give one as an argument or with -t/--topic, or parse it from input with %%t in -f")
 			}
 
+			var reader recordReader
+			if isJSON {
+				reader = newJSONReader(os.Stdin)
+			} else {
+				r, err := kgo.NewRecordReader(os.Stdin, informat)
+				if err != nil {
+					return out.Errf(out.ExitUsage, "input format %q: %v", informat, err)
+				}
+				reader = formatReader{r}
+			}
+
+			outJSON := verboseFormat == jsonFormatName
 			var verboseFormatter *kgo.RecordFormatter
-			var verboseBuf []byte
-			if verboseFormat != "" {
+			if verboseFormat != "" && !outJSON {
+				var err error
 				verboseFormatter, err = kgo.NewRecordFormatter(verboseFormat)
 				if err != nil {
-					return fmt.Errorf("unable to parse output-format: %v", err)
+					return out.Errf(out.ExitUsage, "output format %q: %v", verboseFormat, err)
 				}
 			}
 
@@ -257,8 +333,13 @@ Examples:
 				return out.Errf(out.ExitUsage, "invalid acks %d not in allowed -1, 0, 1", acks)
 			}
 
+			// -p sends every record to one partition. Without it, the
+			// partition a JSON object or a %p named is honored and the
+			// rest are placed by the default partitioner.
 			if partition > -1 {
 				cl.AddOpt(kgo.RecordPartitioner(kgo.ManualPartitioner()))
+			} else {
+				cl.AddOpt(kgo.RecordPartitioner(newRecordPartitioner()))
 			}
 
 			if retries > -1 {
@@ -296,7 +377,6 @@ Examples:
 				if len(args) > 0 {
 					topic = args[0]
 				}
-				hasTopicVerb := strings.Contains(informat, "%t")
 
 				build := func(flag, raw string, isKey bool) (*serde.Encoder, error) {
 					spec, err := parseSchemaSpec(raw)
@@ -305,11 +385,11 @@ Examples:
 					}
 					// A single encoder is resolved up front for the whole run.
 					// If the subject is derived from the topic but the input
-					// format parses a per-record topic (%t), records for other
-					// topics would be silently encoded against the wrong schema.
+					// carries a per-record topic, records for other topics
+					// would be silently encoded against the wrong schema.
 					// Reject that rather than corrupt the stream.
-					if spec.DerivesSubject() && hasTopicVerb {
-						return nil, out.Errf(out.ExitUsage, "%s derives the subject from the topic, but -f/--format parses a per-record topic (%%t); use %s id:N or %s subject:NAME", flag, flag, flag)
+					if spec.DerivesSubject() && perRecordTopic {
+						return nil, out.Errf(out.ExitUsage, "%s derives the subject from the topic, but the topic is parsed per record; use %s id:N or %s subject:NAME", flag, flag, flag)
 					}
 					enc, err := serde.NewEncoder(scl, topic, isKey, spec)
 					if err != nil {
@@ -330,28 +410,62 @@ Examples:
 				}
 			}
 
+			// Promises run on kgo's goroutines, one per broker, so the
+			// output buffer and the failure count are shared under a lock.
+			var (
+				outMu  sync.Mutex
+				outBuf []byte
+				failed int
+			)
+			promise := func(r *kgo.Record, err error) {
+				outMu.Lock()
+				defer outMu.Unlock()
+				switch {
+				case outJSON:
+					if err != nil {
+						failed++
+					}
+					os.Stdout.Write(marshalProduced(r, err))
+				case err != nil:
+					out.Die("unable to produce record: %v", err)
+				case verboseFormatter != nil:
+					outBuf = verboseFormatter.AppendRecord(outBuf[:0], r)
+					os.Stdout.Write(outBuf)
+				}
+			}
+
+			setKey := cmd.Flags().Changed("key")
 			for {
 				r, err := reader.ReadRecord()
 				if err != nil {
 					if err != io.EOF {
-						return fmt.Errorf("final error: %v", err)
+						return out.Errf(out.ExitUsage, "input format %q: %v", informat, err)
 					}
 					break
 				}
 				if tombstone && len(r.Value) == 0 {
 					r.Value = nil
 				}
-				if r.Topic == "" {
-					if len(args) == 0 {
-						return out.Errf(out.ExitUsage, "topic missing from both produce line and from parse format")
-					}
+				// -k fills in a key the input did not set: %k sets one
+				// even when it read nothing, and a JSON object's null is
+				// deliberate but a missing field is not, so both null and
+				// absent take -k.
+				if setKey && r.Key == nil {
+					r.Key = []byte(key)
+				}
+				if len(args) > 0 && (isJSON || r.Topic == "") {
 					r.Topic = args[0]
 				}
+				if r.Topic == "" {
+					return out.Errf(out.ExitUsage, "no topic: the input record names none and none was given as an argument or with -t/--topic")
+				}
 
-				// Override the partition in the case when the manual partitioner is used.
-				r.Partition = partition
+				// -p wins over the partition the input named.
+				if partition > -1 {
+					r.Partition = partition
+				}
 
-				// Schema Registry encode: JSON in -> schema binary (with the
+				// Schema Registry encode: JSON in, schema binary (with the
 				// registry wire header) out. Tombstones (nil value) are left
 				// untouched.
 				if keyEnc != nil && r.Key != nil {
@@ -371,23 +485,23 @@ Examples:
 					r.Headers = append(r.Headers, staticHeaders...)
 				}
 
-				cl.Client().Produce(context.Background(), r, func(r *kgo.Record, err error) {
-					out.MaybeDie(err, "unable to produce record: %v", err)
-					if verboseFormatter != nil {
-						verboseBuf = verboseFormatter.AppendRecord(verboseBuf[:0], r)
-						os.Stdout.Write(verboseBuf)
-					}
-				})
+				cl.Client().Produce(context.Background(), r, promise)
 			}
 
 			cl.Client().Flush(context.Background())
+			outMu.Lock()
+			defer outMu.Unlock()
+			if failed > 0 {
+				return out.ErrSilent
+			}
 			return nil
 		},
 	}
 
 	cmd.Flags().StringVarP(&topicFlag, "topic", "t", "", "topic to produce to (alternative to positional argument)")
-	cmd.Flags().StringVarP(&informat, "format", "f", "%v\n", "record input format")
-	cmd.Flags().StringVarP(&verboseFormat, "output-format", "o", "", "format string for produced record output (topic, partition, offset of each record)")
+	cmd.Flags().StringVarP(&informat, "format", "f", "%v\n", "record input format; the bare word 'json' reads the objects consume -f json writes")
+	cmd.Flags().StringVarP(&verboseFormat, "output-format", "o", "", "format string for produced record output (topic, partition, offset of each record); the bare word 'json' prints one JSON object per record")
+	cmd.Flags().StringVarP(&key, "key", "k", "", "key for every record whose input carries none (a %k in -f or a key in a JSON object wins)")
 	cmd.Flags().StringVarP(&compression, "compression", "z", "snappy", "compression to use for producing batches (none, gzip, snappy, lz4, zstd)")
 	cmd.Flags().IntVar(&acks, "acks", -1, "number of acks required, -1 is all in sync replicas, 1 is leader replica only, 0 is no acks required (0 disables idempotency)")
 	cmd.Flags().IntVar(&retries, "retries", -1, "number of times to retry producing if non-negative")
@@ -402,4 +516,48 @@ Examples:
 	cmd.Flags().StringVar(&keySchemaSpec, "key-schema", "", "Schema Registry encode the key; same spec form as --schema")
 
 	return cmd
+}
+
+// layoutParses reports whether a -f format string reads verb. A slash
+// escape never starts a verb, %% %{ %} are literals, and the braces after a
+// verb hold its options or, for %h, the header format, whose %k and %v are
+// the header's own.
+func layoutParses(layout string, verb byte) bool {
+	for i := 0; i < len(layout); i++ {
+		switch layout[i] {
+		case '\\':
+			i++
+		case '%':
+			i++
+			if i >= len(layout) {
+				return false
+			}
+			switch layout[i] {
+			case '%', '{', '}':
+				continue
+			case verb:
+				return true
+			}
+			if i+1 < len(layout) && layout[i+1] == '{' {
+				// A brace after a percent is a literal, as kgo reads it.
+				depth := 0
+				for i++; i < len(layout); i++ {
+					switch layout[i] {
+					case '{':
+						if layout[i-1] != '%' {
+							depth++
+						}
+					case '}':
+						if layout[i-1] != '%' {
+							depth--
+						}
+					}
+					if depth == 0 {
+						break
+					}
+				}
+			}
+		}
+	}
+	return false
 }

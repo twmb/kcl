@@ -1,7 +1,6 @@
 package group
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -64,6 +63,13 @@ offsets for topics not currently in the group.
 -t accepts plain names or topic:partitions pairs:
   foo              all partitions of foo
   foo:0,2          only partitions 0 and 2 of foo
+
+The plan is printed first, one row per partition with the offset committed
+now and the offset the seek commits, then a [y/N] prompt unless --yes, then
+the same rows with how each commit went. --dry-run stops after the plan, as
+does a "no", or a stdin that is not a terminal, and exits 0. Under --format
+json the whole seek is one document: {group, dry_run, plan, results}, with
+results empty when nothing was committed.
 
 EXAMPLES:
   kcl group seek mygroup --to start
@@ -191,12 +197,12 @@ SEE ALSO:
 				}
 				data, err := os.ReadFile(toFile)
 				if err != nil {
-					return fmt.Errorf("unable to read --to-file %q: %v", toFile, err)
+					return out.Errf(out.ExitUsage, "unable to read --to-file %q: %v", toFile, err)
 				}
 				var entries []fileEntry
 				err = json.Unmarshal(data, &entries)
 				if err != nil {
-					return fmt.Errorf("unable to parse --to-file %q: %v", toFile, err)
+					return out.Errf(out.ExitUsage, "unable to parse --to-file %q: %v", toFile, err)
 				}
 				for _, e := range entries {
 					if !keepPartition(e.Topic, e.Partition) {
@@ -214,7 +220,7 @@ SEE ALSO:
 				// --to: parse offset specification.
 				spec, err := offsetparse.Parse(to, time.Now())
 				if err != nil {
-					return fmt.Errorf("unable to parse --to %q: %v", to, err)
+					return out.Errf(out.ExitUsage, "unable to parse --to %q: %v", to, err)
 				}
 				if spec.End != nil {
 					return out.Errf(out.ExitUsage, "--to does not accept range offsets; use a single target value")
@@ -354,16 +360,10 @@ SEE ALSO:
 
 			if len(newOffsets) == 0 {
 				fmt.Fprintln(os.Stderr, "No offsets to change.")
-				return nil
+				return printSeek(cl, groupName, nil, nil, dryRun)
 			}
 
-			// 4. Build preview rows.
-			type seekRow struct {
-				topic     string
-				partition int32
-				priorAt   int64
-				newAt     int64
-			}
+			// 4. Build the plan.
 			var rows []seekRow
 			newOffsets.Each(func(o kadm.Offset) {
 				prior := int64(-1)
@@ -373,72 +373,43 @@ SEE ALSO:
 				rows = append(rows, seekRow{
 					topic:     o.Topic,
 					partition: o.Partition,
-					priorAt:   prior,
-					newAt:     o.At,
+					prior:     prior,
+					at:        o.At,
 				})
 			})
-			sort.Slice(rows, func(i, j int) bool {
-				if rows[i].topic != rows[j].topic {
-					return rows[i].topic < rows[j].topic
-				}
-				return rows[i].partition < rows[j].partition
-			})
+			sortSeekRows(rows)
 
-			// 5. Print preview table.
-			fmt.Fprintf(os.Stderr, "GROUP: %s\n\n", groupName)
-			tw := out.NewTable("TOPIC", "PARTITION", "PRIOR-OFFSET", "NEW-OFFSET")
-			for _, r := range rows {
-				priorStr := fmt.Sprintf("%d", r.priorAt)
-				if r.priorAt < 0 {
-					priorStr = "-"
-				}
-				tw.Print(r.topic, r.partition, priorStr, r.newAt)
+			// 5. Print the plan and ask. Under json the plan is part of
+			// the one document printed at the end.
+			if cl.Format() != out.FormatJSON {
+				printSeekPlan(cl, rows, dryRun)
 			}
-			tw.Flush()
-
-			// 6. Approval phase.
 			if dryRun {
-				return nil
+				return printSeek(cl, groupName, rows, nil, true)
 			}
-			if !yes {
-				fmt.Fprint(os.Stderr, "\nApply these offset changes? [y/N] ")
-				scanner := bufio.NewScanner(os.Stdin)
-				scanner.Scan()
-				answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
-				if answer != "y" && answer != "yes" {
-					fmt.Fprintln(os.Stderr, "Aborted.")
-					return nil
-				}
+			if !yes && out.Confirm(fmt.Sprintf("Apply these offset changes to group %s?", groupName)) != out.Yes {
+				return printSeek(cl, groupName, rows, nil, true)
 			}
 
-			// 7. Commit offsets.
-			fmt.Fprintln(os.Stderr)
+			// 6. Commit offsets.
 			committed, err := adm.CommitOffsets(ctx, groupName, newOffsets)
 			if err != nil {
 				return fmt.Errorf("unable to commit offsets: %v", err)
 			}
-
-			// 8. Print results.
-			resultTw := out.NewTable("TOPIC", "PARTITION", "PRIOR-OFFSET", "NEW-OFFSET", "ERROR")
-			for _, r := range rows {
-				priorStr := fmt.Sprintf("%d", r.priorAt)
-				if r.priorAt < 0 {
-					priorStr = "-"
-				}
-				errStr := ""
+			results := make([]seekRow, len(rows))
+			for i, r := range rows {
 				if cr, ok := committed.Lookup(r.topic, r.partition); ok && cr.Err != nil {
-					errMsg := cr.Err.Error()
+					r.err = out.ErrCell(cr.Err)
 					if cr.Err == kerr.UnknownMemberID {
-						errMsg = "group is not empty (a consumer may have joined)"
+						r.message = "group is not empty (a consumer may have joined)"
 					}
-					errStr = errMsg
 				}
-				resultTw.Print(r.topic, r.partition, priorStr, r.newAt, errStr)
+				results[i] = r
 			}
-			resultTw.Flush()
-			return nil
+			return printSeek(cl, groupName, rows, results, false)
 		},
 	}
+	out.Columns(cmd, seekHeaders...)
 
 	cmd.Flags().StringVar(&to, "to", "", "target offset (start, end, +N, -N, N, @timestamp)")
 	cmd.Flags().StringVar(&toGroup, "to-group", "", "seek to another group's committed offsets (mutually exclusive with --to and --to-file)")
@@ -451,4 +422,122 @@ SEE ALSO:
 	cmd.Flags().BoolVar(&allowNewTopics, "allow-new-topics", false, "allow committing offsets for topics not in the group's current commits")
 
 	return cmd
+}
+
+// seekHeaders is the one shape of a plan row and a result row: a plan row
+// has not run, so its ERROR and MESSAGE are Unknown.
+var seekHeaders = []string{"TOPIC", "PARTITION", "PRIOR-OFFSET", "NEW-OFFSET", "ERROR", "MESSAGE"}
+
+// seekRow is one partition of a seek: what was committed before, what the
+// seek commits, and, once run, how the commit went.
+type seekRow struct {
+	topic     string
+	partition int32
+	prior     int64 // -1 when the group had nothing committed
+	at        int64
+	err       string
+	message   string
+}
+
+func sortSeekRows(rows []seekRow) {
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].topic != rows[j].topic {
+			return rows[i].topic < rows[j].topic
+		}
+		return rows[i].partition < rows[j].partition
+	})
+}
+
+func (r seekRow) priorNum() any {
+	if r.prior < 0 {
+		return out.Unknown
+	}
+	return r.prior
+}
+
+// planValues is the row before the seek runs; resultValues is the row after.
+func (r seekRow) planValues() []any {
+	return []any{r.topic, r.partition, r.priorNum(), r.at, out.Unknown, out.Unknown}
+}
+
+func (r seekRow) resultValues() []any {
+	return []any{r.topic, r.partition, r.priorNum(), r.at, r.err, r.message}
+}
+
+func (r seekRow) json(ran bool) map[string]any {
+	var errV, msgV any = out.Unknown, out.Unknown
+	if ran {
+		errV, msgV = r.err, r.message
+	}
+	return map[string]any{
+		"topic":        r.topic,
+		"partition":    r.partition,
+		"prior_offset": r.priorNum(),
+		"new_offset":   r.at,
+		"error":        errV,
+		"message":      msgV,
+	}
+}
+
+// printSeekPlan prints the plan in text or awk, before the prompt. Text
+// leaves out the ERROR and MESSAGE columns, which nothing has filled yet;
+// awk prints the full row with them Unknown, so a plan row and a result row
+// have the same fields.
+func printSeekPlan(cl *client.Client, rows []seekRow, dryRun bool) {
+	if cl.Format() == out.FormatAWK {
+		table := out.NewFormattedTable(out.FormatAWK, cl.Command(), 1, "plan", seekHeaders...)
+		for _, r := range rows {
+			table.Row(r.planValues()...)
+		}
+		table.Flush()
+		return
+	}
+	if dryRun {
+		out.PrintDryRun()
+	}
+	table := out.NewFormattedTable(out.FormatText, cl.Command(), 1, "plan", seekHeaders[:4]...)
+	for _, r := range rows {
+		table.Row(r.planValues()[:4]...)
+	}
+	table.Flush()
+}
+
+// printSeek prints what the seek did. JSON is one document, {group, dry_run,
+// plan, results}, with results empty on a dry run or a declined prompt;
+// text and awk have printed the plan already and print the results table,
+// and nothing more when there are none. It returns ErrSilent when a result
+// carries an error, so the command exits 1.
+func printSeek(cl *client.Client, group string, plan, results []seekRow, dryRun bool) error {
+	if cl.Format() == out.FormatJSON {
+		planJSON := make([]map[string]any, 0, len(plan))
+		for _, r := range plan {
+			planJSON = append(planJSON, r.json(false))
+		}
+		resultsJSON := make([]map[string]any, 0, len(results))
+		for _, r := range results {
+			resultsJSON = append(resultsJSON, r.json(true))
+		}
+		out.MarshalJSON(cl.Command(), 1, map[string]any{
+			"group":   group,
+			"plan":    planJSON,
+			"results": resultsJSON,
+		}, out.DryRun(dryRun))
+		for _, r := range results {
+			if r.err != "" {
+				return out.ErrSilent
+			}
+		}
+		return nil
+	}
+	if results == nil {
+		return nil
+	}
+	if cl.Format() == out.FormatText {
+		fmt.Println()
+	}
+	table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results", seekHeaders...).ResultColumns()
+	for _, r := range results {
+		table.Row(r.resultValues()...)
+	}
+	return table.Flush()
 }

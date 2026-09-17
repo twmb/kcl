@@ -77,73 +77,44 @@ topics, records, consumer group offsets, and transactional producer
 state across restarts. Pass --sync to fsync every write (slower but
 safest).
 
-EXAMPLES:
-
-Default three-broker cluster:
-
-  kcl fake
-
-Pick specific ports (the number of ports determines broker count):
-
-  kcl fake --ports 19092,19093,19094
-  kcl fake --ports 9092                # single broker
-
-Persistent cluster:
-
-  kcl fake -d /tmp/kfake --sync
-
-Pretend to be Kafka 3.9 (caps advertised API versions):
-
-  kcl fake --as-version 3.9
-
-Seed topics at startup:
-
-  kcl fake --seed-topic foo:10 --seed-topic bar:3
-
-Producer benchmarks, taking records and dropping them:
-
-  kcl fake --blackhole-produce
-
-Consumer benchmarks, answering every fetch from one canned batch:
-
-  kcl fake --synthetic-fetch
-  kcl fake --synthetic-fetch --synthetic-batch records=1000,bytes=100,random=0.5,compression=lz4
-
-Custom broker config (repeatable):
-
-  kcl fake -c group.consumer.heartbeat.interval.ms=500 \
-           -c transactional.id.expiration.ms=60000
-
-Test SASL + ACLs:
-
-  kcl fake --acls --sasl plain:admin:pw --sasl scram-sha-256:alice:pw2
-
 An in-memory Schema Registry (srfake) is served on port 8081 by default for
 schema-aware produce/consume; disable it with --registry=false. If the port is
 already in use (e.g. a real registry is running), kcl prints a warning and
 continues without it unless --registry/--registry-port was given explicitly.
 
-  kcl registry subjects                 # talks to the fake on localhost:8081
-  kcl fake --registry-port 18081        # use a different port
+--seed-demo seeds a ready-to-explore demo: topics demo-avro, demo-proto,
+demo-json (each with a registered schema of that type) and demo-plain (no
+schema), all with the same {id, count} shape and a few records each.
 
-Seed a ready-to-explore demo: topics demo-avro, demo-proto, demo-json (each
-with a registered schema of that type) and demo-plain (no schema), all with the
-same {id, count} shape and a few records each:
+--control serves a control endpoint so another process can drive the
+cluster (move leaders, add and remove brokers, shuffle leadership, install
+faults), driven by kcl fake control.
 
-  kcl fake --seed-demo
-  kcl consume demo-avro -o start --decode=value
+EXAMPLES:
+  kcl fake                                        # three brokers on 9092,9093,9094
+  kcl fake --ports 19092,19093,19094              # specific ports; the count is the broker count
+  kcl fake --ports 9092                           # a single broker
+  kcl fake -d /tmp/kfake --sync                   # persistent across restarts
+  kcl fake --as-version 3.9                       # cap advertised API versions at Kafka 3.9
+  kcl fake --seed-topic foo:10 --seed-topic bar:3 # seed topics at startup
+  kcl fake --blackhole-produce                    # producer benchmarks: accept records and drop them
+  kcl fake --synthetic-fetch                      # consumer benchmarks: answer every fetch from one canned batch
+  kcl fake --synthetic-fetch --synthetic-batch records=1000,bytes=100,random=0.5,compression=lz4
+  kcl fake -c group.consumer.heartbeat.interval.ms=500 -c transactional.id.expiration.ms=60000
+  kcl fake --acls --sasl plain:admin:pw --sasl scram-sha-256:alice:pw2
+  kcl fake --registry-port 18081                  # the fake registry on another port
+  kcl registry subject list                       # talks to the fake registry on localhost:8081
+  kcl fake --seed-demo                            # the demo topics and schemas
+  kcl consume demo-avro -o start --decode=value   # read a demo topic, decoded
   kcl consume demo-plain -o start
+  kcl fake --control                              # a control endpoint on 127.0.0.1:9099
+  kcl fake --control=19099                        # a port, or HOST:PORT
+  kcl fake -l debug                               # kfake's own logging
 
-Serve a control endpoint so another process can drive the cluster (move
-leaders, add and remove brokers, shuffle leadership), driven by kcl fake
-control:
-
-  kcl fake --control              # 127.0.0.1:9099
-  kcl fake --control=19099        # a port, or HOST:PORT
-
-Tune log verbosity for debugging:
-
-  kcl fake -l debug
+SEE ALSO:
+  kcl fake control       drive a running kcl fake cluster
+  kcl consume            read the records a fake serves
+  kcl registry           the fake registry is a registry
 `,
 		Args: func(_ *cobra.Command, args []string) error {
 			if len(args) == 0 {

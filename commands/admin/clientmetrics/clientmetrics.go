@@ -4,6 +4,8 @@ package clientmetrics
 import (
 	"context"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -34,10 +36,24 @@ func Command(cl *client.Client) *cobra.Command {
 }
 
 func listCommand(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List client metrics subscription resources.",
+		Long: `List client metrics subscription resources.
+
+This lists the names of every client metrics subscription (KIP-714, Kafka
+3.7+), sorted by name. It asks with ListConfigResources (Kafka 4.1+) and
+falls back to DescribeConfigs for older brokers.
+
+EXAMPLES:
+  kcl client-metrics list
+
+SEE ALSO:
+  kcl client-metrics describe    describe one subscription
+  kcl client-metrics alter       create or update a subscription
+`,
+		Args: cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
 			// Prefer ListConfigResources (KIP-1000, renamed in KIP-1142) to
 			// enumerate client-metrics resources. Fall back to the older
@@ -46,15 +62,16 @@ func listCommand(cl *client.Client) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "subscriptions",
-				"NAME")
+			sort.Strings(names)
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "subscriptions", "NAME")
 			for _, n := range names {
 				table.Row(n)
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
+	out.Columns(cmd, "NAME")
+	return cmd
 }
 
 // listClientMetricsNames returns the set of client-metrics resource
@@ -93,11 +110,23 @@ func listClientMetricsNames(cl *client.Client) ([]string, error) {
 }
 
 func describeCommand(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:     "describe NAME",
 		Aliases: []string{"d"},
 		Short:   "Describe a client metrics subscription.",
-		Args:    cobra.ExactArgs(1),
+		Long: `Describe a client metrics subscription.
+
+This prints every config key of one subscription (KIP-714, Kafka 3.7+) with
+its value and where the value came from.
+
+EXAMPLES:
+  kcl client-metrics describe my-sub
+
+SEE ALSO:
+  kcl client-metrics list     list subscriptions
+  kcl client-metrics alter    create or update a subscription
+`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			req := kmsg.NewPtrDescribeConfigsRequest()
 			r := kmsg.NewDescribeConfigsRequestResource()
@@ -110,17 +139,14 @@ func describeCommand(cl *client.Client) *cobra.Command {
 				return fmt.Errorf("unable to describe client metrics: %v", err)
 			}
 
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "configs", "KEY", "VALUE", "SOURCE")
 			for _, r := range kresp.Resources {
 				if err := kerr.ErrorForCode(r.ErrorCode); err != nil {
-					msg := err.Error()
-					if r.ErrorMessage != nil {
-						msg += ": " + *r.ErrorMessage
-					}
-					return fmt.Errorf("%s", msg)
+					return out.BrokerErr(err, r.ErrorMessage)
 				}
-
-				table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "configs",
-					"KEY", "VALUE", "SOURCE")
+				slices.SortFunc(r.Configs, func(a, b kmsg.DescribeConfigsResponseResourceConfig) int {
+					return strings.Compare(a.Name, b.Name)
+				})
 				for _, c := range r.Configs {
 					val := ""
 					if c.Value != nil {
@@ -128,10 +154,22 @@ func describeCommand(cl *client.Client) *cobra.Command {
 					}
 					table.Row(c.Name, val, c.Source)
 				}
-				table.Flush()
 			}
-			return nil
+			return table.Flush()
 		},
+	}
+	out.Columns(cmd, "KEY", "VALUE", "SOURCE")
+	return cmd
+}
+
+// resultHeaders are the columns of an alter or delete, one row per
+// subscription.
+var resultHeaders = []string{"NAME", "ERROR", "MESSAGE"}
+
+// resultRows adds one row per altered resource to a results table.
+func resultRows(table *out.FormattedTable, resources []kmsg.IncrementalAlterConfigsResponseResource) {
+	for _, r := range resources {
+		table.Row(r.ResourceName, out.ErrName(r.ErrorCode), out.BrokerMessage(r.ErrorMessage))
 	}
 }
 
@@ -153,9 +191,15 @@ Common config keys:
   match                  client match selectors (key=value)
   metrics                comma-separated metric name prefixes
 
+The result prints one row for the subscription with ERROR and MESSAGE.
+
 EXAMPLES:
   kcl client-metrics alter my-sub --set interval.ms=30000
   kcl client-metrics alter my-sub --set match=client_software_name=apache-kafka-java
+
+SEE ALSO:
+  kcl client-metrics describe    describe a subscription
+  kcl client-metrics delete      delete a subscription
 `,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
@@ -188,23 +232,12 @@ EXAMPLES:
 				return fmt.Errorf("unable to alter client metrics: %v", err)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
-				"NAME", "STATUS")
-			for _, r := range kresp.Resources {
-				if err := kerr.ErrorForCode(r.ErrorCode); err != nil {
-					msg := err.Error()
-					if r.ErrorMessage != nil {
-						msg += ": " + *r.ErrorMessage
-					}
-					table.Row(r.ResourceName, msg)
-					continue
-				}
-				table.Row(r.ResourceName, "OK")
-			}
-			table.Flush()
-			return nil
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results", resultHeaders...).ResultColumns()
+			resultRows(table, kresp.Resources)
+			return table.Flush()
 		},
 	}
+	out.Columns(cmd, resultHeaders...)
 
 	cmd.Flags().StringArrayVarP(&setKVs, "set", "s", nil, "set config key=value (repeatable)")
 	cmd.Flags().StringArrayVar(&deleteKVs, "delete", nil, "delete config key (repeatable)")
@@ -213,10 +246,25 @@ EXAMPLES:
 }
 
 func deleteCommand(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "delete NAME",
 		Short: "Delete a client metrics subscription.",
-		Args:  cobra.ExactArgs(1),
+		Long: `Delete a client metrics subscription.
+
+Kafka has no delete for a subscription: one is deleted by deleting every
+config key it has, which is what this does. It describes the subscription and
+then deletes each key it found.
+
+The result prints one row for the subscription with ERROR and MESSAGE.
+
+EXAMPLES:
+  kcl client-metrics delete my-sub
+
+SEE ALSO:
+  kcl client-metrics list     list subscriptions
+  kcl client-metrics alter    create or update a subscription
+`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			// Delete all configs for the resource to effectively delete the subscription.
 			req := kmsg.NewPtrDescribeConfigsRequest()
@@ -235,7 +283,15 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 			ar.ResourceType = resourceTypeClientMetrics
 			ar.ResourceName = args[0]
 
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results", resultHeaders...).ResultColumns()
 			for _, res := range kresp.Resources {
+				// A subscription that cannot be described cannot
+				// be deleted either; its row carries the describe
+				// error.
+				if res.ErrorCode != 0 {
+					table.Row(res.ResourceName, out.ErrName(res.ErrorCode), out.BrokerMessage(res.ErrorMessage))
+					return table.Flush()
+				}
 				for _, c := range res.Configs {
 					ac := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
 					ac.Name = c.Name
@@ -249,22 +305,10 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("unable to delete client metrics: %v", err)
 			}
-
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
-				"NAME", "STATUS")
-			for _, res := range alterResp.Resources {
-				if err := kerr.ErrorForCode(res.ErrorCode); err != nil {
-					msg := err.Error()
-					if res.ErrorMessage != nil {
-						msg += ": " + *res.ErrorMessage
-					}
-					table.Row(res.ResourceName, msg)
-					continue
-				}
-				table.Row(res.ResourceName, "deleted")
-			}
-			table.Flush()
-			return nil
+			resultRows(table, alterResp.Resources)
+			return table.Flush()
 		},
 	}
+	out.Columns(cmd, resultHeaders...)
+	return cmd
 }

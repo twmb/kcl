@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"hash"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -34,6 +35,11 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd.AddCommand(list)
 	return cmd
 }
+
+var (
+	listHeaders  = []string{"USER", "MECHANISM", "ITERATIONS", "ERROR", "MESSAGE"}
+	alterHeaders = []string{"USER", "ERROR", "MESSAGE"}
+)
 
 func mech2str(mech int8) string {
 	switch mech {
@@ -67,6 +73,16 @@ func describeUserSCRAM(cl *client.Client) *cobra.Command {
 		Long: `List user SCRAM credentials.
 
 Requires Kafka 2.7.0+.
+
+Every user prints one row per mechanism, sorted by user. A user the broker
+could not describe is one row with ERROR set.
+
+EXAMPLES:
+  kcl user list                  # every user
+  kcl user list --user alice     # one user
+
+SEE ALSO:
+  kcl user alter    set or delete credentials
 `,
 		Args: cobra.ExactArgs(0),
 
@@ -84,33 +100,32 @@ Requires Kafka 2.7.0+.
 			}
 			resp := kresp.(*kmsg.DescribeUserSCRAMCredentialsResponse)
 
-			if resp.ErrorCode != 0 {
-				additional := ""
-				if resp.ErrorMessage != nil {
-					additional = ": " + *resp.ErrorMessage
-				}
-				return fmt.Errorf("%s%s", kerr.ErrorForCode(resp.ErrorCode), additional)
+			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+				return out.BrokerErr(err, resp.ErrorMessage)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "credentials",
-				"USER", "MECHANISM", "ITERATIONS", "ERROR")
-			for _, res := range resp.Results {
+			results := slices.Clone(resp.Results)
+			slices.SortFunc(results, func(a, b kmsg.DescribeUserSCRAMCredentialsResponseResult) int {
+				return strings.Compare(a.User, b.User)
+			})
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "credentials", listHeaders...).ErrorColumn()
+			for _, res := range results {
 				if res.ErrorCode != 0 {
-					msg := ""
-					if res.ErrorMessage != nil {
-						msg = *res.ErrorMessage
-					}
-					table.Row(res.User, "", "", fmt.Sprintf("%v, %s", kerr.ErrorForCode(res.ErrorCode), msg))
+					table.Row(res.User, out.Unknown, out.Unknown, out.ErrName(res.ErrorCode), out.BrokerMessage(res.ErrorMessage))
 					continue
 				}
-				for _, info := range res.CredentialInfos {
-					table.Row(res.User, mech2str(info.Mechanism), info.Iterations, "")
+				infos := slices.Clone(res.CredentialInfos)
+				slices.SortFunc(infos, func(a, b kmsg.DescribeUserSCRAMCredentialsResponseResultCredentialInfo) int {
+					return int(a.Mechanism - b.Mechanism)
+				})
+				for _, info := range infos {
+					table.Row(res.User, mech2str(info.Mechanism), info.Iterations, "", "")
 				}
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
+	out.Columns(cmd, listHeaders...)
 
 	cmd.Flags().StringArrayVar(&users, "user", nil, "user to describe; if nil, describes all")
 
@@ -152,6 +167,15 @@ For example,
     --set user=sally,mechanism=scram-sha-256,password=a,b=c
 
 Both --set and --del can be specified many times.
+
+The result prints one row per user with ERROR and MESSAGE.
+
+EXAMPLES:
+  kcl user alter --set user=alice,mechanism=scram-sha-512,password=foo
+  kcl user alter --del user=alice,mechanism=scram-sha-512
+
+SEE ALSO:
+  kcl user list    list credentials
 `,
 		Args: cobra.ExactArgs(0),
 
@@ -239,7 +263,7 @@ Both --set and --del can be specified many times.
 					case "iterations":
 						i, err := strconv.ParseInt(v, 10, 32)
 						if err != nil {
-							return fmt.Errorf("set iterations is not a number: %v", err)
+							return out.Errf(out.ExitUsage, "set iterations is not a number: %v", err)
 						}
 						if i < 4096 || i > 16<<10 {
 							return out.Errf(out.ExitUsage, "invalid iterations %d: min allowed 4096, max 16384", i)
@@ -249,7 +273,7 @@ Both --set and --del can be specified many times.
 						var err error
 						u.Salt, err = hex.DecodeString(v)
 						if err != nil {
-							return fmt.Errorf("salt is not hex: %v", err)
+							return out.Errf(out.ExitUsage, "salt is not hex: %v", err)
 						}
 					}
 				}
@@ -290,27 +314,14 @@ Both --set and --del can be specified many times.
 			}
 			resp := kresp.(*kmsg.AlterUserSCRAMCredentialsResponse)
 
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
-				"USER", "ERROR", "MESSAGE")
-			var failed bool
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results", alterHeaders...).ResultColumns()
 			for _, res := range resp.Results {
-				errStr, msg := "", ""
-				if err := kerr.ErrorForCode(res.ErrorCode); err != nil {
-					errStr = err.Error()
-					failed = true
-				}
-				if res.ErrorMessage != nil {
-					msg = *res.ErrorMessage
-				}
-				table.Row(res.User, errStr, msg)
+				table.Row(res.User, out.ErrName(res.ErrorCode), out.BrokerMessage(res.ErrorMessage))
 			}
-			table.Flush()
-			if failed {
-				return out.ErrSilent
-			}
-			return nil
+			return table.Flush()
 		},
 	}
+	out.Columns(cmd, alterHeaders...)
 
 	cmd.Flags().StringArrayVar(&dels, "del", nil, "user and mechanism pairing to delete, repeatable")
 	cmd.Flags().StringArrayVarP(&sets, "set", "s", nil, "user and mechanism pairing to insert or update, repeatable")

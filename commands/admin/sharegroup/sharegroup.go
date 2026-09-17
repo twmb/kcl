@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -36,65 +38,281 @@ func Command(cl *client.Client) *cobra.Command {
 }
 
 func listCommand(cl *client.Client) *cobra.Command {
-	var statesFilter []string
+	var states []string
 	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List all share groups (Kafka 4.0+).",
 		Long: `List all share groups (Kafka 4.0+).
 
-List all share groups (KIP-932, Kafka 4.0+).
+List all share groups (KIP-932, Kafka 4.0+), sorted by name.
 
-This is equivalent to "group list --type-filter share". It lists share groups
-by issuing a ListGroups request with a type filter of "share".
+This is equivalent to "group list --type share". It lists share groups by
+issuing a ListGroups request with a type filter of "share".
+
+A broker that could not answer is one row with its error and no group, and
+the command exits 1.
+
+EXAMPLES:
+  kcl share-group list                    # every share group
+  kcl share-group list --state empty      # share groups with no members
+
+SEE ALSO:
+  kcl share-group describe    describe share groups with lag
+  kcl group list              list every group, of every type
 `,
 		Args: cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
-			for i, f := range statesFilter {
+			for i, f := range states {
 				switch client.Strnorm(f) {
 				case "stable":
-					statesFilter[i] = "Stable"
+					states[i] = "Stable"
 				case "dead":
-					statesFilter[i] = "Dead"
+					states[i] = "Dead"
 				case "empty":
-					statesFilter[i] = "Empty"
+					states[i] = "Empty"
 				}
 			}
 			kresps := cl.Client().RequestSharded(context.Background(), &kmsg.ListGroupsRequest{
-				StatesFilter: statesFilter,
+				StatesFilter: states,
 				TypesFilter:  []string{"share"},
 			})
 
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "groups",
-				"BROKER", "GROUP-ID", "STATE")
+			type row struct {
+				broker int32
+				group  string
+				state  string
+				err    error
+			}
+			var rows []row
 			for _, kresp := range kresps {
 				err := kresp.Err
 				if err == nil {
 					err = kerr.ErrorForCode(kresp.Resp.(*kmsg.ListGroupsResponse).ErrorCode)
 				}
 				if err != nil {
-					table.Row(kresp.Meta.NodeID, "", err)
+					rows = append(rows, row{broker: kresp.Meta.NodeID, err: err})
 					continue
 				}
-
-				resp := kresp.Resp.(*kmsg.ListGroupsResponse)
-				for _, group := range resp.Groups {
-					table.Row(kresp.Meta.NodeID, group.Group, group.GroupState)
+				for _, g := range kresp.Resp.(*kmsg.ListGroupsResponse).Groups {
+					rows = append(rows, row{broker: kresp.Meta.NodeID, group: g.Group, state: g.GroupState})
 				}
 			}
-			table.Flush()
-			return nil
+			sort.SliceStable(rows, func(i, j int) bool {
+				if rows[i].group != rows[j].group {
+					return rows[i].group < rows[j].group
+				}
+				return rows[i].broker < rows[j].broker
+			})
+
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "groups",
+				"BROKER", "GROUP", "STATE", "ERROR").ErrorColumn()
+			for _, r := range rows {
+				if r.err != nil {
+					table.Row(r.broker, out.Unknown, out.Unknown, out.ErrCell(r.err))
+					continue
+				}
+				table.Row(r.broker, r.group, r.state, "")
+			}
+			return table.Flush()
 		},
 	}
-	cmd.Flags().StringArrayVarP(&statesFilter, "filter", "f", nil, "filter groups by state (Stable, Dead, Empty; repeatable)")
+	out.Columns(cmd, "BROKER", "GROUP", "STATE", "ERROR")
+	cmd.Flags().StringArrayVar(&states, "state", nil, "keep only groups in this state (Stable, Dead, Empty; repeatable)")
+	cmd.Flags().StringArrayVarP(&states, "filter", "f", nil, "old name of --state")
+	cmd.Flags().MarkHidden("filter")
 	return cmd
+}
+
+// Column shapes of share-group describe, by --section. awk leads every row
+// with its group.
+var (
+	shareSummaryHeaders = []string{"GROUP", "COORDINATOR", "STATE", "EPOCH", "ASSIGNMENT-EPOCH", "ASSIGNOR", "MEMBERS", "TOTAL-LAG", "ERROR", "MESSAGE"}
+	shareMemberHeaders  = []string{"MEMBER-ID", "CLIENT-ID", "HOST", "RACK", "MEMBER-EPOCH", "SUBSCRIBED-TOPICS", "ASSIGNMENT"}
+	shareOffsetHeaders  = []string{"TOPIC", "PARTITION", "START-OFFSET", "LEADER-EPOCH", "LAG", "ERROR", "MESSAGE"}
+)
+
+// normSection is the section a --section value names, or "" when it names
+// none.
+func normSection(section string) string {
+	switch client.Strnorm(section) {
+	case "summary", "members", "offsets":
+		return client.Strnorm(section)
+	}
+	return ""
+}
+
+func awkHeaders(section string) []string {
+	switch normSection(section) {
+	case "summary":
+		return shareSummaryHeaders
+	case "members":
+		return append([]string{"GROUP"}, shareMemberHeaders...)
+	}
+	return append([]string{"GROUP"}, shareOffsetHeaders...)
+}
+
+// shareGroup is one described share group with its offsets, as the printer
+// sees it.
+type shareGroup struct {
+	coordinator int32
+	group       kmsg.ShareGroupDescribeResponseGroup
+	err         string // why the broker could not describe the group, or ""
+	message     string // the text the broker attached to err, or ""
+	offsets     []shareOffset
+	totalLag    int64
+	totalValid  bool // whether any partition reported a lag
+}
+
+type shareOffset struct {
+	topic       string
+	partition   int32
+	startOffset int64
+	leaderEpoch int32
+	lag         int64 // -1 when the broker did not report one
+	err         string
+	message     string
+}
+
+func (o shareOffset) lagNum() any {
+	if o.lag < 0 {
+		return out.Unknown
+	}
+	return o.lag
+}
+
+func (o shareOffset) values() []any {
+	return []any{o.topic, o.partition, o.startOffset, o.leaderEpoch, o.lagNum(), o.err, o.message}
+}
+
+func (o shareOffset) json() map[string]any {
+	return map[string]any{
+		"topic":        o.topic,
+		"partition":    o.partition,
+		"start_offset": o.startOffset,
+		"leader_epoch": o.leaderEpoch,
+		"lag":          o.lagNum(),
+		"error":        o.err,
+		"message":      o.message,
+	}
+}
+
+func (g shareGroup) totalLagNum() any {
+	if !g.totalValid {
+		return out.Unknown
+	}
+	return g.totalLag
+}
+
+func (g shareGroup) summaryValues() []any {
+	return []any{g.group.GroupID, g.coordinator, g.group.GroupState, g.group.GroupEpoch, g.group.AssignmentEpoch, g.group.Assignor, len(g.group.Members), g.totalLagNum(), g.err, g.message}
+}
+
+func memberValues(member kmsg.ShareGroupDescribeResponseGroupMember) []any {
+	return []any{member.MemberID, member.ClientID, member.ClientHost, rackCell(member.RackID), member.MemberEpoch, strings.Join(member.SubscribedTopicNames, ","), formatShareMemberAssignment(member)}
+}
+
+// rackCell is the RACK cell: the rack a member reported, or Unknown for a
+// member that reported none.
+func rackCell(rack *string) any {
+	if rack == nil {
+		return out.Unknown
+	}
+	return *rack
+}
+
+func memberJSON(member kmsg.ShareGroupDescribeResponseGroupMember) map[string]any {
+	subscribed := member.SubscribedTopicNames
+	if subscribed == nil {
+		subscribed = []string{}
+	}
+	return map[string]any{
+		"member_id":         member.MemberID,
+		"client_id":         member.ClientID,
+		"host":              member.ClientHost,
+		"rack":              rackCell(member.RackID),
+		"member_epoch":      member.MemberEpoch,
+		"subscribed_topics": subscribed,
+		"assignment":        formatShareMemberAssignment(member),
+	}
+}
+
+// errorCells are the ERROR and MESSAGE of a group or partition the broker
+// answered with an error, "" and "" otherwise.
+func errorCells(code int16, message *string) (string, string) {
+	if code == 0 {
+		return "", ""
+	}
+	return out.ErrName(code), out.BrokerMessage(message)
+}
+
+// describeShareGroups describes the groups and their offsets, sorted by
+// group, partitions by topic then number.
+func describeShareGroups(cl *client.Client, groups []string) []shareGroup {
+	req := kmsg.NewPtrShareGroupDescribeRequest()
+	req.GroupIDs = groups
+	shards := cl.Client().RequestSharded(context.Background(), req)
+	offsetsByGroup := fetchShareGroupOffsets(cl, groups)
+
+	var described []shareGroup
+	for _, shard := range shards {
+		if shard.Err != nil {
+			fmt.Fprintf(os.Stderr, "unable to issue ShareGroupDescribe to broker %d (%s:%d): %v\n", shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
+			continue
+		}
+		resp := shard.Resp.(*kmsg.ShareGroupDescribeResponse)
+		for _, group := range resp.Groups {
+			g := shareGroup{
+				coordinator: shard.Meta.NodeID,
+				group:       group,
+				offsets:     []shareOffset{},
+			}
+			g.err, g.message = errorCells(group.ErrorCode, group.ErrorMessage)
+			// The broker answers members in join order, which changes
+			// from one run to the next.
+			g.group.Members = slices.Clone(g.group.Members)
+			slices.SortFunc(g.group.Members, func(a, b kmsg.ShareGroupDescribeResponseGroupMember) int {
+				return strings.Compare(a.MemberID, b.MemberID)
+			})
+			if offsets, ok := offsetsByGroup[group.GroupID]; ok {
+				for _, topic := range offsets.Topics {
+					for _, p := range topic.Partitions {
+						o := shareOffset{
+							topic:       topic.Topic,
+							partition:   p.Partition,
+							startOffset: p.StartOffset,
+							leaderEpoch: p.LeaderEpoch,
+							lag:         p.Lag,
+						}
+						o.err, o.message = errorCells(p.ErrorCode, p.ErrorMessage)
+						if o.lag >= 0 {
+							g.totalLag += o.lag
+							g.totalValid = true
+						}
+						g.offsets = append(g.offsets, o)
+					}
+				}
+			}
+			sort.Slice(g.offsets, func(i, j int) bool {
+				if g.offsets[i].topic != g.offsets[j].topic {
+					return g.offsets[i].topic < g.offsets[j].topic
+				}
+				return g.offsets[i].partition < g.offsets[j].partition
+			})
+			described = append(described, g)
+		}
+	}
+	sort.SliceStable(described, func(i, j int) bool {
+		return described[i].group.GroupID < described[j].group.GroupID
+	})
+	return described
 }
 
 func describeCommand(cl *client.Client) *cobra.Command {
 	var section string
 	var regex bool
 	cmd := &cobra.Command{
-		Use:     "describe GROUPS...",
+		Use:     "describe [GROUPS...]",
 		Aliases: []string{"d"},
 		Short:   "Describe share groups with offsets and lag (Kafka 4.0+).",
 		Long: `Describe share groups with offsets and lag (Kafka 4.0+).
@@ -110,23 +328,25 @@ Use --section to show only a specific section of the output:
   members   per-member detail (id, host, epoch, assignment)
   offsets   per-partition start offsets and lag
 
-Defaults: text shows all sections, awk shows offsets.
+Defaults: text shows all sections, awk shows offsets. In awk, every row
+begins with the group it belongs to.
+
+EXAMPLES:
+  kcl share-group describe                    # every share group
+  kcl share-group describe sg1                # one group, every section
+  kcl share-group describe sg1 --section offsets --format awk
+
+SEE ALSO:
+  kcl share-group list    list share groups
+  kcl share-group seek    reset share group start offsets
+  kcl consume --share-group   consume as a share group member
 `,
 		RunE: func(_ *cobra.Command, groups []string) error {
-			// A group the broker could not describe is printed with its error
-			// and is a failure, as a missing topic is for topic describe.
-			anyErr := false
 			if section != "" {
-				switch client.Strnorm(section) {
-				case "summary":
-					section = "summary"
-				case "members":
-					section = "members"
-				case "offsets":
-					section = "offsets"
-				default:
+				if normSection(section) == "" {
 					return out.Errf(out.ExitUsage, "invalid --section %q: must be summary, members, or offsets", section)
 				}
+				section = normSection(section)
 			}
 
 			if regex {
@@ -147,256 +367,112 @@ Defaults: text shows all sections, awk shows offsets.
 				return fmt.Errorf("no share groups to describe")
 			}
 
-			req := kmsg.NewPtrShareGroupDescribeRequest()
-			req.GroupIDs = groups
-
-			shards := cl.Client().RequestSharded(context.Background(), req)
-
-			offsetsByGroup := fetchShareGroupOffsets(cl, groups)
-
-			// Pre-compute total lag per group so it is available to all
-			// format paths.
-			type lagSummary struct {
-				totalLag   int64
-				partCount  int
-				nonZeroLag int
-			}
-			lagByGroup := make(map[string]lagSummary)
-			for gid, offsets := range offsetsByGroup {
-				var ls lagSummary
-				for _, topic := range offsets.Topics {
-					for _, p := range topic.Partitions {
-						ls.partCount++
-						if p.Lag > 0 {
-							ls.totalLag += p.Lag
-							ls.nonZeroLag++
-						}
-					}
-				}
-				lagByGroup[gid] = ls
-			}
+			described := describeShareGroups(cl, groups)
 
 			switch cl.Format() {
-			case "json":
-				type jsonOffset struct {
-					Topic       string `json:"topic"`
-					Partition   int32  `json:"partition"`
-					StartOffset int64  `json:"start_offset"`
-					LeaderEpoch int32  `json:"leader_epoch"`
-					Lag         int64  `json:"lag"`
-					Error       string `json:"error,omitempty"`
-				}
-				type jsonMember struct {
-					MemberID         string   `json:"member_id"`
-					ClientID         string   `json:"client_id"`
-					Host             string   `json:"host"`
-					MemberEpoch      int32    `json:"member_epoch"`
-					SubscribedTopics []string `json:"subscribed_topics"`
-					Assignment       string   `json:"assignment"`
-				}
-				type jsonGroup struct {
-					GroupID         string       `json:"group_id"`
-					Coordinator     int32        `json:"coordinator"`
-					State           string       `json:"state"`
-					Epoch           int32        `json:"epoch"`
-					AssignmentEpoch int32        `json:"assignment_epoch"`
-					Assignor        string       `json:"assignor"`
-					Members         []jsonMember `json:"members"`
-					TotalLag        int64        `json:"total_lag"`
-					Offsets         []jsonOffset `json:"offsets"`
-					Error           string       `json:"error,omitempty"`
-				}
-				var jgroups []jsonGroup
-				for _, shard := range shards {
-					if shard.Err != nil {
-						continue
+			case out.FormatJSON:
+				jgroups := make([]map[string]any, 0, len(described))
+				for _, g := range described {
+					members := make([]map[string]any, 0, len(g.group.Members))
+					for _, member := range g.group.Members {
+						members = append(members, memberJSON(member))
 					}
-					resp := shard.Resp.(*kmsg.ShareGroupDescribeResponse)
-					for _, group := range resp.Groups {
-						jg := jsonGroup{
-							GroupID:         group.GroupID,
-							Coordinator:     shard.Meta.NodeID,
-							State:           group.GroupState,
-							Epoch:           group.GroupEpoch,
-							AssignmentEpoch: group.AssignmentEpoch,
-							Assignor:        group.Assignor,
-						}
-						if ls, ok := lagByGroup[group.GroupID]; ok {
-							jg.TotalLag = ls.totalLag
-						}
-						if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
-							anyErr = true
-							msg := err.Error()
-							if group.ErrorMessage != nil {
-								msg += ": " + *group.ErrorMessage
-							}
-							jg.Error = msg
-						}
-						for _, member := range group.Members {
-							jg.Members = append(jg.Members, jsonMember{
-								MemberID:         member.MemberID,
-								ClientID:         member.ClientID,
-								Host:             member.ClientHost,
-								MemberEpoch:      member.MemberEpoch,
-								SubscribedTopics: member.SubscribedTopicNames,
-								Assignment:       formatShareMemberAssignment(member),
-							})
-						}
-						if offsets, ok := offsetsByGroup[group.GroupID]; ok {
-							for _, topic := range offsets.Topics {
-								for _, p := range topic.Partitions {
-									jo := jsonOffset{
-										Topic:       topic.Topic,
-										Partition:   p.Partition,
-										StartOffset: p.StartOffset,
-										LeaderEpoch: p.LeaderEpoch,
-										Lag:         p.Lag,
-									}
-									if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
-										jo.Error = err.Error()
-									}
-									jg.Offsets = append(jg.Offsets, jo)
-								}
-							}
-						}
-						jgroups = append(jgroups, jg)
+					offsets := make([]map[string]any, 0, len(g.offsets))
+					for _, o := range g.offsets {
+						offsets = append(offsets, o.json())
 					}
+					jgroups = append(jgroups, map[string]any{
+						"group":            g.group.GroupID,
+						"coordinator":      g.coordinator,
+						"state":            g.group.GroupState,
+						"epoch":            g.group.GroupEpoch,
+						"assignment_epoch": g.group.AssignmentEpoch,
+						"assignor":         g.group.Assignor,
+						"members":          members,
+						"total_lag":        g.totalLagNum(),
+						"offsets":          offsets,
+						"error":            g.err,
+						"message":          g.message,
+					})
 				}
 				out.MarshalJSON(cl.Command(), 1, map[string]any{
 					"groups": jgroups,
 				})
-			case "awk":
-				awkSection := section
-				if awkSection == "" {
-					awkSection = "offsets"
+
+			case out.FormatAWK:
+				sect := section
+				if sect == "" {
+					sect = "offsets"
 				}
-				for _, shard := range shards {
-					if shard.Err != nil {
-						continue
-					}
-					resp := shard.Resp.(*kmsg.ShareGroupDescribeResponse)
-					for _, group := range resp.Groups {
-						groupErr := kerr.ErrorForCode(group.ErrorCode)
-						if groupErr != nil {
-							anyErr = true
+				table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, sect, awkHeaders(sect)...)
+				for _, g := range described {
+					switch sect {
+					case "summary":
+						table.Row(g.summaryValues()...)
+					case "members":
+						for _, member := range g.group.Members {
+							table.Row(append([]any{g.group.GroupID}, memberValues(member)...)...)
 						}
-						switch awkSection {
-						case "summary":
-							errMsg := ""
-							if groupErr != nil {
-								errMsg = groupErr.Error()
-								if group.ErrorMessage != nil {
-									errMsg += ": " + *group.ErrorMessage
-								}
-							}
-							ls := lagByGroup[group.GroupID]
-							fmt.Printf("%s\t%d\t%s\t%d\t%d\t%s\t%d\t%d\t%s\n",
-								group.GroupID,
-								shard.Meta.NodeID,
-								group.GroupState,
-								group.GroupEpoch,
-								group.AssignmentEpoch,
-								group.Assignor,
-								len(group.Members),
-								ls.totalLag,
-								errMsg,
-							)
-						case "members":
-							for _, member := range group.Members {
-								fmt.Printf("%s\t%s\t%s\t%d\t%s\t%s\n",
-									member.MemberID,
-									member.ClientID,
-									member.ClientHost,
-									member.MemberEpoch,
-									strings.Join(member.SubscribedTopicNames, ","),
-									formatShareMemberAssignment(member),
-								)
-							}
-						case "offsets":
-							if offsets, ok := offsetsByGroup[group.GroupID]; ok {
-								for _, topic := range offsets.Topics {
-									for _, p := range topic.Partitions {
-										errMsg := ""
-										if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
-											errMsg = err.Error()
-										}
-										fmt.Printf("%s\t%d\t%d\t%d\t%d\t%s\n",
-											topic.Topic,
-											p.Partition,
-											p.StartOffset,
-											p.LeaderEpoch,
-											p.Lag,
-											errMsg,
-										)
-									}
-								}
-							}
+					case "offsets":
+						for _, o := range g.offsets {
+							table.Row(append([]any{g.group.GroupID}, o.values()...)...)
 						}
 					}
 				}
+				table.Flush()
+
 			default:
 				showSummary := section == "" || section == "summary"
 				showMembers := section == "" || section == "members"
 				showOffsets := section == "" || section == "offsets"
 
-				for _, shard := range shards {
-					if shard.Err != nil {
-						fmt.Fprintf(os.Stderr, "unable to issue ShareGroupDescribe to broker %d (%s:%d): %v\n", shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
-						continue
+				for gi, g := range described {
+					if showSummary {
+						printShareGroupSummary(g)
 					}
 
-					resp := shard.Resp.(*kmsg.ShareGroupDescribeResponse)
-					for _, group := range resp.Groups {
-						groupErr := kerr.ErrorForCode(group.ErrorCode)
-						if groupErr != nil {
-							anyErr = true
-						}
+					// A section asked for by name prints its
+					// header even with no rows; the default view
+					// skips an empty table.
+					if showMembers && (len(g.group.Members) > 0 || section == "members") {
 						if showSummary {
-							ls := lagByGroup[group.GroupID]
-							printShareGroupSummary(shard.Meta.NodeID, group, ls.totalLag, ls.partCount, ls.nonZeroLag)
+							fmt.Println()
 						}
+						table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "members", shareMemberHeaders...)
+						for _, member := range g.group.Members {
+							table.Row(memberValues(member)...)
+						}
+						table.Flush()
+					}
 
-						if showMembers && len(group.Members) > 0 {
-							if showSummary {
-								fmt.Println()
-							}
-							printShareGroupMembers(cl.Format(), cl.Command(), group)
+					if showOffsets && g.err == "" && (len(g.offsets) > 0 || section == "offsets") {
+						if showSummary || showMembers && len(g.group.Members) > 0 {
+							fmt.Println()
 						}
-
-						if showOffsets && groupErr == nil {
-							offsets, ok := offsetsByGroup[group.GroupID]
-							if ok {
-								if showSummary || showMembers {
-									fmt.Println()
-								}
-								lagTable := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "offsets",
-									"TOPIC", "PARTITION", "START-OFFSET", "LEADER-EPOCH", "LAG", "ERROR")
-								for _, topic := range offsets.Topics {
-									for _, p := range topic.Partitions {
-										errMsg := ""
-										if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
-											errMsg = err.Error()
-										}
-										lag := out.NoNum
-										if p.Lag >= 0 {
-											lag = out.Num(p.Lag)
-										}
-										lagTable.Row(topic.Topic, p.Partition, p.StartOffset, p.LeaderEpoch, lag, errMsg)
-									}
-								}
-								lagTable.Flush()
-							}
+						table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "offsets", shareOffsetHeaders...)
+						for _, o := range g.offsets {
+							table.Row(o.values()...)
 						}
+						table.Flush()
+					}
+					if gi < len(described)-1 {
 						fmt.Println()
 					}
 				}
 			}
-			if anyErr {
-				return out.ErrSilent
+
+			// A group the broker could not describe is printed with its
+			// error and is a failure, as a missing topic is for topic
+			// describe.
+			for _, g := range described {
+				if g.err != "" {
+					return out.ErrSilent
+				}
 			}
 			return nil
 		},
 	}
+	out.ColumnsFunc(cmd, func() []string { return awkHeaders(section) })
 	cmd.Flags().StringVar(&section, "section", "", "output section (summary, members, offsets; default: all for text, offsets for awk)")
 	cmd.Flags().BoolVarP(&regex, "regex", "r", false, "treat group arguments as regular expressions")
 	return cmd
@@ -422,80 +498,64 @@ func fetchShareGroupOffsets(cl *client.Client, groups []string) map[string]*kmsg
 	return result
 }
 
-func printShareGroupSummary(broker int32, group kmsg.ShareGroupDescribeResponseGroup, totalLag int64, partCount, nonZeroLag int) {
+func printShareGroupSummary(g shareGroup) {
 	tw := out.NewTabWriter()
-	fmt.Fprintf(tw, "GROUP\t%s\n", group.GroupID)
-	fmt.Fprintf(tw, "COORDINATOR\t%d\n", broker)
+	fmt.Fprintf(tw, "GROUP\t%s\n", g.group.GroupID)
+	fmt.Fprintf(tw, "COORDINATOR\t%d\n", g.coordinator)
 	// If the group errored (e.g. GROUP_ID_NOT_FOUND), skip the empty
 	// state/epoch/members fields and surface just the error.
-	if err := kerr.ErrorForCode(group.ErrorCode); err != nil {
-		msg := err.Error()
-		if group.ErrorMessage != nil {
-			msg += ": " + *group.ErrorMessage
+	if g.err != "" {
+		fmt.Fprintf(tw, "ERROR\t%s\n", g.err)
+		if g.message != "" {
+			fmt.Fprintf(tw, "MESSAGE\t%s\n", g.message)
 		}
-		fmt.Fprintf(tw, "ERROR\t%s\n", msg)
 		tw.Flush()
 		return
 	}
-	fmt.Fprintf(tw, "STATE\t%s\n", group.GroupState)
-	fmt.Fprintf(tw, "EPOCH\t%d\n", group.GroupEpoch)
-	fmt.Fprintf(tw, "ASSIGNMENT-EPOCH\t%d\n", group.AssignmentEpoch)
-	fmt.Fprintf(tw, "ASSIGNOR\t%s\n", group.Assignor)
-	fmt.Fprintf(tw, "MEMBERS\t%d\n", len(group.Members))
-	fmt.Fprintf(tw, "TOTAL-LAG\t%d across %d partitions (%d non-zero)\n", totalLag, partCount, nonZeroLag)
+	fmt.Fprintf(tw, "STATE\t%s\n", g.group.GroupState)
+	fmt.Fprintf(tw, "EPOCH\t%d\n", g.group.GroupEpoch)
+	fmt.Fprintf(tw, "ASSIGNMENT-EPOCH\t%d\n", g.group.AssignmentEpoch)
+	fmt.Fprintf(tw, "ASSIGNOR\t%s\n", g.group.Assignor)
+	fmt.Fprintf(tw, "MEMBERS\t%d\n", len(g.group.Members))
+	fmt.Fprintf(tw, "TOTAL-LAG\t%v\n", g.totalLagNum())
 	tw.Flush()
 }
 
-func printShareGroupMembers(format, command string, group kmsg.ShareGroupDescribeResponseGroup) {
-	table := out.NewFormattedTable(format, command, 1, "members",
-		"MEMBER-ID", "CLIENT-ID", "HOST", "MEMBER-EPOCH", "SUBSCRIBED-TOPICS", "ASSIGNMENT")
-	for _, member := range group.Members {
-		var rack string
-		if member.RackID != nil {
-			rack = " (rack=" + *member.RackID + ")"
-		}
-
-		table.Row(
-			member.MemberID,
-			member.ClientID,
-			member.ClientHost+rack,
-			member.MemberEpoch,
-			strings.Join(member.SubscribedTopicNames, ","),
-			formatShareMemberAssignment(member),
-		)
-	}
-	table.Flush()
-}
-
+// formatShareMemberAssignment is the partitions a member owns as one field,
+// "t:0,1;u:2", topics sorted and partitions ascending. Nothing owned is "".
 func formatShareMemberAssignment(member kmsg.ShareGroupDescribeResponseGroupMember) string {
-	var assignedParts []string
+	assigned := make(map[string][]int32)
 	for _, tp := range member.Assignment.TopicPartitions {
 		name := tp.Topic
 		if name == "" {
 			name = fmt.Sprintf("%x", tp.TopicID)
 		}
-		parts := make([]string, len(tp.Partitions))
-		for i, p := range tp.Partitions {
-			parts[i] = fmt.Sprintf("%d", p)
-		}
-		assignedParts = append(assignedParts, name+":"+strings.Join(parts, ","))
+		assigned[name] = append(assigned[name], tp.Partitions...)
 	}
-	return strings.Join(assignedParts, " ")
+	topics := make([]string, 0, len(assigned))
+	for topic := range assigned {
+		topics = append(topics, topic)
+	}
+	sort.Strings(topics)
+	var parts []string
+	for _, topic := range topics {
+		ps := assigned[topic]
+		sort.Slice(ps, func(i, j int) bool { return ps[i] < ps[j] })
+		strs := make([]string, len(ps))
+		for i, p := range ps {
+			strs[i] = fmt.Sprintf("%d", p)
+		}
+		parts = append(parts, topic+":"+strings.Join(strs, ","))
+	}
+	return strings.Join(parts, ";")
 }
 
 // deleteGroupResult returns what to print for one deleted share group: the
-// ERROR column, the MESSAGE column, and the error itself so the caller can
-// fail the command. Kafka 4.4 attaches a message to a failed delete
-// (KIP-1331); an older broker sends none and the message is empty.
-func deleteGroupResult(g kmsg.DeleteGroupsResponseGroup) (status, message string, err error) {
-	status = "OK"
-	if err = kerr.ErrorForCode(g.ErrorCode); err != nil {
-		status = err.Error()
-	}
-	if g.ErrorMessage != nil {
-		message = *g.ErrorMessage
-	}
-	return status, message, err
+// ERROR column, "" when the delete succeeded, and the MESSAGE column. Kafka
+// 4.4 attaches a message to a failed delete (KIP-1331); an older broker
+// sends none and the message is empty.
+func deleteGroupResult(g kmsg.DeleteGroupsResponseGroup) (errStr, message string) {
+	return out.ErrName(g.ErrorCode), out.BrokerMessage(g.ErrorMessage)
 }
 
 func deleteCommand(cl *client.Client) *cobra.Command {
@@ -513,6 +573,14 @@ The groups must be empty (no active consumers) to be deleted.
 Use --regex to treat arguments as regex patterns: all share groups matching
 any pattern will be deleted. Use --dry-run to see which groups would be deleted
 without actually deleting them.
+
+EXAMPLES:
+  kcl share-group delete sg1 sg2                # delete two groups
+  kcl share-group delete -r 'test-.*' --dry-run # print what the pattern matches
+
+SEE ALSO:
+  kcl share-group list            list share groups
+  kcl share-group offset-delete   delete a share group's offsets for a topic
 `,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
@@ -524,47 +592,39 @@ without actually deleting them.
 				}
 				if len(args) == 0 {
 					fmt.Fprintln(os.Stderr, "No share groups matched the provided regex patterns.")
-					return nil
 				}
 			}
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
+				"BROKER", "GROUP", "ERROR", "MESSAGE").ResultColumns()
 			if dryRun {
-				fmt.Fprintln(os.Stderr, "Dry run: the following share groups would be deleted:")
+				table.SetDryRun(true)
 				for _, g := range args {
-					fmt.Fprintf(os.Stderr, "  %s\n", g)
+					table.Row(out.Unknown, g, out.Unknown, out.Unknown)
 				}
-				return nil
+				return table.Flush()
+			}
+			if len(args) == 0 {
+				return table.Flush()
 			}
 			brokerResps := cl.Client().RequestSharded(context.Background(), &kmsg.DeleteGroupsRequest{
 				Groups: args,
 			})
-			// MESSAGE is appended rather than folded into ERROR so that a
-			// script keeps the columns it already indexes.
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
-				"BROKER", "GROUP", "ERROR", "MESSAGE")
-			anyErr := false
 			for _, brokerResp := range brokerResps {
 				kresp, err := brokerResp.Resp, brokerResp.Err
 				if err != nil {
-					anyErr = true
-					table.Row(brokerResp.Meta.NodeID, "", fmt.Sprintf("unable to issue request (addr %s:%d): %v", brokerResp.Meta.Host, brokerResp.Meta.Port, err), "")
+					table.Row(brokerResp.Meta.NodeID, out.Unknown, fmt.Sprintf("unable to issue request (addr %s:%d): %v", brokerResp.Meta.Host, brokerResp.Meta.Port, err), "")
 					continue
 				}
 				resp := kresp.(*kmsg.DeleteGroupsResponse)
 				for _, g := range resp.Groups {
-					status, message, err := deleteGroupResult(g)
-					if err != nil {
-						anyErr = true
-					}
-					table.Row(brokerResp.Meta.NodeID, g.Group, status, message)
+					errStr, message := deleteGroupResult(g)
+					table.Row(brokerResp.Meta.NodeID, g.Group, errStr, message)
 				}
 			}
-			table.Flush()
-			if anyErr {
-				return out.ErrSilent
-			}
-			return nil
+			return table.Flush()
 		},
 	}
+	out.Columns(cmd, "BROKER", "GROUP", "ERROR", "MESSAGE")
 	cmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "print groups that would be deleted without actually deleting them")
 	cmd.Flags().BoolVarP(&useRegex, "regex", "r", false, "treat group arguments as regex patterns; match against all existing share groups")
 	return cmd

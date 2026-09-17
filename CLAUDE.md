@@ -55,7 +55,18 @@ you have broken something.
 see MIGRATION.md. Pipe to jq when you want it wide.
 
 `text` is for people and may change between releases. `awk` is the stable
-scripting contract: TSV, no headers, stable column order.
+scripting contract: TSV, no headers, stable column order, and `-` for an
+empty or unknown cell. Every table registers its awk columns with
+`out.Columns` or `out.ColumnsFunc` next to its flags, and `--format
+awk-header` prints them and exits before anything is dialed;
+`NewFormattedTable` checks the runtime headers against the registration.
+
+A mutating command's rows end in ERROR and MESSAGE through
+`ResultColumns` (text prints OK on success); a read-only table ends in
+ERROR through `ErrorColumn` (text prints nothing). ERROR is the bare kerr
+name from `out.ErrName`, MESSAGE the broker's text from
+`out.BrokerMessage`, and `Flush` returns `ErrSilent` when any ERROR is
+set, so the command exits 1.
 
 ## Commands
 
@@ -88,15 +99,20 @@ known before the command runs, where an ACL filter or a group seek only
 learns what it matched after asking the cluster.
 
 Renames keep the old name working as a `Hidden`/`Deprecated` cobra command
-or flag, so no script breaks. `--help-json` (`main.go:203`) dumps the whole
-tree, and `main_test.go` pins that hidden commands stay marked.
+or flag, so no script breaks, and `out.AliasOf` marks the old command, or
+the top of an old subtree, with the path it forwards to, so `_command` is
+the new path. `--help-json` (`main.go:203`) dumps the whole tree,
+`main_test.go` pins that hidden commands stay marked, and the walkthrough
+runs every hidden leaf and flag and fails on one it cannot map.
 
 ## Errors and exit codes
 
 `out.ExitOK` 0, `out.ExitError` 1 for a Kafka-level failure, `out.ExitUsage`
 2 for bad flags, arguments, or parse failures. Return `out.Errf(code, ...)`
-rather than a bare `fmt.Errorf` when the exit code matters. `out.DieJSON`
-emits a structured error when the format is JSON.
+rather than a bare `fmt.Errorf` when the exit code matters. Every error a
+command returns reaches `out.HandleError`, which writes the
+`{_command,_version,code,error}` document when the format is JSON; there
+is no other JSON error path.
 
 ## Tests
 

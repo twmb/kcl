@@ -21,45 +21,37 @@ func TestDeleteGroupResult(t *testing.T) {
 	for _, test := range []struct {
 		name        string
 		group       kmsg.DeleteGroupsResponseGroup
-		wantStatus  string
+		wantErr     string
 		wantMessage string
-		wantErr     bool
 	}{
 		{
-			name:       "ok",
-			group:      kmsg.DeleteGroupsResponseGroup{Group: "g"},
-			wantStatus: "OK",
+			name:  "ok",
+			group: kmsg.DeleteGroupsResponseGroup{Group: "g"},
 		},
 		{
-			name:       "error, no message",
-			group:      kmsg.DeleteGroupsResponseGroup{Group: "g", ErrorCode: kerr.NonEmptyGroup.Code},
-			wantStatus: "NON_EMPTY_GROUP: The group is not empty.",
-			wantErr:    true,
+			name:    "error, no message",
+			group:   kmsg.DeleteGroupsResponseGroup{Group: "g", ErrorCode: kerr.NonEmptyGroup.Code},
+			wantErr: "NON_EMPTY_GROUP",
 		},
 		{
 			name:        "error with a message",
 			group:       kmsg.DeleteGroupsResponseGroup{Group: "g", ErrorCode: kerr.NonEmptyGroup.Code, ErrorMessage: &msg},
-			wantStatus:  "NON_EMPTY_GROUP: The group is not empty.",
+			wantErr:     "NON_EMPTY_GROUP",
 			wantMessage: msg,
-			wantErr:     true,
 		},
 		{
-			name:       "an empty message is not a message",
-			group:      kmsg.DeleteGroupsResponseGroup{Group: "g", ErrorCode: kerr.NonEmptyGroup.Code, ErrorMessage: &empty},
-			wantStatus: "NON_EMPTY_GROUP: The group is not empty.",
-			wantErr:    true,
+			name:    "an empty message is not a message",
+			group:   kmsg.DeleteGroupsResponseGroup{Group: "g", ErrorCode: kerr.NonEmptyGroup.Code, ErrorMessage: &empty},
+			wantErr: "NON_EMPTY_GROUP",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			status, message, err := deleteGroupResult(test.group)
-			if status != test.wantStatus {
-				t.Errorf("status = %q, want %q", status, test.wantStatus)
+			errStr, message := deleteGroupResult(test.group)
+			if errStr != test.wantErr {
+				t.Errorf("error = %q, want %q", errStr, test.wantErr)
 			}
 			if message != test.wantMessage {
 				t.Errorf("message = %q, want %q", message, test.wantMessage)
-			}
-			if (err != nil) != test.wantErr {
-				t.Errorf("err = %v, want an error: %v", err, test.wantErr)
 			}
 		})
 	}
@@ -110,7 +102,7 @@ func TestDeleteJSONShape(t *testing.T) {
 		t.Fatalf("doc = %+v\n%s", doc, b)
 	}
 	got := doc.Results[0]
-	if got.Group != "nosuchgroup" || got.Error != "GROUP_ID_NOT_FOUND: The group id does not exist." || got.Message != "" {
+	if got.Group != "nosuchgroup" || got.Error != "GROUP_ID_NOT_FOUND" || got.Message != "" {
 		t.Errorf("result = %+v", got)
 	}
 	if !json.Valid(b) {

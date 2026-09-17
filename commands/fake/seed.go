@@ -123,5 +123,11 @@ func seedDemo(brokerAddrs []string, registryURL string) error {
 			fmt.Fprintf(os.Stderr, "             kcl%s consume %s -o start\n", brokerFlag, d.topic)
 		}
 	}
+	// A share group starts at the latest offset, so a share consume of a
+	// demo topic waits for records that never come. The reset is a group
+	// config, and the fake honors it like a broker does.
+	fmt.Fprintf(os.Stderr, "  share groups start at latest, so --share-group waits on a demo topic; reset the group first:\n")
+	fmt.Fprintf(os.Stderr, "             kcl%s config alter demo -tg -s share.auto.offset.reset=earliest\n", brokerFlag)
+	fmt.Fprintf(os.Stderr, "             kcl%s consume demo-plain --share-group demo\n", brokerFlag)
 	return nil
 }

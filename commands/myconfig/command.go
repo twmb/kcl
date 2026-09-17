@@ -50,6 +50,7 @@ func DeprecatedCommand(cl *client.Client) *cobra.Command {
 		Deprecated: "use 'kcl profile' instead",
 		Hidden:     true,
 	}
+	out.AliasOf(cmd, "profile")
 
 	cmd.AddCommand(
 		useCommand(cl),
@@ -69,7 +70,7 @@ func DeprecatedCommand(cl *client.Client) *cobra.Command {
 }
 
 func useCommand(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "use NAME",
 		Short: "Switch the active profile.",
 		Args:  cobra.ExactArgs(1),
@@ -78,29 +79,49 @@ func useCommand(cl *client.Client) *cobra.Command {
 			cfgPath := cl.CfgFilePath()
 
 			var cfgFile client.CfgFile
-			if _, err := toml.DecodeFile(cfgPath, &cfgFile); err != nil {
-				return fmt.Errorf("unable to read config: %v", err)
+			if _, err := client.DecodeCfgFile(cfgPath, &cfgFile); err != nil {
+				return readErr(err)
 			}
 
 			if len(cfgFile.Profiles) == 0 {
 				return fmt.Errorf("config file has no profiles; add [profiles.NAME] sections to your config first")
 			}
 			if _, ok := cfgFile.Profiles[name]; !ok {
-				return fmt.Errorf("profile %q not found; available: %v", name, profileNames(cfgFile))
+				return out.Errf(out.ExitUsage, "profile %q not found; available: %v", name, profileNames(cfgFile))
 			}
 
 			cfgFile.CurrentProfile = name
 			if err := writeCfgFile(cfgPath, cfgFile); err != nil {
 				return err
 			}
-			fmt.Fprintf(os.Stderr, "Switched to profile %q\n", name)
-			return nil
+			return report(cl, name, cfgPath, true, fmt.Sprintf("Switched to profile %q", name))
 		},
 	}
+	out.Columns(cmd, "KEY", "VALUE")
+	return cmd
+}
+
+// report is what a profile mutator prints: the profile it acted on, its new
+// name after a rename, the config file, and whether that profile is the
+// current one afterward. Under --format json it is one document, under awk
+// one KEY and value row per field, and otherwise the text line on stderr,
+// where it always was.
+func report(cl *client.Client, name, path string, current bool, text string) error {
+	switch cl.Format() {
+	case out.FormatJSON:
+		out.MarshalJSON(cl.Command(), 1, map[string]any{"profile": name, "path": path, "current": current})
+	case out.FormatAWK:
+		out.AwkRow("profile", name)
+		out.AwkRow("path", path)
+		out.AwkRow("current", current)
+	default:
+		fmt.Fprintln(os.Stderr, text)
+	}
+	return nil
 }
 
 func listCommand(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List all profiles.",
@@ -119,8 +140,7 @@ func listCommand(cl *client.Client) *cobra.Command {
 				for _, n := range profileNames(cfgFile) {
 					table.Row(n, n == cfgFile.CurrentProfile)
 				}
-				table.Flush()
-				return nil
+				return table.Flush()
 			}
 			if len(cfgFile.Profiles) == 0 {
 				if missing {
@@ -142,25 +162,37 @@ func listCommand(cl *client.Client) *cobra.Command {
 			return nil
 		},
 	}
+	out.Columns(cmd, "NAME", "CURRENT")
+	return cmd
+}
+
+// readErr is the error for a config file that could not be read. A file that
+// does not parse is a usage error, exit 2, as it is when a connection loads
+// it; a file that cannot be opened is exit 1.
+func readErr(err error) error {
+	if os.IsNotExist(err) || errors.Is(err, os.ErrPermission) {
+		return fmt.Errorf("unable to read config: %v", err)
+	}
+	return out.Errf(out.ExitUsage, "unable to read config: %v", err)
 }
 
 // readCfgFile decodes the config file at path, reporting whether there is no
 // file there. A first run has no file, and the commands that only report what
 // is configured answer that with an empty config rather than an error.
 func readCfgFile(path string, cfgFile *client.CfgFile) (missing bool, err error) {
-	if _, err := toml.DecodeFile(path, cfgFile); err != nil {
+	if _, err := client.DecodeCfgFile(path, cfgFile); err != nil {
 		if os.IsNotExist(err) {
 			return true, nil
 		}
-		return false, fmt.Errorf("unable to read config: %v", err)
+		return false, readErr(err)
 	}
 	return false, nil
 }
 
 func currentCommand(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "current",
-		Short: "Print the profile in use: the one -C names, else current_profile.",
+		Short: "Print the profile in use: the one -C or KCL_PROFILE names, else current_profile.",
 		Args:  cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
 			cfgPath := cl.CfgFilePath()
@@ -173,7 +205,7 @@ func currentCommand(cl *client.Client) *cobra.Command {
 			name := cl.ProfileName()
 			if name != "" {
 				if _, ok := cfgFile.Profiles[name]; !ok {
-					return fmt.Errorf("profile %q not found; available: %v", name, profileNames(cfgFile))
+					return out.Errf(out.ExitUsage, "profile %q not found; available: %v", name, profileNames(cfgFile))
 				}
 			} else {
 				name = cfgFile.CurrentProfile
@@ -182,7 +214,10 @@ func currentCommand(cl *client.Client) *cobra.Command {
 			case out.FormatJSON:
 				out.MarshalJSON(cl.Command(), 1, map[string]any{"profile": name})
 			case out.FormatAWK:
-				fmt.Println(name)
+				// No profile is no row, rather than a row saying so.
+				if name != "" {
+					out.AwkRow(name)
+				}
 			default:
 				if name == "" {
 					fmt.Fprintln(os.Stderr, "(no profile set)")
@@ -193,22 +228,25 @@ func currentCommand(cl *client.Client) *cobra.Command {
 			return nil
 		},
 	}
+	out.Columns(cmd, "PROFILE")
+	return cmd
 }
 
 func createCommand(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "create NAME",
 		Short: "Create a profile from the -B, -X, and -R flags.",
 		Long: `Create a profile from the -B, -X, and -R flags.
 
 The profile is written as a [profiles.NAME] table in the config file,
-creating the file if needed. Any -X key can be saved. If no profile is
-current, the new one becomes current. Only flags are saved; KCL_*
-environment variables are not read.
+creating the file if needed. Any -X key can be saved, and only the keys you
+give are written: a key you leave unset takes its default when the profile
+is loaded. If no profile is current, the new one becomes current. Only flags
+are saved; KCL_* environment variables are not read.
 
 EXAMPLES:
   kcl profile create local -B localhost:9092
-  kcl profile create prod -B k1:9093,k2:9093 -X tls.ca_cert_path=/etc/kafka/ca.pem -X sasl.method=scram-sha-256 -X sasl.user=me -X sasl.pass=secret
+  kcl profile create prod -B k1:9093,k2:9093 -X tls.ca_cert_path=/etc/kafka/ca.pem -X sasl.mechanism=scram-sha-256 -X sasl.user=me -X sasl.pass=secret
   kcl profile create sr -B localhost:9092 -R http://localhost:8081
 
 SEE ALSO:
@@ -227,14 +265,15 @@ SEE ALSO:
 			if err != nil {
 				return err
 			}
-			if current {
-				fmt.Fprintf(os.Stderr, "Created profile %q in %s; it is now current\n", name, cfgPath)
-			} else {
-				fmt.Fprintf(os.Stderr, "Created profile %q in %s; switch with: kcl profile use %s\n", name, cfgPath, shellWord(name))
+			text := fmt.Sprintf("Created profile %q in %s; it is now current", name, cfgPath)
+			if !current {
+				text = fmt.Sprintf("Created profile %q in %s; switch with: kcl profile use %s", name, cfgPath, shellWord(name))
 			}
-			return nil
+			return report(cl, name, cfgPath, current, text)
 		},
 	}
+	out.Columns(cmd, "KEY", "VALUE")
+	return cmd
 }
 
 // setupCommand is the old name of create, kept working but out of the help.
@@ -242,11 +281,12 @@ func setupCommand(cl *client.Client) *cobra.Command {
 	cmd := createCommand(cl)
 	cmd.Use = "setup NAME"
 	cmd.Hidden = true
+	out.AliasOf(cmd, "profile.create")
 	return cmd
 }
 
 func setCommand(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "set",
 		Short: "Set keys in a profile from the -B, -X, and -R flags.",
 		Long: `Set keys in a profile from the -B, -X, and -R flags.
@@ -257,7 +297,7 @@ parses.
 
 EXAMPLES:
   kcl profile set -B k1:9092,k2:9092
-  kcl -C prod profile set -X sasl.method=scram-sha-256 -X sasl.user=me -X sasl.pass=secret
+  kcl -C prod profile set -X sasl.mechanism=scram-sha-256 -X sasl.user=me -X sasl.pass=secret
 
 SEE ALSO:
   kcl -X help          every key, with its meaning
@@ -267,7 +307,8 @@ SEE ALSO:
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			var set, unset []string
-			where, err := setProfile(cl.CfgFilePath(), cl.ProfileName(), func(cfg *client.Cfg) error {
+			cfgPath := cl.CfgFilePath()
+			name, current, err := setProfile(cfgPath, cl.ProfileName(), func(cfg *client.Cfg) error {
 				var err error
 				if set, unset, err = cl.ApplyFlags(cfg); err != nil {
 					return err
@@ -280,60 +321,67 @@ SEE ALSO:
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(os.Stderr, "%s in %s\n", setMessage(set, unset), where)
-			return nil
+			where := cfgPath
+			if name != "" {
+				where = fmt.Sprintf("profile %q", name)
+			}
+			return report(cl, name, cfgPath, current, fmt.Sprintf("%s in %s", setMessage(set, unset), where))
 		},
 	}
+	out.Columns(cmd, "KEY", "VALUE")
+	return cmd
 }
 
 // setProfile calls apply on the profile named name in the config file at
 // path, on the current profile when name is empty, or on the top level of a
 // config without profiles, and writes the result. An error from apply is a
-// usage error and nothing is written. It returns what was edited.
-func setProfile(path, name string, apply func(*client.Cfg) error) (string, error) {
+// usage error and nothing is written. It returns the profile it edited, ""
+// for the top level of a flat config, and whether that is what kcl runs
+// with: the current profile, or the flat config itself.
+func setProfile(path, name string, apply func(*client.Cfg) error) (edited string, current bool, err error) {
 	var cfgFile client.CfgFile
-	md, err := toml.DecodeFile(path, &cfgFile)
+	md, err := client.DecodeCfgFile(path, &cfgFile)
 	if os.IsNotExist(err) {
-		return "", fmt.Errorf("no config file at %s; create a profile first with kcl profile create", path)
+		return "", false, fmt.Errorf("no config file at %s; create a profile first with kcl profile create", path)
 	}
 	if err != nil {
-		return "", fmt.Errorf("unable to read config: %v", err)
+		return "", false, readErr(err)
 	}
 
 	if len(cfgFile.Profiles) == 0 {
 		if name != "" {
-			return "", fmt.Errorf("profile %q not found; config file has no profiles", name)
+			return "", false, out.Errf(out.ExitUsage, "profile %q not found; config file has no profiles", name)
 		}
 		if !isFlat(md, cfgFile) {
-			return "", fmt.Errorf("config at %s has no profiles; create one first with kcl profile create", path)
+			return "", false, fmt.Errorf("config at %s has no profiles; create one first with kcl profile create", path)
 		}
 		if err := apply(&cfgFile.Cfg); err != nil {
-			return "", out.Errf(out.ExitUsage, "%v", err)
+			return "", false, out.Errf(out.ExitUsage, "%v", err)
 		}
 		if err := writeCfgFile(path, cfgFile); err != nil {
-			return "", err
+			return "", false, err
 		}
-		return path, nil
+		return "", true, nil
 	}
 
 	if name == "" {
 		name = cfgFile.CurrentProfile
 	}
 	if name == "" {
-		return "", fmt.Errorf("no current profile; pass -C NAME or run kcl profile use NAME")
+		return "", false, fmt.Errorf("no current profile; pass -C NAME or run kcl profile use NAME")
 	}
 	p, ok := cfgFile.Profiles[name]
 	if !ok {
-		return "", fmt.Errorf("profile %q not found; available: %v", name, profileNames(cfgFile))
+		return "", false, out.Errf(out.ExitUsage, "profile %q not found; available: %v", name, profileNames(cfgFile))
 	}
 	if err := apply(&p); err != nil {
-		return "", out.Errf(out.ExitUsage, "%v", err)
+		return "", false, out.Errf(out.ExitUsage, "%v", err)
 	}
 	cfgFile.Profiles[name] = p
 	if err := writeCfgFile(path, cfgFile); err != nil {
-		return "", err
+		return "", false, err
 	}
-	return fmt.Sprintf("profile %q", name), nil
+	return name, name == cfgFile.CurrentProfile, nil
 }
 
 // cfgMap renders cfg as nested maps keyed by the TOML names, for JSON.
@@ -434,9 +482,9 @@ func createProfile(path, name string, cfg client.Cfg) (bool, error) {
 	}
 
 	var cfgFile client.CfgFile
-	md, err := toml.DecodeFile(path, &cfgFile)
+	md, err := client.DecodeCfgFile(path, &cfgFile)
 	if err != nil && !os.IsNotExist(err) {
-		return false, fmt.Errorf("unable to read config: %v", err)
+		return false, readErr(err)
 	}
 
 	// Adding a profile to the flat layout would silently stop its keys being
@@ -445,7 +493,7 @@ func createProfile(path, name string, cfg client.Cfg) (bool, error) {
 		return false, fmt.Errorf("config at %s is a flat single-cluster config; move its keys under a [profiles.NAME] table and set current_profile, then retry", path)
 	}
 	if _, exists := cfgFile.Profiles[name]; exists {
-		return false, fmt.Errorf("profile %q already exists", name)
+		return false, out.Errf(out.ExitUsage, "profile %q already exists", name)
 	}
 
 	if cfgFile.Profiles == nil {
@@ -468,10 +516,16 @@ func createProfile(path, name string, cfg client.Cfg) (bool, error) {
 }
 
 func dumpCommand(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "dump",
 		Short: "Dump the loaded configuration, with ${NAME} references as written.",
-		Args:  cobra.ExactArgs(0),
+		Long: `Dump the loaded configuration, with ${NAME} references as written.
+
+Text is the TOML kcl would run with. JSON nests it under "config" beside the
+document's own keys, so "jq .config" is a profile. awk is one KEY and value
+row per dotted key, lists joined with commas.
+`,
+		Args: cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
 			cfg := cl.DiskCfg()
 			switch cl.Format() {
@@ -480,14 +534,14 @@ func dumpCommand(cl *client.Client) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				out.MarshalJSON(cl.Command(), 1, m)
+				out.MarshalJSON(cl.Command(), 1, map[string]any{"config": m})
 			case out.FormatAWK:
 				m, err := cfgMap(cfg)
 				if err != nil {
 					return err
 				}
 				for _, kv := range flattenCfg("", m) {
-					fmt.Printf("%s\t%s\n", kv[0], kv[1])
+					out.AwkRow(kv[0], kv[1])
 				}
 			default:
 				return toml.NewEncoder(os.Stdout).Encode(cfg)
@@ -495,10 +549,12 @@ func dumpCommand(cl *client.Client) *cobra.Command {
 			return nil
 		},
 	}
+	out.Columns(cmd, "KEY", "VALUE")
+	return cmd
 }
 
 func renameCommand(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "rename OLD NEW",
 		Short: "Rename a profile.",
 		Args:  cobra.ExactArgs(2),
@@ -507,16 +563,16 @@ func renameCommand(cl *client.Client) *cobra.Command {
 			cfgPath := cl.CfgFilePath()
 
 			var cfgFile client.CfgFile
-			if _, err := toml.DecodeFile(cfgPath, &cfgFile); err != nil {
-				return fmt.Errorf("unable to read config: %v", err)
+			if _, err := client.DecodeCfgFile(cfgPath, &cfgFile); err != nil {
+				return readErr(err)
 			}
 
 			cfg, ok := cfgFile.Profiles[oldName]
 			if !ok {
-				return fmt.Errorf("profile %q not found", oldName)
+				return out.Errf(out.ExitUsage, "profile %q not found", oldName)
 			}
 			if _, exists := cfgFile.Profiles[newName]; exists {
-				return fmt.Errorf("profile %q already exists", newName)
+				return out.Errf(out.ExitUsage, "profile %q already exists", newName)
 			}
 
 			delete(cfgFile.Profiles, oldName)
@@ -528,14 +584,15 @@ func renameCommand(cl *client.Client) *cobra.Command {
 			if err := writeCfgFile(cfgPath, cfgFile); err != nil {
 				return err
 			}
-			fmt.Fprintf(os.Stderr, "Renamed profile %q to %q\n", oldName, newName)
-			return nil
+			return report(cl, newName, cfgPath, cfgFile.CurrentProfile == newName, fmt.Sprintf("Renamed profile %q to %q", oldName, newName))
 		},
 	}
+	out.Columns(cmd, "KEY", "VALUE")
+	return cmd
 }
 
 func deleteCommand(cl *client.Client) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "delete NAME",
 		Short: "Delete a profile.",
 		Args:  cobra.ExactArgs(1),
@@ -544,12 +601,12 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 			cfgPath := cl.CfgFilePath()
 
 			var cfgFile client.CfgFile
-			if _, err := toml.DecodeFile(cfgPath, &cfgFile); err != nil {
-				return fmt.Errorf("unable to read config: %v", err)
+			if _, err := client.DecodeCfgFile(cfgPath, &cfgFile); err != nil {
+				return readErr(err)
 			}
 
 			if _, ok := cfgFile.Profiles[name]; !ok {
-				return fmt.Errorf("profile %q not found", name)
+				return out.Errf(out.ExitUsage, "profile %q not found", name)
 			}
 
 			delete(cfgFile.Profiles, name)
@@ -560,17 +617,19 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 			if err := writeCfgFile(cfgPath, cfgFile); err != nil {
 				return err
 			}
-			fmt.Fprintf(os.Stderr, "Deleted profile %q\n", name)
-			return nil
+			return report(cl, name, cfgPath, false, fmt.Sprintf("Deleted profile %q", name))
 		},
 	}
+	out.Columns(cmd, "KEY", "VALUE")
+	return cmd
 }
 
 func configHelpText(cl *client.Client) string {
 	return `Manage connection profiles.
 
 Profiles are [profiles.NAME] tables in the config file; current_profile names
-the one in use, and -C picks another for one command. The file is read from:
+the one in use, and -C or KCL_PROFILE picks another, -C for one command and
+KCL_PROFILE for a shell. The file is read from:
 
   ` + cl.DefaultCfgPath() + `
 
@@ -589,7 +648,7 @@ Only set keys take effect. "kcl -X help" describes every key; "kcl profile
 dump" shows the result.
 
 EXAMPLES:
-  kcl profile create prod -B k1:9092,k2:9092 -X sasl.method=scram-sha-256 -X sasl.user=me -X sasl.pass='${KAFKA_PASS}'
+  kcl profile create prod -B k1:9092,k2:9092 -X sasl.mechanism=scram-sha-256 -X sasl.user=me -X sasl.pass='${KAFKA_PASS}'
   kcl -C prod topic list                   # one command against prod
   kcl profile use prod                     # every command against prod
   kcl profile set -X dial_timeout=2s       # change the current profile

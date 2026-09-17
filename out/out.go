@@ -2,12 +2,16 @@
 package out
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 	"text/tabwriter"
+
+	"github.com/twmb/franz-go/pkg/kerr"
+	"golang.org/x/term"
 )
 
 // BeginTabWrite returns a new tabwriter that prints to stdout.
@@ -102,6 +106,92 @@ func ErrorDoc(err error, command string) map[string]any {
 // metadata.topics when it worked and topic.list when it failed.
 func CommandName(path string) string {
 	return strings.ReplaceAll(strings.TrimSpace(strings.TrimPrefix(path, "kcl")), " ", ".")
+}
+
+// Answer is what Confirm heard.
+type Answer int
+
+const (
+	// Yes: you typed y or yes.
+	Yes Answer = iota
+	// No: you typed anything else.
+	No
+	// NotATerminal: stdin is not a terminal, or ended before an answer, so
+	// nothing was read. A script that forgot -y gets this, and so does
+	// "< /dev/null", which makes that the scriptable dry run.
+	NotATerminal
+)
+
+// Confirm asks prompt on stderr, with " [y/N] " appended, and reads one line
+// from stdin. It reads only when stdin is a terminal, and it prints no
+// document: on No and NotATerminal the caller prints the plan it would have
+// carried out and exits 0. A pipe, a file, and /dev/null are not terminals
+// and answer "no (stdin is not a terminal)"; a terminal that ends before a
+// line, ctrl-D, answers "no (end of input)".
+func Confirm(prompt string) Answer {
+	return confirm(os.Stdin, os.Stderr, prompt, term.IsTerminal(int(os.Stdin.Fd())))
+}
+
+func confirm(r io.Reader, w io.Writer, prompt string, terminal bool) Answer {
+	fmt.Fprint(w, prompt+" [y/N] ")
+	if !terminal {
+		fmt.Fprintln(w, "no (stdin is not a terminal)")
+		return NotATerminal
+	}
+	line, err := bufio.NewReader(r).ReadString('\n')
+	if err != nil && line == "" {
+		fmt.Fprintln(w, "no (end of input)")
+		return NotATerminal
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return Yes
+	}
+	return No
+}
+
+// ErrName is the ERROR cell for a Kafka error code: the name kerr gives it,
+// UNKNOWN_TOPIC_OR_PARTITION, or "" for no error. A code kerr does not know
+// is UNKNOWN_SERVER_ERROR. The text a broker attached goes in MESSAGE; see
+// BrokerMessage.
+func ErrName(code int16) string {
+	if code == 0 {
+		return ""
+	}
+	return kerr.TypedErrorForCode(code).Message
+}
+
+// ErrCell is the ERROR cell for an error value: the kerr name when err is or
+// wraps a Kafka error, "" for nil, and otherwise the error's text, which is
+// what a request that never reached a broker carries.
+func ErrCell(err error) string {
+	if err == nil {
+		return ""
+	}
+	var ke *kerr.Error
+	if errors.As(err, &ke) {
+		return ke.Message
+	}
+	return err.Error()
+}
+
+// BrokerMessage is the MESSAGE cell of a result row: the text a broker
+// attached to an error, or "" when it attached none.
+func BrokerMessage(msg *string) string {
+	if msg == nil {
+		return ""
+	}
+	return *msg
+}
+
+// BrokerErr is err with the message a broker attached, for a failure of the
+// whole request rather than of a row: "NOT_CONTROLLER: the text". It is err
+// itself when the broker attached nothing.
+func BrokerErr(err error, msg *string) error {
+	if m := BrokerMessage(msg); m != "" {
+		return fmt.Errorf("%w: %s", err, m)
+	}
+	return err
 }
 
 // MaybeDie, if err is non-nil, prints the message and exits with 1.

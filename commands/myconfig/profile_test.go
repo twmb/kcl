@@ -3,10 +3,12 @@ package myconfig
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -232,7 +234,7 @@ seed_brokers = ["p:9092"]
 				SeedBrokers: []string{"k:9093"},
 				DialTimeout: client.Dur(2 * time.Second),
 				TLS:         &client.CfgTLS{CACert: "/ca.pem"},
-				SASL:        &client.CfgSASL{Method: "scram-sha-256", User: "me", Pass: "pw"},
+				SASL:        &client.CfgSASL{Mechanism: "scram-sha-256", User: "me", Pass: "pw"},
 			},
 			wantCurrent: true,
 			check: func(t *testing.T, f client.CfgFile) {
@@ -243,7 +245,7 @@ seed_brokers = ["p:9092"]
 				if p.TLS == nil || p.TLS.CACert != "/ca.pem" {
 					t.Errorf("tls = %+v", p.TLS)
 				}
-				if p.SASL == nil || p.SASL.Method != "scram-sha-256" || p.SASL.User != "me" || p.SASL.Pass != "pw" {
+				if p.SASL == nil || p.SASL.Mechanism != "scram-sha-256" || p.SASL.User != "me" || p.SASL.Pass != "pw" {
 					t.Errorf("sasl = %+v", p.SASL)
 				}
 			},
@@ -343,22 +345,24 @@ broker_timeout = "10s"
 seed_brokers = ["s:9092"]
 `
 	for _, test := range []struct {
-		name      string
-		exists    bool
-		existing  string
-		profile   string
-		opts      []string
-		wantWhere string
-		wantErr   string
-		wantCode  int
-		check     func(t *testing.T, f client.CfgFile)
+		name        string
+		exists      bool
+		existing    string
+		profile     string
+		opts        []string
+		wantEdited  string
+		wantCurrent bool
+		wantErr     string
+		wantCode    int
+		check       func(t *testing.T, f client.CfgFile)
 	}{
 		{
-			name:      "current profile, one key, rest untouched",
-			exists:    true,
-			existing:  profiles,
-			opts:      []string{"seed_brokers=a:9092,b:9092"},
-			wantWhere: `profile "prod"`,
+			name:        "current profile, one key, rest untouched",
+			exists:      true,
+			existing:    profiles,
+			opts:        []string{"seed_brokers=a:9092,b:9092"},
+			wantEdited:  "prod",
+			wantCurrent: true,
 			check: func(t *testing.T, f client.CfgFile) {
 				p := f.Profiles["prod"]
 				if len(p.SeedBrokers) != 2 || p.SeedBrokers[1] != "b:9092" || p.BrokerTimeout.D() != 10*time.Second {
@@ -370,15 +374,15 @@ seed_brokers = ["s:9092"]
 			},
 		},
 		{
-			name:      "-C picks another profile, several keys at once",
-			exists:    true,
-			existing:  profiles,
-			profile:   "staging",
-			opts:      []string{"sasl.method=scram-sha-256", "sasl_user=me", "dial_timeout=2s"},
-			wantWhere: `profile "staging"`,
+			name:       "-C picks another profile, several keys at once",
+			exists:     true,
+			existing:   profiles,
+			profile:    "staging",
+			opts:       []string{"sasl.mechanism=scram-sha-256", "sasl_user=me", "dial_timeout=2s"},
+			wantEdited: "staging",
 			check: func(t *testing.T, f client.CfgFile) {
 				p := f.Profiles["staging"]
-				if p.SASL == nil || p.SASL.Method != "scram-sha-256" || p.SASL.User != "me" || p.DialTimeout.D() != 2*time.Second {
+				if p.SASL == nil || p.SASL.Mechanism != "scram-sha-256" || p.SASL.User != "me" || p.DialTimeout.D() != 2*time.Second {
 					t.Errorf("staging = %+v sasl=%+v", p, p.SASL)
 				}
 				if f.Profiles["prod"].SeedBrokers[0] != "p:9092" {
@@ -387,10 +391,11 @@ seed_brokers = ["s:9092"]
 			},
 		},
 		{
-			name:     "flat config is edited at the top level",
-			exists:   true,
-			existing: "seed_brokers = [\"x:9092\"]\n",
-			opts:     []string{"retry_timeout=5s"},
+			name:        "flat config is edited at the top level",
+			exists:      true,
+			existing:    "seed_brokers = [\"x:9092\"]\n",
+			opts:        []string{"retry_timeout=5s"},
+			wantCurrent: true,
 			check: func(t *testing.T, f client.CfgFile) {
 				if len(f.Profiles) != 0 || f.SeedBrokers[0] != "x:9092" || f.RetryTimeout.D() != 5*time.Second {
 					t.Errorf("flat = %+v", f.Cfg)
@@ -464,7 +469,7 @@ seed_brokers = ["s:9092"]
 				}
 			}
 
-			where, err := setProfile(path, test.profile, func(cfg *client.Cfg) error {
+			edited, current, err := setProfile(path, test.profile, func(cfg *client.Cfg) error {
 				return client.ApplyCfgOpts(cfg, test.opts)
 			})
 
@@ -492,11 +497,8 @@ seed_brokers = ["s:9092"]
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if test.wantWhere == "" {
-				test.wantWhere = path
-			}
-			if where != test.wantWhere {
-				t.Errorf("where = %q, want %q", where, test.wantWhere)
+			if edited != test.wantEdited || current != test.wantCurrent {
+				t.Errorf("edited %q current %v, want %q %v", edited, current, test.wantEdited, test.wantCurrent)
 			}
 
 			var f client.CfgFile
@@ -682,6 +684,7 @@ func TestCurrentHonorsProfileFlag(t *testing.T) {
 	const profiles = "current_profile = \"prod\"\n[profiles.prod]\nseed_brokers = [\"p:9092\"]\n[profiles.dev]\nseed_brokers = [\"d:9092\"]\n"
 	for _, test := range []struct {
 		name    string
+		env     string
 		args    []string
 		want    string
 		wantErr string
@@ -689,8 +692,11 @@ func TestCurrentHonorsProfileFlag(t *testing.T) {
 		{name: "current_profile", args: []string{"profile", "current"}, want: "prod\n"},
 		{name: "-C wins", args: []string{"-C", "dev", "profile", "current"}, want: "dev\n"},
 		{name: "-C unknown", args: []string{"-C", "nope", "profile", "current"}, wantErr: "not found"},
+		{name: "KCL_PROFILE", env: "dev", args: []string{"profile", "current"}, want: "dev\n"},
+		{name: "-C wins over KCL_PROFILE", env: "dev", args: []string{"-C", "prod", "profile", "current"}, want: "prod\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("KCL_PROFILE", test.env)
 			path := filepath.Join(t.TempDir(), "config.toml")
 			if err := os.WriteFile(path, []byte(profiles), 0o644); err != nil {
 				t.Fatal(err)
@@ -726,7 +732,7 @@ func TestCurrentHonorsProfileFlag(t *testing.T) {
 }
 
 func TestProfileFormats(t *testing.T) {
-	const profiles = "current_profile = \"prod\"\n[profiles.prod]\nseed_brokers = [\"p:9092\", \"q:9092\"]\ndial_timeout = \"2s\"\n[profiles.prod.sasl]\nmethod = \"plain\"\n[profiles.dev]\nseed_brokers = [\"d:9092\"]\n"
+	const profiles = "current_profile = \"prod\"\n[profiles.prod]\nseed_brokers = [\"p:9092\", \"q:9092\"]\ndial_timeout = \"2s\"\n[profiles.prod.sasl]\nmethod = \"plain\"\n[profiles.prod.schema_registry]\nurls = [\"http://sr:8081\"]\n[profiles.dev]\nseed_brokers = [\"d:9092\"]\n"
 	for _, test := range []struct {
 		name string
 		args []string
@@ -738,8 +744,9 @@ func TestProfileFormats(t *testing.T) {
 		{name: "current json", args: []string{"--format", "json", "profile", "current"}, want: `"profile":"prod"`, json: true},
 		{name: "current awk with -C", args: []string{"--format", "awk", "-C", "dev", "profile", "current"}, want: "dev\n"},
 		{name: "dump text is toml", args: []string{"profile", "dump"}, want: "seed_brokers = [\"p:9092\", \"q:9092\"]"},
-		{name: "dump json", args: []string{"--format", "json", "profile", "dump"}, want: `"method":"plain"`, json: true},
-		{name: "dump awk", args: []string{"--format", "awk", "profile", "dump"}, want: "sasl.method\tplain\nseed_brokers\tp:9092,q:9092\n"},
+		{name: "dump json", args: []string{"--format", "json", "profile", "dump"}, want: `"mechanism":"plain"`, json: true},
+		{name: "dump awk", args: []string{"--format", "awk", "profile", "dump"}, want: "registry.urls\thttp://sr:8081\nsasl.mechanism\tplain\nseed_brokers\tp:9092,q:9092\n"},
+		{name: "dump json names the registry section", args: []string{"--format", "json", "profile", "dump"}, want: `"registry":{"urls":["http://sr:8081"]}`, json: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.toml")
@@ -780,3 +787,264 @@ func TestFlattenCfg(t *testing.T) {
 		t.Errorf("flattenCfg = %v, want %v", got, want)
 	}
 }
+
+// TestSetRewritesOldSectionName pins that a file holding the old
+// [schema_registry] section is read, and written back as [registry], the
+// section's current name, by the first command that writes the file.
+func TestSetRewritesOldSectionName(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	const before = `current_profile = "prod"
+
+[profiles.prod]
+seed_brokers = ["p:9092"]
+[profiles.prod.schema_registry]
+urls = ["http://sr:8081"]
+`
+	if err := os.WriteFile(path, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := &cobra.Command{Use: "kcl", SilenceUsage: true, SilenceErrors: true}
+	cl := client.New(root)
+	root.AddCommand(Command(cl))
+	root.SetArgs([]string{"--config-path", path, "profile", "set", "-X", "dial_timeout=2s"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "[profiles.prod.registry]") || strings.Contains(string(got), "schema_registry") {
+		t.Errorf("file after set:\n%s", got)
+	}
+	var f client.CfgFile
+	if _, err := toml.DecodeFile(path, &f); err != nil {
+		t.Fatal(err)
+	}
+	if p := f.Profiles["prod"]; p.SR == nil || p.SR.URLs[0] != "http://sr:8081" || p.DialTimeout.D() != 2*time.Second {
+		t.Errorf("prod = %+v sr=%+v", p, p.SR)
+	}
+}
+
+// runProfile runs the profile command tree in-process against the config
+// file at path and returns what it wrote to stdout.
+func runProfile(t *testing.T, path string, args ...string) (string, error) {
+	t.Helper()
+	root := &cobra.Command{Use: "kcl", SilenceUsage: true, SilenceErrors: true}
+	cl := client.New(root)
+	root.AddCommand(Command(cl))
+	root.SetArgs(append([]string{"--config-path", path}, args...))
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdout
+	os.Stdout = w
+	execErr := root.Execute()
+	w.Close()
+	os.Stdout = old
+	b, _ := io.ReadAll(r)
+	return string(b), execErr
+}
+
+// TestMutatorDocuments pins that every command that writes the config file
+// prints a {profile, path, current} document under --format json, one KEY
+// and value row per field under awk, and nothing on stdout in text, where
+// the line it always printed stays on stderr.
+func TestMutatorDocuments(t *testing.T) {
+	const profiles = "current_profile = \"prod\"\n[profiles.prod]\nseed_brokers = [\"p:9092\"]\n[profiles.dev]\nseed_brokers = [\"d:9092\"]\n"
+	for _, test := range []struct {
+		name    string
+		args    []string
+		profile string
+		current bool
+	}{
+		{"create", []string{"profile", "create", "new", "-B", "n:9092"}, "new", false},
+		{"create into an empty file", []string{"profile", "create", "first", "-B", "f:9092"}, "first", true},
+		{"use", []string{"profile", "use", "dev"}, "dev", true},
+		{"set current", []string{"profile", "set", "-X", "dial_timeout=2s"}, "prod", true},
+		{"set -C", []string{"-C", "dev", "profile", "set", "-X", "dial_timeout=2s"}, "dev", false},
+		{"rename current", []string{"profile", "rename", "prod", "live"}, "live", true},
+		{"rename other", []string{"profile", "rename", "dev", "test"}, "test", false},
+		{"delete", []string{"profile", "delete", "dev"}, "dev", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			existing := profiles
+			if strings.Contains(test.name, "empty file") {
+				existing = ""
+			}
+			for _, format := range []string{"json", "awk", "text"} {
+				if err := os.WriteFile(path, []byte(existing), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				stdout, err := runProfile(t, path, append(test.args, "--format", format)...)
+				if err != nil {
+					t.Fatalf("%s: %v", format, err)
+				}
+				switch format {
+				case "json":
+					var doc map[string]any
+					if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+						t.Fatalf("json: %v: %q", err, stdout)
+					}
+					want := map[string]any{"_command": "profile." + test.args[slices.Index(test.args, "profile")+1], "_version": float64(1), "profile": test.profile, "path": path, "current": test.current}
+					if !reflect.DeepEqual(doc, want) {
+						t.Errorf("json = %v, want %v", doc, want)
+					}
+				case "awk":
+					if want := fmt.Sprintf("profile\t%s\npath\t%s\ncurrent\t%v\n", test.profile, path, test.current); stdout != want {
+						t.Errorf("awk = %q, want %q", stdout, want)
+					}
+				default:
+					if stdout != "" {
+						t.Errorf("text stdout = %q, want nothing", stdout)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestCreateWritesOnlyWhatWasGiven pins the file profile create writes: the
+// keys from the flags and nothing else, so no default is frozen into it.
+func TestCreateWritesOnlyWhatWasGiven(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "brokers",
+			args: []string{"-B", "k:9092"},
+			want: "current_profile = \"p1\"\n\n[profiles]\n  [profiles.p1]\n    seed_brokers = [\"k:9092\"]\n",
+		},
+		{
+			name: "no flags",
+			args: nil,
+			want: "current_profile = \"p1\"\n\n[profiles]\n  [profiles.p1]\n",
+		},
+		{
+			name: "registry and sasl",
+			args: []string{"-R", "http://sr:8081", "-X", "sasl.mechanism=plain", "-X", "sasl.user=me"},
+			want: "current_profile = \"p1\"\n\n[profiles]\n  [profiles.p1]\n    [profiles.p1.sasl]\n      mechanism = \"plain\"\n      user = \"me\"\n    [profiles.p1.registry]\n      urls = [\"http://sr:8081\"]\n",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if _, err := runProfile(t, path, append([]string{"profile", "create", "p1"}, test.args...)...); err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != test.want {
+				t.Errorf("file:\n%s\nwant:\n%s", got, test.want)
+			}
+			// The profile loads, and takes the defaults for what it left out.
+			root := &cobra.Command{Use: "kcl"}
+			c := client.New(root)
+			if err := root.ParseFlags([]string{"--config-path", path}); err != nil {
+				t.Fatal(err)
+			}
+			cfg := c.DiskCfg()
+			if test.name != "brokers" && (len(cfg.SeedBrokers) != 1 || cfg.SeedBrokers[0] != "localhost:9092") {
+				t.Errorf("seed_brokers = %v, want the default", cfg.SeedBrokers)
+			}
+			if cfg.BrokerTimeout.D() != 5*time.Second {
+				t.Errorf("broker_timeout = %v, want the 5s default", cfg.BrokerTimeout.D())
+			}
+		})
+	}
+}
+
+// TestCurrentNoneInAWK pins that profile current prints no awk row when no
+// profile is set, rather than one empty line, and TestDumpNestsConfig that
+// dump's JSON keeps the config under "config", beside the envelope.
+func TestCurrentNoneInAWK(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[profiles.prod]\nseed_brokers = [\"p:9092\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := runProfile(t, path, "profile", "current", "--format", "awk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdout != "" {
+		t.Errorf("awk stdout = %q, want nothing", stdout)
+	}
+	stdout, err = runProfile(t, path, "profile", "current", "--format", "json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, `"profile":""`) {
+		t.Errorf("json = %q, want an empty profile", stdout)
+	}
+}
+
+func TestDumpNestsConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("current_profile = \"prod\"\n[profiles.prod]\nseed_brokers = [\"p:9092\"]\ndial_timeout = \"2s\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := runProfile(t, path, "profile", "dump", "--format", "json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("json: %v: %q", err, stdout)
+	}
+	if len(doc) != 3 || doc["_command"] != "profile.dump" {
+		t.Errorf("top level = %v, want _command, _version, and config only", doc)
+	}
+	cfg, _ := doc["config"].(map[string]any)
+	if cfg["dial_timeout"] != "2s" || cfg["broker_timeout"] != "5s" {
+		t.Errorf("config = %v", cfg)
+	}
+}
+
+// TestProfileExitCodes pins the split: a name you typed that the file does
+// not have (or has, for create), and a file that does not parse, exit 2; a
+// file that is missing or has no profiles is exit 1.
+func TestProfileExitCodes(t *testing.T) {
+	const profiles = "current_profile = \"prod\"\n[profiles.prod]\nseed_brokers = [\"p:9092\"]\n"
+	for _, test := range []struct {
+		name    string
+		file    *string
+		args    []string
+		want    int
+		wantErr string
+	}{
+		{"use unknown", ptr(profiles), []string{"profile", "use", "nope"}, out.ExitUsage, "not found"},
+		{"current -C unknown", ptr(profiles), []string{"-C", "nope", "profile", "current"}, out.ExitUsage, "not found"},
+		{"set -C unknown", ptr(profiles), []string{"-C", "nope", "profile", "set", "-B", "a:1"}, out.ExitUsage, "not found"},
+		{"rename unknown", ptr(profiles), []string{"profile", "rename", "nope", "x"}, out.ExitUsage, "not found"},
+		{"rename onto existing", ptr(profiles), []string{"profile", "rename", "prod", "prod"}, out.ExitUsage, "already exists"},
+		{"delete unknown", ptr(profiles), []string{"profile", "delete", "nope"}, out.ExitUsage, "not found"},
+		{"create existing", ptr(profiles), []string{"profile", "create", "prod"}, out.ExitUsage, "already exists"},
+		{"file does not parse", ptr("current_profile = \n"), []string{"profile", "list"}, out.ExitUsage, "unable to read config"},
+		{"use with no file", nil, []string{"profile", "use", "prod"}, out.ExitError, "unable to read config"},
+		{"set with no file", nil, []string{"profile", "set", "-B", "a:1"}, out.ExitError, "no config file"},
+		{"use with no profiles", ptr(""), []string{"profile", "use", "prod"}, out.ExitError, "no profiles"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if test.file != nil {
+				if err := os.WriteFile(path, []byte(*test.file), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := runProfile(t, path, test.args...)
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("err = %v, want containing %q", err, test.wantErr)
+			}
+			if got := out.ExitCode(err); got != test.want {
+				t.Errorf("exit %d, want %d: %v", got, test.want, err)
+			}
+		})
+	}
+}
+
+func ptr(s string) *string { return &s }

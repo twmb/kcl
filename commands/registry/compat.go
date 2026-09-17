@@ -18,20 +18,29 @@ func compatCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "compatibility",
 		Aliases: []string{"compat"},
-		Short:   "Get, set, or test schema compatibility levels.",
-		Long: `Get, set, or test schema compatibility levels.
+		Short:   "Get or set schema compatibility levels.",
+		Long: `Get or set schema compatibility levels.
 
 Compatibility levels are one of:
   NONE, BACKWARD, BACKWARD_TRANSITIVE, FORWARD, FORWARD_TRANSITIVE,
   FULL, FULL_TRANSITIVE
 
 With no subjects, "get" and "set" operate on the global default; with subjects,
-they operate on each subject's override.`,
+they operate on each subject's override.
+
+EXAMPLES:
+  kcl registry compatibility get                       # the global default
+  kcl registry compatibility set FULL mytopic-value    # one subject's override
+
+SEE ALSO:
+  kcl registry schema check-compatibility   check a schema at the level in force
+  kcl registry mode                         the registry's read/write mode
+`,
 	}
 	cmd.AddCommand(
 		compatGetCommand(cl),
 		compatSetCommand(cl),
-		compatTestCommand(cl),
+		oldName(schemaCheckCompatibilityCommand(cl), "test SUBJECT", "registry schema check-compatibility"),
 	)
 	return cmd
 }
@@ -40,15 +49,29 @@ func compatGetCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "get [SUBJECTS...]",
 		Short: "Get the global or per-subject compatibility level.",
+		Long: `Get the global or per-subject compatibility level.
+
+With no subjects, the global default is printed under the subject "(global)".
+With subjects, each subject's level is printed: its own override, or the
+global default when it has none.
+
+EXAMPLES:
+  kcl registry compatibility get                    # the global default
+  kcl registry compatibility get a-value b-value    # two subjects
+
+SEE ALSO:
+  kcl registry compatibility set   change a level
+`,
 		RunE: func(_ *cobra.Command, args []string) error {
 			scl, err := srClient(cl)
 			if err != nil {
 				return err
 			}
 			results := scl.Compatibility(context.Background(), args...)
-			return printCompat(cl, results)
+			return printCompat(cl, "get compatibility", false, results)
 		},
 	}
+	out.Columns(cmd, "SUBJECT", "LEVEL", "ERROR")
 	return cmd
 }
 
@@ -56,24 +79,89 @@ func compatSetCommand(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "set LEVEL [SUBJECTS...]",
 		Short: "Set the global or per-subject compatibility level.",
-		Args:  cobra.MinimumNArgs(1),
+		Long: `Set the global or per-subject compatibility level.
+
+With no subjects, the global default is set. With subjects, each subject's
+override is set. One row per subject: SUBJECT LEVEL ERROR MESSAGE, and the
+command exits 1 when the registry refused any of them.
+
+EXAMPLES:
+  kcl registry compatibility set BACKWARD               # the global default
+  kcl registry compatibility set FULL a-value b-value   # two subjects' overrides
+
+SEE ALSO:
+  kcl registry compatibility get   the level in force
+`,
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			var level sr.CompatibilityLevel
 			if err := level.UnmarshalText([]byte(args[0])); err != nil {
-				return out.Errf(out.ExitUsage, "%v", err)
+				return out.Errf(out.ExitUsage, "%v (valid: none, backward, backward_transitive, forward, forward_transitive, full, full_transitive)", err)
 			}
 			scl, err := srClient(cl)
 			if err != nil {
 				return err
 			}
 			results := scl.SetCompatibility(context.Background(), sr.SetCompatibility{Level: level}, args[1:]...)
-			return printCompat(cl, results)
+			return printCompat(cl, "set compatibility", true, results)
 		},
 	}
+	out.Columns(cmd, "SUBJECT", "LEVEL", "ERROR", "MESSAGE")
 	return cmd
 }
 
-func compatTestCommand(cl *client.Client) *cobra.Command {
+func printCompat(cl *client.Client, action string, set bool, results []sr.CompatibilityResult) error {
+	rows := make([]subjectResult, len(results))
+	for i, r := range results {
+		rows[i] = subjectResult{r.Subject, r.Level.String(), r.Err}
+	}
+	return printSubjectResults(cl, action, "compatibility", "LEVEL", set, rows)
+}
+
+// subjectResult is what the registry answered for one subject: the value,
+// a compatibility level or a mode, or an error.
+type subjectResult struct {
+	subject string
+	value   string
+	err     error
+}
+
+// printSubjectResults prints one row per subject: SUBJECT, the value under
+// header, ERROR, and MESSAGE too when the command set something. The global
+// value is under the subject "(global)". A registry error fills the row's
+// ERROR, so the command exits 1; any other error fails the command.
+func printSubjectResults(cl *client.Client, action, key, header string, set bool, results []subjectResult) error {
+	// A set is a mutation and prints OK; a get describes and prints
+	// nothing under ERROR.
+	var tw *out.FormattedTable
+	if set {
+		tw = out.NewFormattedTable(cl.Format(), cl.Command(), 1, key, "SUBJECT", header, "ERROR", "MESSAGE").ResultColumns()
+	} else {
+		tw = out.NewFormattedTable(cl.Format(), cl.Command(), 1, key, "SUBJECT", header, "ERROR").ErrorColumn()
+	}
+	for _, r := range results {
+		subject := r.subject
+		if subject == "" {
+			subject = "(global)"
+		}
+		errName, message, ok := resultCells(r.err)
+		if !ok {
+			return dieErr(action, r.err)
+		}
+		var value any = r.value
+		if r.err != nil {
+			value = out.Unknown
+		}
+		if set {
+			tw.Row(subject, value, errName, message)
+		} else {
+			tw.Row(subject, value, errName)
+		}
+	}
+	return tw.Flush()
+}
+
+func schemaCheckCompatibilityCommand(cl *client.Client) *cobra.Command {
 	var (
 		schemaPath string
 		typeStr    string
@@ -83,28 +171,31 @@ func compatTestCommand(cl *client.Client) *cobra.Command {
 		verbose    bool
 	)
 	cmd := &cobra.Command{
-		Use:   "test SUBJECT",
-		Short: "Test whether a schema is compatible with a subject version.",
-		Long: `Test whether a schema is compatible with a subject version.
+		Use:   "check-compatibility SUBJECT",
+		Short: "Check whether a schema is compatible with a subject version.",
+		Long: `Check whether a schema is compatible with a subject version.
 
-Test whether a candidate schema is compatible with an existing subject version.
+The candidate schema is read from -s/--schema or stdin and checked at the
+subject's compatibility level, without registering it. --version selects
+which existing version to check against: "latest" by default, a number, or
+"all" to have the registry check every version the level calls for.
 
-The candidate schema is read from -s/--schema or stdin. --version selects which
-existing version to check against ("latest" by default, or "all" to check
-against every version). Exits non-zero if the schema is not compatible; pass
---verbose to have the registry explain why.
-
---format awk prints one word, true or false, and nothing else. The exit code
-says the same thing, so a script can read either.
+The row is SUBJECT VERSION COMPATIBLE. "latest" is resolved to its number
+first, so that the row names the version checked; under -v all the registry
+answers once for every version, so VERSION is a dash (null in JSON). The
+command exits 1 when the schema is not compatible, so a script can read
+either the row or the exit code; pass --verbose to have the registry say why,
+on stderr in text and awk and under "messages" in JSON.
 
 EXAMPLES:
-  kcl registry compatibility test foo-value -s new.avsc          # check the latest version
-  kcl registry compatibility test foo-value -s new.avsc -v all   # check every version
-  kcl registry compatibility test foo-value -s new.avsc --format awk
+  kcl registry schema check-compatibility foo-value -s new.avsc          # against the latest version
+  kcl registry schema check-compatibility foo-value -s new.avsc -v all   # against every version
+  kcl registry schema check-compatibility foo-value -s new.avsc --verbose --format json
 
 SEE ALSO:
-  kcl registry compatibility get    the level a subject is checked at
-  kcl registry compatibility set    change that level
+  kcl registry compatibility get   the level a subject is checked at
+  kcl registry compatibility set   change that level
+  kcl registry schema create       register the schema once it passes
 `,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
@@ -131,6 +222,10 @@ SEE ALSO:
 				return err
 			}
 			ctx := context.Background()
+			version, err = resolveVersion(ctx, scl, subject, version)
+			if err != nil {
+				return dieErr("check compatibility", err)
+			}
 			var params []sr.Param
 			if normalize {
 				params = append(params, sr.Normalize)
@@ -147,26 +242,27 @@ SEE ALSO:
 				References: refs,
 			})
 			if err != nil {
-				return dieErr("test compatibility", err)
+				return dieErr("check compatibility", err)
+			}
+			if res.Messages == nil {
+				res.Messages = []string{}
+			}
+			var outVersion any = version
+			if version == -2 {
+				outVersion = out.Unknown
 			}
 
-			switch cl.Format() {
-			case out.FormatJSON:
+			if cl.Format() == out.FormatJSON {
 				out.MarshalJSON(cl.Command(), 1, map[string]any{
 					"subject":    subject,
-					"version":    versionString(version),
+					"version":    outVersion,
 					"compatible": res.Is,
 					"messages":   res.Messages,
 				})
-			case out.FormatAWK:
-				// One word, so that "if [ $(kcl ... --format awk) =
-				// true ]" reads. The label belongs to text.
-				fmt.Printf("%v\n", res.Is)
-				for _, m := range res.Messages {
-					fmt.Fprintln(os.Stderr, m)
-				}
-			default:
-				fmt.Printf("compatible: %v\n", res.Is)
+			} else {
+				tw := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "compatibility", "SUBJECT", "VERSION", "COMPATIBLE")
+				tw.Row(subject, outVersion, res.Is)
+				tw.Flush()
 				for _, m := range res.Messages {
 					fmt.Fprintln(os.Stderr, m)
 				}
@@ -183,6 +279,7 @@ SEE ALSO:
 	cmd.Flags().StringArrayVarP(&references, "reference", "r", nil, "schema reference in name:subject:version form (repeatable)")
 	cmd.Flags().BoolVar(&normalize, "normalize", false, "ask the registry to normalize schemas before comparing")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "ask the registry to return the reasons for any incompatibility")
+	out.Columns(cmd, "SUBJECT", "VERSION", "COMPATIBLE")
 	return cmd
 }
 
@@ -192,32 +289,9 @@ func parseCheckVersion(s string) (int, error) {
 	if strings.EqualFold(s, "all") {
 		return -2, nil
 	}
-	return parseVersion(s)
-}
-
-// printCompat prints compatibility results as a table (or JSON), surfacing any
-// per-subject errors. It returns ErrSilent if any result carried an error so
-// the process exits non-zero.
-func printCompat(cl *client.Client, results []sr.CompatibilityResult) error {
-	var anyErr bool
-	tw := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "compatibility", "SUBJECT", "LEVEL", "ERROR")
-	for _, r := range results {
-		subject := r.Subject
-		if subject == "" {
-			subject = "(global)"
-		}
-		level := r.Level.String()
-		errStr := ""
-		if r.Err != nil {
-			anyErr = true
-			level = ""
-			errStr = r.Err.Error()
-		}
-		tw.Row(subject, level, errStr)
+	v, err := parseVersion(s)
+	if err != nil {
+		return 0, out.Errf(out.ExitUsage, "invalid version %q: must be a positive integer, 'latest', or 'all'", s)
 	}
-	tw.Flush()
-	if anyErr {
-		return out.ErrSilent
-	}
-	return nil
+	return v, nil
 }

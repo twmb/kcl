@@ -1,6 +1,16 @@
 package cluster
 
-import "testing"
+import (
+	"io"
+	"os"
+	"testing"
+
+	"github.com/spf13/cobra"
+	"github.com/twmb/franz-go/pkg/kerr"
+
+	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/out"
+)
 
 func TestParseDirectoryID(t *testing.T) {
 	tests := []struct {
@@ -22,5 +32,48 @@ func TestParseDirectoryID(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("parseDirectoryID(%q) = %v, want %v", tt.input, got, tt.want)
 		}
+	}
+}
+
+// TestControllerResult pins the one row an add or remove prints, against
+// hand built responses, since kfake answers neither request: the controller
+// id, the bare error name, the broker's text, and exit 1 on an error.
+func TestControllerResult(t *testing.T) {
+	msg := "voter 3 is not a member"
+	for _, test := range []struct {
+		name    string
+		code    int16
+		message *string
+		want    string
+		wantErr bool
+	}{
+		{"ok", 0, nil, "3\t-\t-\n", false},
+		{"error", kerr.VoterNotFound.Code, &msg, "3\tVOTER_NOT_FOUND\tvoter 3 is not a member\n", true},
+		{"error, no message", kerr.VoterNotFound.Code, nil, "3\tVOTER_NOT_FOUND\t-\n", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := &cobra.Command{Use: "kcl"}
+			cl := client.New(root)
+			if err := root.ParseFlags([]string{"--no-config-file", "--format", "awk"}); err != nil {
+				t.Fatal(err)
+			}
+
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			old := os.Stdout
+			os.Stdout = w
+			resErr := controllerResult(cl, 3, test.code, test.message)
+			w.Close()
+			os.Stdout = old
+			b, _ := io.ReadAll(r)
+			if got := string(b); got != test.want {
+				t.Errorf("row = %q, want %q", got, test.want)
+			}
+			if (resErr == out.ErrSilent) != test.wantErr || (resErr != nil && resErr != out.ErrSilent) {
+				t.Errorf("err = %v, want ErrSilent %v", resErr, test.wantErr)
+			}
+		})
 	}
 }

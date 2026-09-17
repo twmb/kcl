@@ -10,12 +10,23 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/out"
 )
+
+// controllerHeaders is the one result row an add or a remove prints: the
+// controller it was about, and how the quorum answered.
+var controllerHeaders = []string{"CONTROLLER-ID", "ERROR", "MESSAGE"}
+
+// controllerResult prints the result row for controller id: ERROR and
+// MESSAGE are "" when the quorum accepted the change.
+func controllerResult(cl *client.Client, id int32, code int16, message *string) error {
+	table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results", controllerHeaders...).ResultColumns()
+	table.Row(id, out.ErrName(code), out.BrokerMessage(message))
+	return table.Flush()
+}
 
 func addControllerCommand(cl *client.Client) *cobra.Command {
 	var (
@@ -34,6 +45,9 @@ Add a voter (controller) to the KRaft quorum (KIP-853, Kafka 4.0+).
 Only one controller can be added at a time. The new controller must be
 running and reachable via the specified listeners.
 
+The result is one row, CONTROLLER-ID ERROR MESSAGE; ERROR is the error the
+quorum answered and MESSAGE its text, both empty when the voter was added.
+
 EXAMPLES:
   kcl cluster add-controller --controller-id 3 --directory-id abc123 --listeners PLAINTEXT://host:9093
 `,
@@ -49,15 +63,15 @@ EXAMPLES:
 			for _, l := range listeners {
 				name, hostport, ok := strings.Cut(l, "://")
 				if !ok {
-					return fmt.Errorf("invalid listener %q: expected NAME://host:port", l)
+					return out.Errf(out.ExitUsage, "invalid listener %q: expected NAME://host:port", l)
 				}
 				host, portStr, err := net.SplitHostPort(hostport)
 				if err != nil {
-					return fmt.Errorf("invalid listener %q: %v", l, err)
+					return out.Errf(out.ExitUsage, "invalid listener %q: %v", l, err)
 				}
 				port, err := strconv.Atoi(portStr)
 				if err != nil {
-					return fmt.Errorf("invalid port in listener %q: %v", l, err)
+					return out.Errf(out.ExitUsage, "invalid port in listener %q: %v", l, err)
 				}
 				req.Listeners = append(req.Listeners, kmsg.AddRaftVoterRequestListener{
 					Name: name,
@@ -70,26 +84,10 @@ EXAMPLES:
 			if err != nil {
 				return fmt.Errorf("unable to add controller: %v", err)
 			}
-
-			if err := kerr.ErrorForCode(kresp.ErrorCode); err != nil {
-				msg := err.Error()
-				if kresp.ErrorMessage != nil {
-					msg += ": " + *kresp.ErrorMessage
-				}
-				if cl.Format() == "json" {
-					out.DieJSON(cl.Command(), err.Error(), msg)
-				}
-				return fmt.Errorf("%s", msg)
-			}
-			switch cl.Format() {
-			case "json":
-				out.MarshalJSON(cl.Command(), 1, map[string]any{"status": "ok"})
-			default:
-				fmt.Println("OK")
-			}
-			return nil
+			return controllerResult(cl, controllerID, kresp.ErrorCode, kresp.ErrorMessage)
 		},
 	}
+	out.Columns(cmd, controllerHeaders...)
 
 	cmd.Flags().Int32Var(&controllerID, "controller-id", 0, "ID of the controller to add")
 	cmd.Flags().StringVar(&directoryID, "directory-id", "", "directory ID of the controller (hex UUID)")
@@ -115,6 +113,9 @@ Remove a voter (controller) from the KRaft quorum (KIP-853, Kafka 4.0+).
 
 Only one controller can be removed at a time.
 
+The result is one row, CONTROLLER-ID ERROR MESSAGE; ERROR is the error the
+quorum answered and MESSAGE its text, both empty when the voter was removed.
+
 EXAMPLES:
   kcl cluster remove-controller --controller-id 3 --directory-id abc123
 `,
@@ -132,26 +133,10 @@ EXAMPLES:
 			if err != nil {
 				return fmt.Errorf("unable to remove controller: %v", err)
 			}
-
-			if err := kerr.ErrorForCode(kresp.ErrorCode); err != nil {
-				msg := err.Error()
-				if kresp.ErrorMessage != nil {
-					msg += ": " + *kresp.ErrorMessage
-				}
-				if cl.Format() == "json" {
-					out.DieJSON(cl.Command(), err.Error(), msg)
-				}
-				return fmt.Errorf("%s", msg)
-			}
-			switch cl.Format() {
-			case "json":
-				out.MarshalJSON(cl.Command(), 1, map[string]any{"status": "ok"})
-			default:
-				fmt.Println("OK")
-			}
-			return nil
+			return controllerResult(cl, controllerID, kresp.ErrorCode, kresp.ErrorMessage)
 		},
 	}
+	out.Columns(cmd, controllerHeaders...)
 
 	cmd.Flags().Int32Var(&controllerID, "controller-id", 0, "ID of the controller to remove")
 	cmd.Flags().StringVar(&directoryID, "directory-id", "", "directory ID of the controller (hex UUID)")
@@ -167,11 +152,11 @@ func parseDirectoryID(s string) ([16]byte, error) {
 	}
 	s = strings.ReplaceAll(s, "-", "")
 	if len(s) != 32 {
-		return id, fmt.Errorf("directory-id must be a 32-char hex string (UUID), got %d chars", len(s))
+		return id, out.Errf(out.ExitUsage, "directory-id must be a 32-char hex string (UUID), got %d chars", len(s))
 	}
 	_, err := hex.Decode(id[:], []byte(s))
 	if err != nil {
-		return id, fmt.Errorf("directory-id is not valid hex: %v", err)
+		return id, out.Errf(out.ExitUsage, "directory-id is not valid hex: %v", err)
 	}
 	return id, nil
 }

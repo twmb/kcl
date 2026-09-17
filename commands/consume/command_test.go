@@ -19,6 +19,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/out"
 )
 
 // These tests drive the real cobra command against an in-process kfake
@@ -441,5 +442,26 @@ func TestConsumeGroupCommitsOnlyWhatItPrinted(t *testing.T) {
 
 	if got := runConsume(t, addrs, "-n", "7", "-g", "gp", "--timeout", "400ms"); len(got) != 7 {
 		t.Errorf("second run got %d records, want the remaining 7", len(got))
+	}
+}
+
+// TestConsumeBadFormatIsUsage pins that a format string that does not parse
+// is a usage error naming the flag, and that it is caught before anything is
+// dialed: the seed broker here is a port nothing listens on.
+func TestConsumeBadFormatIsUsage(t *testing.T) {
+	root := &cobra.Command{Use: "kcl", SilenceUsage: true, SilenceErrors: true}
+	kcl := client.New(root)
+	root.AddCommand(Command(kcl))
+	root.SetArgs([]string{"consume", "t", "-f", "%q", "--no-config-file", "-B", "127.0.0.1:1"})
+
+	done := make(chan error, 1)
+	go func() { done <- root.Execute() }()
+	select {
+	case err := <-done:
+		if err == nil || out.ExitCode(err) != out.ExitUsage || !strings.Contains(err.Error(), `output format "%q"`) {
+			t.Errorf("error = %v, want a usage error naming the output format", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("consume dialed before checking the format")
 	}
 }
