@@ -3,9 +3,13 @@ package out
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/twmb/franz-go/pkg/kerr"
 )
 
 func captureStdout(fn func()) string {
@@ -600,6 +604,88 @@ func TestErrorColumn(t *testing.T) {
 	})
 	if err != nil || !strings.Contains(got, `"error":""`) {
 		t.Errorf("json: Flush = %v, out = %q", err, got)
+	}
+}
+
+// TestErrorCellTypes pins that a ResultColumns or ErrorColumn table's ERROR
+// and MESSAGE cells are strings by the time they print, whatever a command
+// handed Row: an error is its kerr name or its text, a Stringer its String,
+// a *string what it points to, and only a non-empty string is a failure. A
+// type Row cannot turn into a string panics under go test.
+func TestErrorCellTypes(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		err     any
+		msg     any
+		wantErr bool
+		awk     string
+		json    string
+	}{
+		{"strings", "UNKNOWN_TOPIC_OR_PARTITION", "gone", true, "a\tUNKNOWN_TOPIC_OR_PARTITION\tgone\n", `"error":"UNKNOWN_TOPIC_OR_PARTITION","message":"gone"`},
+		{"kerr", kerr.UnknownTopicOrPartition, ptr("gone"), true, "a\tUNKNOWN_TOPIC_OR_PARTITION\tgone\n", `"error":"UNKNOWN_TOPIC_OR_PARTITION","message":"gone"`},
+		{"wrapped kerr", fmt.Errorf("commit: %w", kerr.NotCoordinator), "", true, "a\tNOT_COORDINATOR\t-\n", `"error":"NOT_COORDINATOR","message":""`},
+		{"other error", errors.New("dial tcp: refused"), (*string)(nil), true, "a\tdial tcp: refused\t-\n", `"error":"dial tcp: refused","message":""`},
+		{"stringer", stringer("boom"), "", true, "a\tboom\t-\n", `"error":"boom","message":""`},
+		{"unknown", Unknown, Unknown, false, "a\t-\t-\n", `"error":null,"message":null`},
+		{"nil", nil, nil, false, "a\t-\t-\n", `"error":null,"message":null`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var err error
+			awk := captureStdout(func() {
+				table := NewFormattedTable("awk", "topic.delete", 1, "results", "TOPIC", "ERROR", "MESSAGE").ResultColumns()
+				table.Row("a", test.err, test.msg)
+				err = table.Flush()
+			})
+			if (err == ErrSilent) != test.wantErr || (err != nil && err != ErrSilent) {
+				t.Errorf("Flush = %v, want ErrSilent %v", err, test.wantErr)
+			}
+			if awk != test.awk {
+				t.Errorf("awk = %q, want %q", awk, test.awk)
+			}
+			js := captureStdout(func() {
+				table := NewFormattedTable("json", "topic.delete", 1, "results", "TOPIC", "ERROR", "MESSAGE").ResultColumns()
+				table.Row("a", test.err, test.msg)
+				table.Flush()
+			})
+			if !strings.Contains(js, test.json) {
+				t.Errorf("json = %s, want %s", js, test.json)
+			}
+		})
+	}
+
+	// The ERROR column alone is normalized the same way, and a row that the
+	// caller reuses is not written to.
+	row := []any{"a", kerr.NotController}
+	var err error
+	awk := captureStdout(func() {
+		table := NewFormattedTable("awk", "x", 1, "rows", "TOPIC", "ERROR").ErrorColumn()
+		table.Row(row...)
+		err = table.Flush()
+	})
+	if err != ErrSilent || awk != "a\tNOT_CONTROLLER\n" {
+		t.Errorf("ERROR alone: Flush = %v, awk = %q", err, awk)
+	}
+	if row[1] != kerr.NotController {
+		t.Errorf("Row wrote %v into the caller's slice", row[1])
+	}
+
+	for _, test := range []struct {
+		name string
+		row  []any
+	}{
+		{"int16 ERROR", []any{"a", int16(0), ""}},
+		{"bool ERROR", []any{"a", false, ""}},
+		{"error MESSAGE", []any{"a", "", errors.New("x")}},
+		{"int MESSAGE", []any{"a", "", 3}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("Row(%v) did not panic", test.row)
+				}
+			}()
+			NewFormattedTable("awk", "x", 1, "rows", "TOPIC", "ERROR", "MESSAGE").ResultColumns().Row(test.row...)
+		})
 	}
 }
 

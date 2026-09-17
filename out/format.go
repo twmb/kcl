@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"testing"
 	"text/tabwriter"
 )
 
@@ -48,6 +49,7 @@ type FormattedTable struct {
 	rows     [][]any
 	dryRun   bool
 	errCol   int  // the ERROR column under ResultColumns or ErrorColumn, else -1
+	msgCol   int  // the MESSAGE column after errCol, else -1
 	okText   bool // ResultColumns: text prints OK for a "" ERROR
 }
 
@@ -77,6 +79,7 @@ func NewFormattedTable(format, command string, version int, jsonKey string, head
 		headers:  headers,
 		jsonKeys: keys,
 		errCol:   -1,
+		msgCol:   -1,
 	}
 }
 
@@ -125,7 +128,7 @@ func (t *FormattedTable) ErrorColumn() *FormattedTable {
 	n := len(t.headers)
 	switch {
 	case n >= 2 && t.headers[n-2] == "ERROR" && t.headers[n-1] == "MESSAGE":
-		t.errCol = n - 2
+		t.errCol, t.msgCol = n-2, n-1
 	case n >= 1 && t.headers[n-1] == "ERROR":
 		t.errCol = n - 1
 	default:
@@ -141,9 +144,55 @@ func (t *FormattedTable) SetDryRun(dry bool) {
 	t.dryRun = dry
 }
 
-// Row adds a row of values to the table.
+// Row adds a row of values to the table. Under ResultColumns or ErrorColumn
+// the ERROR and MESSAGE cells are made strings first: see errorCell and
+// messageCell.
 func (t *FormattedTable) Row(values ...any) {
+	if t.errCol >= 0 && t.errCol < len(values) {
+		values = slices.Clone(values)
+		values[t.errCol] = errorCell(values[t.errCol])
+		if t.msgCol >= 0 && t.msgCol < len(values) {
+			values[t.msgCol] = messageCell(values[t.msgCol])
+		}
+	}
 	t.rows = append(t.rows, values)
+}
+
+// errorCell is the ERROR cell for v, as a string: an error is its kerr name
+// or else its text, as ErrCell has it, and a Stringer is its String. A
+// string, Unknown, and nil are themselves. Any other type is a programming
+// error: it panics under go test and prints as fmt.Sprint otherwise, so a
+// user sees the cell rather than a crash.
+func errorCell(v any) any {
+	switch v := v.(type) {
+	case nil, unknown, string:
+		return v
+	case error:
+		return ErrCell(v)
+	case fmt.Stringer:
+		return v.String()
+	}
+	return badCell("ERROR", v)
+}
+
+// messageCell is the MESSAGE cell for v, as a string: a *string from a kmsg
+// response is what it points to, "" when nil, as BrokerMessage has it.
+func messageCell(v any) any {
+	switch v := v.(type) {
+	case nil, unknown, string:
+		return v
+	case *string:
+		return BrokerMessage(v)
+	}
+	return badCell("MESSAGE", v)
+}
+
+func badCell(column string, v any) string {
+	msg := fmt.Sprintf("out: a %s cell holds a %T, which is not a string; please report this", column, v)
+	if testing.Testing() {
+		panic(msg)
+	}
+	return fmt.Sprint(v)
 }
 
 // Flush writes the buffered data in the configured format to stdout. It
@@ -169,15 +218,11 @@ func (t *FormattedTable) Flush() error {
 	return nil
 }
 
-// isError reports whether an ERROR cell names an error. Unknown and "" do not.
+// isError reports whether an ERROR cell names an error: Row made it a string,
+// and "", Unknown, and nil do not.
 func isError(v any) bool {
-	switch v := v.(type) {
-	case nil, unknown:
-		return false
-	case string:
-		return v != ""
-	}
-	return fmt.Sprint(v) != ""
+	s, ok := v.(string)
+	return ok && s != ""
 }
 
 func (t *FormattedTable) flushText() {
