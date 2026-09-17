@@ -91,7 +91,6 @@ var walkthroughLeaves = []struct {
 	{path: "misc.api-versions"},
 	{path: "misc.errcode", args: []string{"3"}},
 	{path: "misc.errtext", args: []string{"UNKNOWN_TOPIC_OR_PARTITION"}},
-	{path: "misc.list-offsets", args: []string{walkTopic}},
 	{path: "misc.offset-for-leader-epoch", args: []string{walkTopic, "-e", "0"}},
 	{path: "misc.probe-version"},
 	{path: "misc.raw-req", args: []string{"-k", "18"}, stdin: "{}"},
@@ -101,18 +100,18 @@ var walkthroughLeaves = []struct {
 	{path: "quota.describe"},
 	{path: "reassign.list"},
 	{path: "registry.compatibility.get", args: []string{walkSubject}},
-	{path: "registry.compatibility.test", args: []string{walkSubject, "-s", schemaFileArg}},
 	{path: "registry.context.list"},
 	{path: "registry.mode.get"},
-	{path: "registry.references", args: []string{walkSubject}},
+	{path: "registry.schema.check-compatibility", args: []string{walkSubject, "-s", schemaFileArg}},
 	{path: "registry.schema.get", args: []string{"-S", walkSubject}},
 	{path: "registry.schema.list"},
-	{path: "registry.subjects"},
-	{path: "registry.versions", args: []string{walkSubject}},
+	{path: "registry.schema.references", args: []string{walkSubject}},
+	{path: "registry.subject.list"},
 	{path: "share-group.describe", args: []string{"walk-share"}, exit: 1, why: "nothing has joined a share group, so the broker answers GROUP_ID_NOT_FOUND"},
 	{path: "share-group.list"},
 	{path: "topic.describe", args: []string{walkTopic}},
 	{path: "topic.list"},
+	{path: "topic.list-offsets", args: []string{walkTopic}},
 	{path: "txn.describe", args: []string{"walk-txn"}, exit: 1, why: "nothing has produced transactionally, so the broker answers TRANSACTIONAL_ID_NOT_FOUND"},
 	{path: "txn.describe-producers", args: []string{walkTopic}},
 	{path: "txn.list"},
@@ -124,15 +123,11 @@ var walkthroughLeaves = []struct {
 // leaf in neither list fails the run, so a new command cannot arrive without
 // someone deciding which of the two it is.
 var walkthroughSkips = []struct{ path, why string }{
-	{"acl.create", "creates ACLs"},
-	{"acl.delete", "deletes ACLs"},
 	{"client-metrics.alter", "alters a metrics subscription"},
 	{"client-metrics.delete", "deletes a metrics subscription"},
 	{"cluster.add-controller", "changes the quorum"},
-	{"cluster.elect-leaders", "moves partition leaders"},
 	{"cluster.features.update", "changes finalized feature versions"},
 	{"cluster.remove-controller", "changes the quorum"},
-	{"config.alter", "alters configs"},
 	{"consume", "runs until it is interrupted; the consume package tests it"},
 	{"dtoken.create", "creates a delegation token"},
 	{"dtoken.expire", "expires a delegation token"},
@@ -144,33 +139,58 @@ var walkthroughSkips = []struct{ path, why string }{
 	{"fake.control.fault.wait", "blocks until a fault is hit"},
 	{"fake.control.group.wait", "blocks until a group reaches a state"},
 	{"fake.control.methods", "needs a kcl fake control endpoint, which a cluster in this process does not serve"},
-	{"group.delete", "deletes groups"},
 	{"group.offset-delete", "deletes committed offsets"},
-	{"group.seek", "commits new offsets"},
 	{"logdirs.alter", "moves partitions between log dirs"},
 	{"misc.gen-autocomplete", "writes a shell script for you to source, so there is no document for --format to shape"},
 	{"produce", "reads records from stdin and writes them to the cluster"},
-	{"profile.create", "writes the config file"},
-	{"profile.delete", "writes the config file"},
-	{"profile.rename", "writes the config file"},
-	{"profile.set", "writes the config file"},
-	{"profile.use", "writes the config file"},
-	{"quota.alter", "alters quotas"},
 	{"reassign.alter", "reassigns partitions"},
 	{"reassign.cancel", "cancels a reassignment"},
 	{"registry.compatibility.set", "sets a compatibility level"},
 	{"registry.context.delete", "deletes a context"},
-	{"registry.delete", "deletes a subject"},
+	{"registry.schema.delete", "deletes a schema version, and has no dry run"},
+	{"registry.subject.delete", "deletes a subject, and has no dry run"},
 	{"registry.mode.set", "sets a mode"},
 	{"registry.schema.create", "registers a schema"},
-	{"share-group.delete", "deletes groups"},
 	{"share-group.offset-delete", "deletes committed offsets"},
-	{"share-group.seek", "commits new offsets"},
 	{"topic.add-partitions", "adds partitions"},
-	{"topic.create", "creates topics"},
-	{"topic.delete", "deletes topics"},
-	{"topic.trim-prefix", "deletes records"},
 	{"user.alter", "alters SCRAM credentials"},
+}
+
+// walkthroughMutations are the mutating leaves the walkthrough runs against
+// the cluster in the way that changes nothing: a dry run, or a [y/N] prompt
+// whose stdin is not a terminal, which prints the plan. Each prints one
+// document in every format, marked as a dry run, and exits 0, so that a
+// script can preview what a command would do.
+var walkthroughMutations = []struct {
+	path string
+	args []string
+}{
+	{path: "acl.create", args: []string{"--topic", walkTopic, "--allow-principal", "User:alice", "--operation", "read", "--dry-run"}},
+	{path: "acl.delete", args: []string{"--topic", walkTopic, "--dry-run"}},
+	{path: "cluster.elect-leaders", args: []string{walkTopic + ":0", "--dry-run"}},
+	{path: "config.alter", args: []string{walkTopic, "-s", "retention.ms=1000", "--dry-run"}},
+	{path: "group.delete", args: []string{walkGroup, "--dry-run"}},
+	{path: "group.seek", args: []string{walkGroup, "--to", "start", "--dry-run"}},
+	{path: "quota.alter", args: []string{"--name", "user=alice", "--add", "producer_byte_rate=1048576", "--dry-run"}},
+	{path: "share-group.delete", args: []string{"walk-share", "--dry-run"}},
+	{path: "share-group.seek", args: []string{"walk-share", "--to", "start", "-t", walkTopic, "--dry-run"}},
+	{path: "topic.create", args: []string{"walk-new", "--dry-run"}},
+	{path: "topic.delete", args: []string{walkOther, "--dry-run"}},
+	{path: "topic.trim-prefix", args: []string{walkTopic, "-o", "1"}},
+}
+
+// walkthroughProfileSteps are the profile mutators, run in this order against
+// a config file of their own, since each depends on what the one before
+// wrote. Each prints a {profile, path, current} document and exits 0.
+var walkthroughProfileSteps = []struct {
+	path string
+	args []string
+}{
+	{path: "profile.create", args: []string{"walk2", "-B", "localhost:9"}},
+	{path: "profile.use", args: []string{"walk2"}},
+	{path: "profile.set", args: []string{"-X", "dial_timeout=2s"}},
+	{path: "profile.rename", args: []string{"walk2", "walk3"}},
+	{path: "profile.delete", args: []string{"walk3"}},
 }
 
 func TestWalkthrough(t *testing.T) {
@@ -190,12 +210,59 @@ func TestWalkthrough(t *testing.T) {
 
 			js := w.run(t, leaf.stdin, slices.Concat(args, []string{"--format", "json"}))
 			if w.check(t, leaf.path, "json", leaf.exit, leaf.why, js) {
-				w.checkJSON(t, leaf.path, js)
+				w.checkJSON(t, leaf.path, js, false)
 			}
 
 			awk := w.run(t, leaf.stdin, slices.Concat(args, []string{"--format", "awk"}))
 			if w.check(t, leaf.path, "awk", leaf.exit, leaf.why, awk) {
-				w.checkAWK(t, leaf.path, text.stdout, awk)
+				w.checkAWK(t, leaf.path, text.stdout, awk, w.awkHeader(t, leaf.path, args))
+			}
+		})
+	}
+	for _, m := range walkthroughMutations {
+		t.Run(m.path, func(t *testing.T) {
+			t.Parallel()
+			args := slices.Concat(strings.Split(m.path, "."), m.args)
+
+			text := w.run(t, "", slices.Concat(args, []string{"--format", "text"}))
+			if w.check(t, m.path, "text", out.ExitOK, "", text) && strings.TrimSpace(text.stdout) == "" {
+				w.errf(t, m.path, "text", text, "exit 0 with nothing on stdout")
+			}
+
+			js := w.run(t, "", slices.Concat(args, []string{"--format", "json"}))
+			if w.check(t, m.path, "json", out.ExitOK, "", js) {
+				w.checkJSON(t, m.path, js, true)
+			}
+
+			awk := w.run(t, "", slices.Concat(args, []string{"--format", "awk"}))
+			if w.check(t, m.path, "awk", out.ExitOK, "", awk) {
+				w.checkAWK(t, m.path, text.stdout, awk, w.awkHeader(t, m.path, args))
+			}
+		})
+	}
+	for _, format := range []string{"text", "json", "awk"} {
+		t.Run("profile."+format, func(t *testing.T) {
+			t.Parallel()
+			cfgPath := filepath.Join(t.TempDir(), "config.toml")
+			for _, step := range walkthroughProfileSteps {
+				args := slices.Concat([]string{"--config-path", cfgPath}, strings.Split(step.path, "."), step.args, []string{"--format", format})
+				r := w.runArgs(t, "", args)
+				if !w.check(t, step.path, format, out.ExitOK, "", r) {
+					return
+				}
+				switch format {
+				case "json":
+					w.checkJSON(t, step.path, r, false)
+					var doc map[string]any
+					json.Unmarshal([]byte(r.stdout), &doc)
+					for _, key := range []string{"profile", "path", "current"} {
+						if _, ok := doc[key]; !ok {
+							w.errf(t, step.path, format, r, "document has no %q", key)
+						}
+					}
+				case "awk":
+					w.checkAWK(t, step.path, "", r, w.awkHeader(t, step.path, args))
+				}
 			}
 		})
 	}
@@ -208,6 +275,15 @@ func testEveryLeafClassified(t *testing.T) {
 	classified := make(map[string]bool)
 	for _, leaf := range walkthroughLeaves {
 		classified[leaf.path] = true
+	}
+	for _, m := range walkthroughMutations {
+		if classified[m.path] {
+			t.Errorf("%s is both walked and mutated", m.path)
+		}
+		classified[m.path] = true
+	}
+	for _, step := range walkthroughProfileSteps {
+		classified[step.path] = true
 	}
 	for _, skip := range walkthroughSkips {
 		if skip.why == "" {
@@ -326,7 +402,7 @@ func newWalkthrough(t *testing.T) *walkthrough {
 [profiles.%s]
 seed_brokers = [%q]
 
-[profiles.%s.schema_registry]
+[profiles.%s.registry]
 urls = [%q]
 `, walkProfile, walkProfile, c.ListenAddrs()[0], walkProfile, reg.URL())
 	if err := os.WriteFile(w.cfgPath, []byte(cfg), 0o600); err != nil {
@@ -358,8 +434,13 @@ type runResult struct {
 // run runs one kcl in a child process, pointed at the seeded cluster.
 func (w *walkthrough) run(t *testing.T, stdin string, args []string) runResult {
 	t.Helper()
+	return w.runArgs(t, stdin, slices.Concat([]string{"--config-path", w.cfgPath}, args))
+}
 
-	full := slices.Concat([]string{"--config-path", w.cfgPath}, args)
+// runArgs runs one kcl in a child process with exactly these arguments.
+func (w *walkthrough) runArgs(t *testing.T, stdin string, full []string) runResult {
+	t.Helper()
+
 	enc, err := json.Marshal(full)
 	if err != nil {
 		t.Fatal(err)
@@ -390,10 +471,26 @@ func (w *walkthrough) run(t *testing.T, stdin string, args []string) runResult {
 	case errors.As(err, &exit):
 		r.code = exit.ExitCode()
 	default:
-		t.Fatalf("unable to run kcl %s: %v", strings.Join(args, " "), err)
+		t.Fatalf("unable to run kcl %s: %v", strings.Join(full, " "), err)
 	}
 	r.stdout, r.stderr = stdout.String(), stderr.String()
 	return r
+}
+
+// awkHeader is the row --awk-header prints for the command args name, as its
+// fields, or nil for a command that registered no table. It runs in a child
+// like everything else, so it is what a script would see.
+func (w *walkthrough) awkHeader(t *testing.T, path string, args []string) []string {
+	t.Helper()
+	r := w.runArgs(t, "", slices.Concat(args, []string{"--awk-header"}))
+	if r.code != out.ExitOK || r.stderr != "" {
+		w.errf(t, path, "awk", r, "--awk-header: exit %d, want 0 and nothing on stderr", r.code)
+		return nil
+	}
+	if r.stdout == "" {
+		return nil
+	}
+	return strings.Split(strings.TrimSuffix(r.stdout, "\n"), "\t")
 }
 
 // check reports the exit code, returning whether it is the one we expect.
@@ -410,9 +507,9 @@ func (w *walkthrough) check(t *testing.T, path, format string, want int, why str
 	return false
 }
 
-// checkJSON pins the contract every JSON document carries: one line, and the
-// command that printed it.
-func (w *walkthrough) checkJSON(t *testing.T, path string, r runResult) {
+// checkJSON pins the contract every JSON document carries: one line, the
+// command that printed it, and "dry_run":true when the run was one.
+func (w *walkthrough) checkJSON(t *testing.T, path string, r runResult, dryRun bool) {
 	t.Helper()
 	body := strings.TrimSuffix(r.stdout, "\n")
 	if body == "" {
@@ -434,11 +531,16 @@ func (w *walkthrough) checkJSON(t *testing.T, path string, r runResult) {
 	if got, _ := doc["_command"].(string); got != path {
 		w.errf(t, path, "json", r, "_command is %q, want %q", got, path)
 	}
+	if dryRun && doc["dry_run"] != true {
+		w.errf(t, path, "json", r, "dry_run is %v, want true", doc["dry_run"])
+	}
 }
 
 // checkAWK pins the scripting contract: every row carries the same fields,
-// and the header the text format prints is not one of them.
-func (w *walkthrough) checkAWK(t *testing.T, path, text string, r runResult) {
+// as many as the header --awk-header prints for the command, and the header
+// the text format prints is not one of them. A command that prints rows must
+// have registered its columns, so that a script can learn them.
+func (w *walkthrough) checkAWK(t *testing.T, path, text string, r runResult, header []string) {
 	t.Helper()
 	body := strings.TrimSuffix(r.stdout, "\n")
 	if body == "" {
@@ -446,6 +548,16 @@ func (w *walkthrough) checkAWK(t *testing.T, path, text string, r runResult) {
 	}
 	rows := strings.Split(body, "\n")
 	want := strings.Count(rows[0], "\t") + 1
+	if header == nil && strings.HasPrefix(body, "{") {
+		// misc raw-req has no table: a raw response is a JSON document in
+		// every format.
+		return
+	}
+	if header == nil {
+		w.errf(t, path, "awk", r, "prints rows but --awk-header prints nothing; register the columns with out.Columns")
+	} else if len(header) != want {
+		w.errf(t, path, "awk", r, "--awk-header has %d fields, row 0 has %d: %q vs %q", len(header), want, header, rows[0])
+	}
 	headers := headerLines(text)
 	for i, row := range rows {
 		if got := strings.Count(row, "\t") + 1; got != want {
