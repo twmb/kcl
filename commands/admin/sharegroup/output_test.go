@@ -157,6 +157,29 @@ func TestListAndDescribe(t *testing.T) {
 			t.Errorf("offsets = %v, want one row at start offset 0 with lag 4", offsets)
 		}
 	})
+
+	// A missing group exits 1 under awk too: the default offsets section
+	// has no row for it, so the exit code is all that says so, and the
+	// summary section carries the error in its row.
+	t.Run("a missing group exits 1 under awk", func(t *testing.T) {
+		stdout, err := runShareGroup(t, c, "", "share-group", "describe", "nope", "--format", "awk")
+		if err != out.ErrSilent {
+			t.Fatalf("err = %v, want ErrSilent\n%s", err, stdout)
+		}
+		if stdout != "" {
+			t.Errorf("offsets rows = %q, want none for a group the broker does not know", stdout)
+		}
+		args := []string{"share-group", "describe", "nope", "--section", "summary", "--format", "awk"}
+		stdout, err = runShareGroup(t, c, "", args...)
+		if err != out.ErrSilent {
+			t.Fatalf("err = %v, want ErrSilent\n%s", err, stdout)
+		}
+		checkAwkFields(t, stdout, args...)
+		rows := awkRows(stdout)
+		if len(rows) != 1 || rows[0][0] != "nope" || rows[0][len(rows[0])-2] != "GROUP_ID_NOT_FOUND" {
+			t.Errorf("summary rows = %q, want one row for nope with GROUP_ID_NOT_FOUND under ERROR", rows)
+		}
+	})
 }
 
 // TestDeleteDryRunDocument pins that --dry-run prints the document a real

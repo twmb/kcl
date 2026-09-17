@@ -274,4 +274,24 @@ func TestSeekDocument(t *testing.T) {
 			t.Errorf("result row = %v, want UNKNOWN_MEMBER_ID with the not-empty hint", r)
 		}
 	})
+
+	// The results table is what carries the exit code under awk and text,
+	// after the plan table printed.
+	t.Run("a failed commit exits 1 under awk", func(t *testing.T) {
+		c.Fault(kfake.Fault{
+			Keys:  []kmsg.Key{kmsg.OffsetCommit},
+			Group: "sk",
+			Err:   kerr.UnknownMemberID,
+		})
+		args := []string{"group", "seek", "sk", "--to", "end", "-y", "--format", "awk"}
+		stdout, err := runGroup(t, c, "", args...)
+		if err != out.ErrSilent {
+			t.Fatalf("err = %v, want ErrSilent\n%s", err, stdout)
+		}
+		checkAwkFields(t, stdout, args...)
+		rows := awkRows(stdout)
+		if len(rows) != 2 || rows[0][4] != "-" || rows[1][4] != kerr.UnknownMemberID.Message {
+			t.Errorf("rows = %q, want the plan row then a result row with UNKNOWN_MEMBER_ID", rows)
+		}
+	})
 }
