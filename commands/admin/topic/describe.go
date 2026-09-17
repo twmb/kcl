@@ -64,7 +64,7 @@ func topicDescribeCommand(cl *client.Client) *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:     "describe TOPICS...",
+		Use:     "describe [TOPICS...]",
 		Aliases: []string{"d"},
 		Short:   "Describe topics with partition detail.",
 		Long: `Describe topics with partition detail.

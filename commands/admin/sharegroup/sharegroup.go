@@ -312,7 +312,7 @@ func describeCommand(cl *client.Client) *cobra.Command {
 	var section string
 	var regex bool
 	cmd := &cobra.Command{
-		Use:     "describe GROUPS...",
+		Use:     "describe [GROUPS...]",
 		Aliases: []string{"d"},
 		Short:   "Describe share groups with offsets and lag (Kafka 4.0+).",
 		Long: `Describe share groups with offsets and lag (Kafka 4.0+).

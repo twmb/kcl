@@ -32,7 +32,7 @@ func describeCommand(cl *client.Client) *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:     "describe GROUPS...",
+		Use:     "describe [GROUPS...]",
 		Aliases: []string{"d"},
 		Short:   "Describe consumer groups with lag.",
 		Long: `Describe consumer groups with lag.

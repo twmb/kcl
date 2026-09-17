@@ -709,3 +709,47 @@ func TestVersionCommand(t *testing.T) {
 		})
 	}
 }
+
+// TestHelpShape pins the help conventions CLAUDE.md names: every Short is a
+// sentence ending in a period, every Long opens by repeating it on its own
+// line, and the EXAMPLES: and SEE ALSO: headings are spelled that way, with
+// their lines indented two spaces.
+func TestHelpShape(t *testing.T) {
+	root, _ := buildRoot()
+	allCommands(root, func(cmd *cobra.Command) {
+		if cmd == root {
+			// The root's Short is the one line that is not a sentence,
+			// and its Long is the tool's introduction.
+			return
+		}
+		path := cmd.CommandPath()
+		if cmd.Short == "" {
+			t.Errorf("%s: no Short", path)
+			return
+		}
+		if !strings.HasSuffix(cmd.Short, ".") {
+			t.Errorf("%s: Short %q does not end in a period", path, cmd.Short)
+		}
+		if cmd.Long == "" {
+			return
+		}
+		lines := strings.Split(cmd.Long, "\n")
+		if lines[0] != cmd.Short {
+			t.Errorf("%s: Long opens %q, want the Short %q", path, lines[0], cmd.Short)
+		}
+		var in string
+		for i, line := range lines {
+			switch {
+			case strings.EqualFold(line, "examples:") || strings.EqualFold(line, "see also:"):
+				if line != strings.ToUpper(line) {
+					t.Errorf("%s: heading %q on line %d, want it in capitals", path, line, i+1)
+				}
+				in = line
+			case isHelpHeading(line):
+				in = ""
+			case in != "" && line != "" && !strings.HasPrefix(line, "  "):
+				t.Errorf("%s: line %d under %s is not indented two spaces: %q", path, i+1, in, line)
+			}
+		}
+	})
+}

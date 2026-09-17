@@ -537,10 +537,10 @@ func buildCommandJSON(cmd *cobra.Command, parentHidden bool) commandJSON {
 // examples returns the command lines of the EXAMPLES: block in cmd's long
 // help, the ones a user can paste, trimmed of their indent and with the
 // comment that follows a command kept. The block runs to the next heading
-// (SEE ALSO:) or the end of the help; the indented lines in it are the
-// examples, and a line at the margin, as kcl fake writes between groups of
-// examples, is prose. Every command writes its examples there rather than in
-// cobra's Example field, so that the help reads in one order.
+// (SEE ALSO:) or the end of the help; its indented lines are the examples, a
+// line that is only a comment is skipped, and a line ending in a backslash
+// continues on the next. Every command writes its examples there rather than
+// in cobra's Example field, so that the help reads in one order.
 func examples(cmd *cobra.Command) []string {
 	var lines []string
 	var in, cont bool
