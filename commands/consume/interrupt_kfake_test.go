@@ -238,9 +238,21 @@ func (c *consumeChild) waitFor(t *testing.T, ls *lines, want string) {
 // exits with.
 func (c *consumeChild) interrupt(t *testing.T) int {
 	t.Helper()
+	c.signal(t)
+	return c.wait(t)
+}
+
+// signal sends the child one ctrl-c and returns without waiting.
+func (c *consumeChild) signal(t *testing.T) {
+	t.Helper()
 	if err := c.cmd.Process.Signal(os.Interrupt); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// wait returns the code the child exits with.
+func (c *consumeChild) wait(t *testing.T) int {
+	t.Helper()
 	// Both outputs must be read to EOF before Wait, which closes them.
 	c.scans.Wait()
 	if err := c.cmd.Wait(); err != nil {
@@ -295,11 +307,12 @@ func (c *freezeConn) Close() error {
 	return c.Conn.Close()
 }
 
-// TestConsumeInterruptBrokerGone pins// TestConsumeInterruptBrokerGone pins// TestConsumeInterruptBrokerGone pins that a single interrupt exits promptly
-// even when the broker will not answer the group leave. Close leaves the
-// group, and a leave to a dead broker retries for retry_timeout; without the
-// grace, one SIGTERM would hold the process for that whole time and look
-// wedged, which is why an earlier share-group smoke run reached for SIGKILL.
+// TestConsumeInterruptBrokerGone pins what one interrupt does when the broker
+// will not answer the group leave. Close leaves the group, and a leave to a
+// dead broker retries for retry_timeout, so the first ctrl-c cannot finish;
+// after a second we must say what we are waiting on, and a second ctrl-c
+// must quit at once. An earlier share-group smoke run reached for SIGKILL
+// here because nothing said the process was still alive.
 func TestConsumeInterruptBrokerGone(t *testing.T) {
 	for _, shared := range []bool{false, true} {
 		name := "group"
@@ -343,14 +356,17 @@ func TestConsumeInterruptBrokerGone(t *testing.T) {
 			child := startConsume(t, args...)
 			child.waitFor(t, &child.stdout, "r")
 
-			// From here the broker answers nothing; a leave would retry
-			// for retry_timeout (45s), and the grace is 3s.
+			// From here the broker answers nothing; the leave retries
+			// for retry_timeout (45s).
 			frozen.Store(true)
 
+			child.signal(t)
+			child.waitFor(t, &child.stderr, "ctrl+c again")
 			start := time.Now()
-			code := child.interrupt(t)
-			if took := time.Since(start); took > 20*time.Second {
-				t.Errorf("interrupt took %v, want it bounded by the shutdown grace, not retry_timeout", took)
+			child.signal(t)
+			code := child.wait(t)
+			if took := time.Since(start); took > 10*time.Second {
+				t.Errorf("second interrupt took %v, want an immediate exit", took)
 			}
 			if code != out.ExitOK {
 				t.Errorf("exit %d, want %d; stderr:\n%s", code, out.ExitOK, strings.Join(child.stderr.all(), "\n"))

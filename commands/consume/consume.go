@@ -529,10 +529,9 @@ func (c *consumption) run(topics []string) error {
 	}
 
 	// The signal stops the loop and then we leave the group cleanly:
-	// commit what we printed, and Close to leave. A second signal, or a
-	// broker that will not answer the leave within the grace period,
-	// exits without waiting on Close, so one SIGTERM always terminates
-	// rather than blocking on retry_timeout.
+	// commit what we printed, and Close to leave. A leave to a broker
+	// that stopped answering retries for retry_timeout, so after a second
+	// we say what we are waiting on, and a second signal quits at once.
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -542,24 +541,21 @@ func (c *consumption) run(topics []string) error {
 		commitMarks(cl, isGroup)
 		cl.Close() // leaves group
 	}()
-	grace := time.NewTimer(shutdownGrace)
-	defer grace.Stop()
-	select {
-	case <-done:
-	case <-sigs:
-	case <-grace.C:
-		if isGroup || c.shareGroup != "" {
-			fmt.Fprintln(os.Stderr, "the broker did not answer the group leave in time; exiting anyway")
+	slow := time.NewTimer(time.Second)
+	defer slow.Stop()
+	for {
+		select {
+		case <-done:
+			return nil
+		case <-sigs:
+			return nil
+		case <-slow.C:
+			if isGroup || c.shareGroup != "" {
+				fmt.Fprintln(os.Stderr, "waiting on the offset commit and group leave; ctrl+c again to quit immediately...")
+			}
 		}
 	}
-	return nil
 }
-
-// shutdownGrace bounds how long an interrupted consume waits to leave its
-// group before it exits regardless. A healthy leave finishes well within it;
-// a broker that stopped answering would otherwise hold the process for
-// retry_timeout, so a single SIGTERM would look wedged and need a SIGKILL.
-const shutdownGrace = 3 * time.Second
 
 // commitMarks commits what we consumed before we leave the group. Close
 // commits through kgo's revoke as well, but doing it here lets us say so when
