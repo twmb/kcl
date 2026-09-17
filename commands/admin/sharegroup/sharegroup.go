@@ -519,18 +519,17 @@ func formatShareMemberAssignment(member kmsg.ShareGroupDescribeResponseGroupMemb
 }
 
 // deleteGroupResult returns what to print for one deleted share group: the
-// ERROR column, the MESSAGE column, and the error itself so the caller can
-// fail the command. Kafka 4.4 attaches a message to a failed delete
-// (KIP-1331); an older broker sends none and the message is empty.
-func deleteGroupResult(g kmsg.DeleteGroupsResponseGroup) (status, message string, err error) {
-	status = "OK"
-	if err = kerr.ErrorForCode(g.ErrorCode); err != nil {
-		status = err.Error()
+// ERROR column, "" when the delete succeeded, and the MESSAGE column. Kafka
+// 4.4 attaches a message to a failed delete (KIP-1331); an older broker
+// sends none and the message is empty.
+func deleteGroupResult(g kmsg.DeleteGroupsResponseGroup) (errStr, message string) {
+	if err := kerr.ErrorForCode(g.ErrorCode); err != nil {
+		errStr = err.Error()
 	}
 	if g.ErrorMessage != nil {
 		message = *g.ErrorMessage
 	}
-	return status, message, err
+	return errStr, message
 }
 
 func deleteCommand(cl *client.Client) *cobra.Command {
@@ -548,6 +547,14 @@ The groups must be empty (no active consumers) to be deleted.
 Use --regex to treat arguments as regex patterns: all share groups matching
 any pattern will be deleted. Use --dry-run to see which groups would be deleted
 without actually deleting them.
+
+EXAMPLES:
+  kcl share-group delete sg1 sg2                # delete two groups
+  kcl share-group delete -r 'test-.*' --dry-run # print what the pattern matches
+
+SEE ALSO:
+  kcl share-group list            list share groups
+  kcl share-group offset-delete   delete a share group's offsets for a topic
 `,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
@@ -559,49 +566,39 @@ without actually deleting them.
 				}
 				if len(args) == 0 {
 					fmt.Fprintln(os.Stderr, "No share groups matched the provided regex patterns.")
-					return nil
 				}
 			}
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
+				"BROKER", "GROUP", "ERROR", "MESSAGE").ResultColumns()
 			if dryRun {
-				fmt.Fprintln(os.Stderr, "Dry run: the following share groups would be deleted:")
+				table.SetDryRun(true)
 				for _, g := range args {
-					fmt.Fprintf(os.Stderr, "  %s\n", g)
+					table.Row(out.Unknown, g, out.Unknown, out.Unknown)
 				}
-				return nil
+				return table.Flush()
+			}
+			if len(args) == 0 {
+				return table.Flush()
 			}
 			brokerResps := cl.Client().RequestSharded(context.Background(), &kmsg.DeleteGroupsRequest{
 				Groups: args,
 			})
-			// MESSAGE is appended rather than folded into ERROR so that a
-			// script keeps the columns it already indexes.
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
-				"BROKER", "GROUP", "ERROR", "MESSAGE")
-			anyErr := false
 			for _, brokerResp := range brokerResps {
 				kresp, err := brokerResp.Resp, brokerResp.Err
 				if err != nil {
-					anyErr = true
-					table.Row(brokerResp.Meta.NodeID, "", fmt.Sprintf("unable to issue request (addr %s:%d): %v", brokerResp.Meta.Host, brokerResp.Meta.Port, err), "")
+					table.Row(brokerResp.Meta.NodeID, out.Unknown, fmt.Sprintf("unable to issue request (addr %s:%d): %v", brokerResp.Meta.Host, brokerResp.Meta.Port, err), "")
 					continue
 				}
 				resp := kresp.(*kmsg.DeleteGroupsResponse)
 				for _, g := range resp.Groups {
-					status, message, err := deleteGroupResult(g)
-					if err != nil {
-						anyErr = true
-					}
-					table.Row(brokerResp.Meta.NodeID, g.Group, status, message)
+					errStr, message := deleteGroupResult(g)
+					table.Row(brokerResp.Meta.NodeID, g.Group, errStr, message)
 				}
 			}
-			if err := table.Flush(); err != nil {
-				return err
-			}
-			if anyErr {
-				return out.ErrSilent
-			}
-			return nil
+			return table.Flush()
 		},
 	}
+	out.Columns(cmd, "BROKER", "GROUP", "ERROR", "MESSAGE")
 	cmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "print groups that would be deleted without actually deleting them")
 	cmd.Flags().BoolVarP(&useRegex, "regex", "r", false, "treat group arguments as regex patterns; match against all existing share groups")
 	return cmd
