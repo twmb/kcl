@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -138,8 +139,30 @@ type Cfg struct {
 	TLS  *CfgTLS  `toml:"tls,omitzero"`
 	SASL *CfgSASL `toml:"sasl,omitempty"`
 
-	// SR configures the Schema Registry client.
-	SR *CfgSR `toml:"schema_registry,omitzero"`
+	// SR configures the Schema Registry client. Its section is [registry],
+	// the word -X and -R use.
+	SR *CfgSR `toml:"registry,omitzero"`
+
+	// SchemaRegistry is the old name of the [registry] section. It is read
+	// forever and folded into SR by FoldAliases; nothing writes it.
+	SchemaRegistry *CfgSR `toml:"schema_registry,omitzero"`
+}
+
+// FoldAliases moves what a file said under an old key to its current key,
+// [schema_registry] into [registry], and clears the old one so that writing
+// the config back writes the current name. Where both were set the current
+// key wins, and the old one is returned with the key that won, as dotted
+// paths under prefix ("profiles.prod."), for the caller to warn about.
+func (c *Cfg) FoldAliases(prefix string) (dropped [][2]string) {
+	if c.SchemaRegistry != nil {
+		if c.SR == nil {
+			c.SR = c.SchemaRegistry
+		} else {
+			dropped = append(dropped, [2]string{prefix + "schema_registry", prefix + "registry"})
+		}
+		c.SchemaRegistry = nil
+	}
+	return dropped
 }
 
 // CfgFile represents the full config file, which may contain named profiles.
@@ -150,6 +173,37 @@ type CfgFile struct {
 
 	// Flat fields for backward compat (single-profile config).
 	Cfg
+}
+
+// FoldAliases folds the old key names at the top level and in every profile;
+// see Cfg.FoldAliases.
+func (f *CfgFile) FoldAliases() (dropped [][2]string) {
+	dropped = f.Cfg.FoldAliases("")
+	for _, name := range slices.Sorted(maps.Keys(f.Profiles)) {
+		p := f.Profiles[name]
+		dropped = append(dropped, p.FoldAliases("profiles."+name+".")...)
+		f.Profiles[name] = p
+	}
+	return dropped
+}
+
+// DecodeCfgFile decodes the config file at path into f, folds the old key
+// names, and warns on stderr about any it dropped. The profile commands read
+// the file with this rather than toml.DecodeFile, so that an old name works
+// there too and is written back under its current name.
+func DecodeCfgFile(path string, f *CfgFile) (toml.MetaData, error) {
+	md, err := toml.DecodeFile(path, f)
+	if err != nil {
+		return md, err
+	}
+	warnDropped(path, f.FoldAliases())
+	return md, nil
+}
+
+func warnDropped(path string, dropped [][2]string) {
+	for _, d := range dropped {
+		fmt.Fprintf(os.Stderr, "kcl: warning: config key %q in %s is ignored; %q is also set and wins\n", d[0], path, d[1])
+	}
 }
 
 // Client contains kgo client options and a kgo client.
@@ -541,6 +595,7 @@ func (c *Client) parseCfgFile() {
 		}
 		c.cfgFile.Profiles[name] = p
 	}
+	warnDropped(c.cfgPath, c.cfgFile.FoldAliases())
 
 	// Warn on unknown keys so typos and stale names from old configs do
 	// not get silently dropped. This catches "timeout_ms" after the
@@ -567,6 +622,7 @@ func (c *Client) parseCfgFile() {
 		if err := md.PrimitiveDecode(prim, &c.cfg); err != nil {
 			c.die(out.ExitUsage, "unable to decode profile %q in %s: %v", name, c.cfgPath, err)
 		}
+		c.cfg.FoldAliases("") // already warned about above, in cfgFile
 		return
 	}
 
@@ -575,6 +631,7 @@ func (c *Client) parseCfgFile() {
 	if _, err := toml.DecodeFile(c.cfgPath, &c.cfg); err != nil {
 		c.die(out.ExitUsage, "unable to decode config file %q: %v", c.cfgPath, err)
 	}
+	c.cfg.FoldAliases("")
 }
 
 // CfgFilePath returns the path to the config file.
@@ -604,7 +661,7 @@ type CfgKey struct {
 	Type    string
 
 	set    func(*Cfg, string) error
-	hidden bool // an old name that only errors
+	hidden bool // an old name: an alias that still works, or one that only errors
 }
 
 // xListHeader labels the column the values are in, which the json and awk
@@ -928,7 +985,7 @@ var cfgKeys = func() []CfgKey {
 		str("sasl.user", "alice", "User name.", saslTable, func(c *Cfg) *string { return &c.SASL.User }),
 		str("sasl.pass", "${KAFKA_PASS}", "Password.", saslTable, func(c *Cfg) *string { return &c.SASL.Pass }),
 		boolean("sasl.is_token", "The password is a delegation token.", saslTable, func(c *Cfg) *bool { return &c.SASL.IsToken }),
-		table("registry", "Removes every registry.* key.", srTable),
+		table("registry", "Removes every registry.* key. The config section is [registry]; [schema_registry] is its old name and still read.", srTable),
 		list("registry.urls", "http://localhost:8081", "Registry URLs, comma separated. Default http://localhost:8081.", srTable, func(c *Cfg) *[]string { return &c.SR.URLs }),
 		str("registry.user", "alice", "Basic auth user name.", srTable, func(c *Cfg) *string { return &c.SR.User }),
 		str("registry.pass", "${SR_PASS}", "Basic auth password.", srTable, func(c *Cfg) *string { return &c.SR.Pass }),
@@ -936,6 +993,14 @@ var cfgKeys = func() []CfgKey {
 		str("registry.context", ".mycontext", "Registry context.", srTable, func(c *Cfg) *string { return &c.SR.Context }),
 	)
 	keys = append(keys, tlsKeys("registry.tls", srTLSTable, func(c *Cfg) *CfgTLS { return c.SR.TLS }, "registry TLS")...)
+
+	// The old names still work from -X, the environment, and the file, and
+	// are shown nowhere: schema_registry.* for registry.*.
+	for _, k := range keys {
+		if k.Name == "registry" || strings.HasPrefix(k.Name, "registry.") {
+			keys = append(keys, CfgKey{Name: "schema_" + k.Name, Type: k.Type, set: k.set, hidden: true})
+		}
+	}
 	return keys
 }()
 
@@ -1055,13 +1120,18 @@ func (c *Client) applyShorthandFlags(cfg *Cfg) {
 func (c *Client) processOverrides() {
 	// Environment variables use the flattened (underscore) form, uppercased,
 	// since env var names cannot contain dots: KCL_REGISTRY_TLS_SERVER_NAME.
+	// The old names are read first, so that the current name wins when both
+	// are set.
 	var envOverrides []string
-	for k, key := range cfgSetters {
-		if key.Type == "table" {
-			continue
-		}
-		if v, exists := os.LookupEnv(c.envPfx + strings.ToUpper(k)); exists {
-			envOverrides = append(envOverrides, k+"="+v)
+	for _, old := range []bool{true, false} {
+		for _, key := range cfgKeys {
+			if key.hidden != old || key.Type == "table" {
+				continue
+			}
+			k := normCfgKey(key.Name)
+			if v, exists := os.LookupEnv(c.envPfx + strings.ToUpper(k)); exists {
+				envOverrides = append(envOverrides, k+"="+v)
+			}
 		}
 	}
 	if err := ApplyCfgOpts(&c.cfg, envOverrides); err != nil {

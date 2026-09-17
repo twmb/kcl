@@ -924,3 +924,136 @@ func TestXListSaysTheValuesAreExamples(t *testing.T) {
 		t.Error("-X help does not say the value with each key is an example")
 	}
 }
+
+// captureStderr runs fn and returns what it wrote to stderr.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stderr
+	os.Stderr = w
+	fn()
+	w.Close()
+	os.Stderr = old
+	b, _ := io.ReadAll(r)
+	return string(b)
+}
+
+// TestRegistrySectionAliases pins that [registry] is the section and
+// [schema_registry] its old name: either loads, [registry] wins when a file has
+// both and the file is warned about, and the loaded file carries the value
+// under SR only, so that writing it back writes [registry].
+func TestRegistrySectionAliases(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		file     string
+		profile  string
+		wantURL  string
+		wantWarn string
+	}{
+		{
+			name:    "registry in a profile",
+			file:    "current_profile = \"p\"\n[profiles.p.registry]\nurls = [\"http://new\"]\n",
+			profile: "p",
+			wantURL: "http://new",
+		},
+		{
+			name:    "schema_registry in a profile",
+			file:    "current_profile = \"p\"\n[profiles.p.schema_registry]\nurls = [\"http://old\"]\n",
+			profile: "p",
+			wantURL: "http://old",
+		},
+		{
+			name:     "both in a profile",
+			file:     "current_profile = \"p\"\n[profiles.p.registry]\nurls = [\"http://new\"]\n[profiles.p.schema_registry]\nurls = [\"http://old\"]\n",
+			profile:  "p",
+			wantURL:  "http://new",
+			wantWarn: `config key "profiles.p.schema_registry" in PATH is ignored; "profiles.p.registry" is also set and wins`,
+		},
+		{
+			name:    "flat schema_registry",
+			file:    "[schema_registry]\nurls = [\"http://old\"]\n",
+			wantURL: "http://old",
+		},
+		{
+			name:     "flat both",
+			file:     "[registry]\nurls = [\"http://new\"]\n[schema_registry]\nurls = [\"http://old\"]\n",
+			wantURL:  "http://new",
+			wantWarn: `config key "schema_registry" in PATH is ignored; "registry" is also set and wins`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(test.file), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			c := &Client{cfgPath: path, format: "text", cfg: defaultCfg()}
+			stderr := captureStderr(t, c.parseCfgFile)
+			if c.cfg.SR == nil || len(c.cfg.SR.URLs) != 1 || c.cfg.SR.URLs[0] != test.wantURL {
+				t.Errorf("SR = %+v, want urls [%s]", c.cfg.SR, test.wantURL)
+			}
+			if c.cfg.SchemaRegistry != nil {
+				t.Errorf("SchemaRegistry still set after loading: %+v", c.cfg.SchemaRegistry)
+			}
+			loaded := c.cfgFile.Cfg
+			if test.profile != "" {
+				loaded = c.cfgFile.Profiles[test.profile]
+			}
+			if loaded.SchemaRegistry != nil || loaded.SR == nil || loaded.SR.URLs[0] != test.wantURL {
+				t.Errorf("loaded file: SR = %+v, SchemaRegistry = %+v", loaded.SR, loaded.SchemaRegistry)
+			}
+			want := strings.ReplaceAll(test.wantWarn, "PATH", path)
+			switch {
+			case want == "" && stderr != "":
+				t.Errorf("unexpected stderr: %s", stderr)
+			case want != "" && !strings.Contains(stderr, want):
+				t.Errorf("stderr = %q, want containing %q", stderr, want)
+			case want != "" && strings.Count(stderr, "warning") != 1:
+				t.Errorf("want one warning, got: %s", stderr)
+			}
+		})
+	}
+}
+
+// TestRegistryKeyAliases pins that -X and the environment take
+// schema_registry.* as the old spelling of registry.*, that the current
+// spelling wins when both are set, and that only registry.* is listed.
+func TestRegistryKeyAliases(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		start Cfg
+		opts  []string
+		env   map[string]string
+		want  *CfgSR
+	}{
+		{name: "-X old name", opts: []string{"schema_registry.urls=http://x"}, want: &CfgSR{URLs: []string{"http://x"}}},
+		{name: "-X old tls name", opts: []string{"schema_registry.tls.insecure"}, want: &CfgSR{TLS: &CfgTLS{InsecureSkipVerify: true}}},
+		{name: "-X old table removes", start: Cfg{SR: &CfgSR{URLs: []string{"http://x"}}}, opts: []string{"schema_registry="}, want: nil},
+		{name: "-X both in order", opts: []string{"schema_registry.urls=http://old", "registry.urls=http://new"}, want: &CfgSR{URLs: []string{"http://new"}}},
+		{name: "env old name", env: map[string]string{"KCL_SCHEMA_REGISTRY_URLS": "http://old"}, want: &CfgSR{URLs: []string{"http://old"}}},
+		{name: "env current name", env: map[string]string{"KCL_REGISTRY_URLS": "http://new"}, want: &CfgSR{URLs: []string{"http://new"}}},
+		{name: "env both, current wins", env: map[string]string{"KCL_SCHEMA_REGISTRY_URLS": "http://old", "KCL_REGISTRY_URLS": "http://new"}, want: &CfgSR{URLs: []string{"http://new"}}},
+		{name: "env old user with current urls", env: map[string]string{"KCL_SCHEMA_REGISTRY_USER": "me", "KCL_REGISTRY_URLS": "http://new"}, want: &CfgSR{URLs: []string{"http://new"}, User: "me"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for k, v := range test.env {
+				t.Setenv(k, v)
+			}
+			c := &Client{noCfgFile: true, envPfx: "KCL_", format: "text", flagOverrides: test.opts, cfg: test.start}
+			c.processOverrides()
+			if !reflect.DeepEqual(c.cfg.SR, test.want) {
+				t.Errorf("SR = %+v, want %+v", c.cfg.SR, test.want)
+			}
+		})
+	}
+	for name, text := range map[string]string{"-X list": XList(), "-X help": XHelp(), "completions": strings.Join(XCompletions(), "\n")} {
+		if strings.Contains(text, "schema_registry.") {
+			t.Errorf("%s lists the old schema_registry.* names", name)
+		}
+	}
+	if !strings.Contains(XHelp(), "[schema_registry] is its old name") {
+		t.Error("-X help does not say the section's old name is still read")
+	}
+}

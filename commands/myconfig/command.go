@@ -78,7 +78,7 @@ func useCommand(cl *client.Client) *cobra.Command {
 			cfgPath := cl.CfgFilePath()
 
 			var cfgFile client.CfgFile
-			if _, err := toml.DecodeFile(cfgPath, &cfgFile); err != nil {
+			if _, err := client.DecodeCfgFile(cfgPath, &cfgFile); err != nil {
 				return fmt.Errorf("unable to read config: %v", err)
 			}
 
@@ -149,7 +149,7 @@ func listCommand(cl *client.Client) *cobra.Command {
 // file there. A first run has no file, and the commands that only report what
 // is configured answer that with an empty config rather than an error.
 func readCfgFile(path string, cfgFile *client.CfgFile) (missing bool, err error) {
-	if _, err := toml.DecodeFile(path, cfgFile); err != nil {
+	if _, err := client.DecodeCfgFile(path, cfgFile); err != nil {
 		if os.IsNotExist(err) {
 			return true, nil
 		}
@@ -293,7 +293,7 @@ SEE ALSO:
 // usage error and nothing is written. It returns what was edited.
 func setProfile(path, name string, apply func(*client.Cfg) error) (string, error) {
 	var cfgFile client.CfgFile
-	md, err := toml.DecodeFile(path, &cfgFile)
+	md, err := client.DecodeCfgFile(path, &cfgFile)
 	if os.IsNotExist(err) {
 		return "", fmt.Errorf("no config file at %s; create a profile first with kcl profile create", path)
 	}
@@ -435,7 +435,7 @@ func createProfile(path, name string, cfg client.Cfg) (bool, error) {
 	}
 
 	var cfgFile client.CfgFile
-	md, err := toml.DecodeFile(path, &cfgFile)
+	md, err := client.DecodeCfgFile(path, &cfgFile)
 	if err != nil && !os.IsNotExist(err) {
 		return false, fmt.Errorf("unable to read config: %v", err)
 	}
@@ -508,7 +508,7 @@ func renameCommand(cl *client.Client) *cobra.Command {
 			cfgPath := cl.CfgFilePath()
 
 			var cfgFile client.CfgFile
-			if _, err := toml.DecodeFile(cfgPath, &cfgFile); err != nil {
+			if _, err := client.DecodeCfgFile(cfgPath, &cfgFile); err != nil {
 				return fmt.Errorf("unable to read config: %v", err)
 			}
 
@@ -545,7 +545,7 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 			cfgPath := cl.CfgFilePath()
 
 			var cfgFile client.CfgFile
-			if _, err := toml.DecodeFile(cfgPath, &cfgFile); err != nil {
+			if _, err := client.DecodeCfgFile(cfgPath, &cfgFile); err != nil {
 				return fmt.Errorf("unable to read config: %v", err)
 			}
 

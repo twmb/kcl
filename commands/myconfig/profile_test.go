@@ -726,7 +726,7 @@ func TestCurrentHonorsProfileFlag(t *testing.T) {
 }
 
 func TestProfileFormats(t *testing.T) {
-	const profiles = "current_profile = \"prod\"\n[profiles.prod]\nseed_brokers = [\"p:9092\", \"q:9092\"]\ndial_timeout = \"2s\"\n[profiles.prod.sasl]\nmethod = \"plain\"\n[profiles.dev]\nseed_brokers = [\"d:9092\"]\n"
+	const profiles = "current_profile = \"prod\"\n[profiles.prod]\nseed_brokers = [\"p:9092\", \"q:9092\"]\ndial_timeout = \"2s\"\n[profiles.prod.sasl]\nmethod = \"plain\"\n[profiles.prod.schema_registry]\nurls = [\"http://sr:8081\"]\n[profiles.dev]\nseed_brokers = [\"d:9092\"]\n"
 	for _, test := range []struct {
 		name string
 		args []string
@@ -739,7 +739,8 @@ func TestProfileFormats(t *testing.T) {
 		{name: "current awk with -C", args: []string{"--format", "awk", "-C", "dev", "profile", "current"}, want: "dev\n"},
 		{name: "dump text is toml", args: []string{"profile", "dump"}, want: "seed_brokers = [\"p:9092\", \"q:9092\"]"},
 		{name: "dump json", args: []string{"--format", "json", "profile", "dump"}, want: `"method":"plain"`, json: true},
-		{name: "dump awk", args: []string{"--format", "awk", "profile", "dump"}, want: "sasl.method\tplain\nseed_brokers\tp:9092,q:9092\n"},
+		{name: "dump awk", args: []string{"--format", "awk", "profile", "dump"}, want: "registry.urls\thttp://sr:8081\nsasl.method\tplain\nseed_brokers\tp:9092,q:9092\n"},
+		{name: "dump json names the registry section", args: []string{"--format", "json", "profile", "dump"}, want: `"registry":{"urls":["http://sr:8081"]}`, json: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.toml")
@@ -778,5 +779,43 @@ func TestFlattenCfg(t *testing.T) {
 	want := [][2]string{{"a", "2"}, {"b.x", "p,q"}, {"b.y", "1"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("flattenCfg = %v, want %v", got, want)
+	}
+}
+
+// TestSetRewritesOldSectionName pins that a file holding the old
+// [schema_registry] section is read, and written back as [registry], the
+// section's current name, by the first command that writes the file.
+func TestSetRewritesOldSectionName(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	const before = `current_profile = "prod"
+
+[profiles.prod]
+seed_brokers = ["p:9092"]
+[profiles.prod.schema_registry]
+urls = ["http://sr:8081"]
+`
+	if err := os.WriteFile(path, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := &cobra.Command{Use: "kcl", SilenceUsage: true, SilenceErrors: true}
+	cl := client.New(root)
+	root.AddCommand(Command(cl))
+	root.SetArgs([]string{"--config-path", path, "profile", "set", "-X", "dial_timeout=2s"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "[profiles.prod.registry]") || strings.Contains(string(got), "schema_registry") {
+		t.Errorf("file after set:\n%s", got)
+	}
+	var f client.CfgFile
+	if _, err := toml.DecodeFile(path, &f); err != nil {
+		t.Fatal(err)
+	}
+	if p := f.Profiles["prod"]; p.SR == nil || p.SR.URLs[0] != "http://sr:8081" || p.DialTimeout.D() != 2*time.Second {
+		t.Errorf("prod = %+v sr=%+v", p, p.SR)
 	}
 }
