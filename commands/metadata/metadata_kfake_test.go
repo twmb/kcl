@@ -96,12 +96,12 @@ func TestMetadata(t *testing.T) {
 		rows int      // awk rows
 		code int
 	}{
-		{name: "all", args: nil, keys: []string{"brokers", "cluster_id", "controller", "topics"}, awk: 6, rows: 2},
+		{name: "all", args: nil, keys: []string{"brokers", "cluster_id", "controller", "topics"}, awk: 5, rows: 2},
 		{name: "cluster", args: []string{"--section", "cluster"}, keys: []string{"cluster_id", "controller"}, awk: 2, rows: 1},
 		{name: "brokers", args: []string{"--section", "brokers"}, keys: []string{"brokers"}, awk: 4, rows: 2},
-		{name: "topics", args: []string{"--section", "topics"}, keys: []string{"topics"}, awk: 6, rows: 2},
-		{name: "named", args: []string{"m-b"}, keys: []string{"brokers", "cluster_id", "controller", "topics"}, awk: 6, rows: 1},
-		{name: "missing topic", args: []string{"m-a", "nosuch"}, keys: []string{"brokers", "cluster_id", "controller", "topics"}, awk: 6, rows: 2, code: 1},
+		{name: "topics", args: []string{"--section", "topics"}, keys: []string{"topics"}, awk: 5, rows: 2},
+		{name: "named", args: []string{"m-b"}, keys: []string{"brokers", "cluster_id", "controller", "topics"}, awk: 5, rows: 1},
+		{name: "missing topic", args: []string{"m-a", "nosuch"}, keys: []string{"brokers", "cluster_id", "controller", "topics"}, awk: 5, rows: 2, code: 1},
 		{name: "bad section", args: []string{"--section", "nope"}, code: 2},
 	} {
 		t.Run(test.name, func(t *testing.T) {

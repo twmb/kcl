@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/out"
@@ -16,14 +15,7 @@ import (
 // errorCells are the ERROR and MESSAGE cells of a result row: the Kafka error
 // and the broker's message, both "" when the item succeeded.
 func errorCells(code int16, message *string) (string, string) {
-	var errStr, msg string
-	if err := kerr.ErrorForCode(code); err != nil {
-		errStr = err.Error()
-	}
-	if message != nil {
-		msg = *message
-	}
-	return errStr, msg
+	return out.ErrName(code), out.BrokerMessage(message)
 }
 
 // topicIDCell is a topic id as a table cell: Unknown for the zero id, which

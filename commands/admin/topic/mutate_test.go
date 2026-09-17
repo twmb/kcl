@@ -99,7 +99,7 @@ func TestDelete(t *testing.T) {
 		t.Fatalf("exit %d, want 1\n%s", code, got)
 	}
 	rows := awkRows(t, got, 3)
-	if len(rows) != 2 || rows[0][0] != "del-a" || rows[0][1] != "-" || !strings.Contains(rows[1][1], "UNKNOWN_TOPIC_OR_PARTITION") {
+	if len(rows) != 2 || rows[0][0] != "del-a" || rows[0][1] != "-" || rows[1][1] != "UNKNOWN_TOPIC_OR_PARTITION" {
 		t.Errorf("delete rows = %v", rows)
 	}
 	if got, code := runKcl(t, addr, "list", "--format", "awk"); code != 0 || len(awkRows(t, got, len(ListHeaders))) != 2 {

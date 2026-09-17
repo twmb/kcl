@@ -179,23 +179,35 @@ SEE ALSO:
 }
 
 // ListHeaders are the columns of a topic list row, which "kcl cluster
-// metadata" prints as its topics section too, and ListKeys their JSON keys.
+// metadata" prints as its topics section too, and ListKeys the JSON keys of
+// a ListRows row. Whether a topic is internal is not a column: JSON carries
+// it as internal, text marks an internal topic with a * after its name, the
+// way cluster metadata marks the controller broker, and awk carries no mark.
 var (
-	ListHeaders = []string{"TOPIC", "TOPIC-ID", "PARTITIONS", "REPLICATION", "INTERNAL", "ERROR"}
+	ListHeaders = []string{"TOPIC", "TOPIC-ID", "PARTITIONS", "REPLICATION", "ERROR"}
 	ListKeys    = []string{"topic", "topic_id", "partition_count", "replication_factor", "internal", "error"}
 )
 
-// ListTable is the table of ListRows, with its JSON keys.
-func ListTable(format, command string) *out.FormattedTable {
-	return out.NewFormattedTable(format, command, 1, "topics", ListHeaders...).
-		WithKeys(map[string]string{"PARTITIONS": "partition_count", "REPLICATION": "replication_factor"})
+// ListTable is the text or awk table of ListRows: the ListHeaders columns,
+// with an internal topic's name marked in text. JSON prints ListRowMaps
+// under a key of its own instead.
+func ListTable(format, command string, rows [][]any) *out.FormattedTable {
+	table := out.NewFormattedTable(format, command, 1, "topics", ListHeaders...)
+	for _, row := range rows {
+		name := row[0]
+		if format == out.FormatText && row[4] == true {
+			name = fmt.Sprint(name) + "*"
+		}
+		table.Row(name, row[1], row[2], row[3], row[5])
+	}
+	return table
 }
 
 // ListRows is one row per topic in the metadata response, in name order, and
-// whether any topic carried an error. A topic the broker answered with an
-// error keeps its row, with what we do not know unknown and the error in
-// ERROR. The id is unknown below Metadata v10 (Kafka 2.8). Internal topics
-// are skipped unless internal is set.
+// whether any topic carried an error. A row's cells are in ListKeys order. A
+// topic the broker answered with an error keeps its row, with what we do not
+// know unknown and the error in ERROR. The id is unknown below Metadata v10
+// (Kafka 2.8). Internal topics are skipped unless internal is set.
 func ListRows(version int16, topics []kmsg.MetadataResponseTopic, internal bool) (rows [][]any, failed bool) {
 	SortTopics(topics)
 	for _, t := range topics {
@@ -212,7 +224,7 @@ func ListRows(version int16, topics []kmsg.MetadataResponseTopic, internal bool)
 		}
 		if err := kerr.ErrorForCode(t.ErrorCode); err != nil {
 			failed = true
-			rows = append(rows, []any{name, id, out.Unknown, out.Unknown, out.Unknown, err.Error()})
+			rows = append(rows, []any{name, id, out.Unknown, out.Unknown, out.Unknown, out.ErrCell(err)})
 			continue
 		}
 		replication := 0
@@ -248,8 +260,9 @@ arguments, the named topics are listed, and one that does not exist prints
 its row with the error and the command exits 1. With -r, the arguments are
 regular expressions instead, and every topic matching any of them is listed.
 
-Each row is TOPIC TOPIC-ID PARTITIONS REPLICATION INTERNAL ERROR. The id is
-unknown below Metadata v10 (Kafka 2.8).
+Each row is TOPIC TOPIC-ID PARTITIONS REPLICATION ERROR. The id is unknown
+below Metadata v10 (Kafka 2.8). Text marks an internal topic with a * after
+its name; json carries internal as a key.
 
 EXAMPLES:
   kcl topic list                    # all non-internal topics
@@ -307,13 +320,11 @@ SEE ALSO:
 			if detailed {
 				return Describe(cl, DescribeOpts{}, topicNames(topics))
 			}
-			table := ListTable(cl.Format(), cl.Command())
 			rows, failed := ListRows(resp.Version, topics, internal)
-			for _, row := range rows {
-				table.Row(row...)
-			}
-			if err := table.Flush(); err != nil {
-				return err
+			if cl.Format() == out.FormatJSON {
+				out.MarshalJSON(cl.Command(), 1, map[string]any{"topics": ListRowMaps(rows)})
+			} else {
+				ListTable(cl.Format(), cl.Command(), rows).Flush()
 			}
 			if failed {
 				return out.ErrSilent
@@ -576,7 +587,7 @@ SEE ALSO:
 					return fmt.Errorf("metadata returned nil topic, unknown topic ID!")
 				}
 				if err := kerr.ErrorForCode(topic.ErrorCode); err != nil {
-					table.Row(*topic.Topic, err.Error(), "")
+					table.Row(*topic.Topic, out.ErrCell(err), "")
 					continue
 				}
 				currentPartitionCount := len(topic.Partitions)

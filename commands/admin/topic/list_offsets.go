@@ -113,7 +113,7 @@ SEE ALSO:
 					rows = append(rows, []any{out.Unknown, topic, out.Unknown,
 						out.Unknown, out.Unknown, out.Unknown,
 						out.Unknown, out.Unknown, out.Unknown,
-						out.Unknown, err.Error()})
+						out.Unknown, out.ErrCell(err)})
 					continue
 				}
 				partitions := slices.Clone(tps[topic])
@@ -136,7 +136,7 @@ SEE ALSO:
 					var errCell string
 					for _, err := range []error{start.err, end.err, stable.err, atErr} {
 						if err != nil {
-							errCell = err.Error()
+							errCell = out.ErrCell(err)
 							failed = true
 							break
 						}

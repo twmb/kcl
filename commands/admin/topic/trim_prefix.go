@@ -241,7 +241,7 @@ SEE ALSO:
 				if shard.Err != nil {
 					for _, t := range shard.Req.(*kmsg.DeleteRecordsRequest).Topics {
 						for _, p := range t.Partitions {
-							results[p.Partition] = []any{topicName, p.Partition, starts.get(topicName, p.Partition).cell(), out.Unknown, shard.Err.Error(), ""}
+							results[p.Partition] = []any{topicName, p.Partition, starts.get(topicName, p.Partition).cell(), out.Unknown, out.ErrCell(shard.Err), ""}
 						}
 					}
 					continue
@@ -251,7 +251,7 @@ SEE ALSO:
 						var low any = p.LowWatermark
 						errStr := ""
 						if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
-							errStr = err.Error()
+							errStr = out.ErrCell(err)
 							low = out.Unknown
 						}
 						results[p.Partition] = []any{topicName, p.Partition, starts.get(topicName, p.Partition).cell(), low, errStr, ""}

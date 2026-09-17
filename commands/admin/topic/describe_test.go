@@ -49,7 +49,7 @@ func TestDescribeAWK(t *testing.T) {
 		{
 			name: "summary", args: []string{"awk-topic", "--section", "summary"}, columns: len(describeSummaryHeaders), rows: 1,
 			check: func(t *testing.T, rows [][]string) {
-				if row := rows[0]; row[0] != "awk-topic" || len(row[1]) != 32 || row[2] != "2" || row[3] != "1" || row[4] != "false" || row[5] != "-" {
+				if row := rows[0]; row[0] != "awk-topic" || len(row[1]) != 32 || row[2] != "2" || row[3] != "1" || row[4] != "-" {
 					t.Errorf("summary row = %v", row)
 				}
 			},
@@ -70,7 +70,7 @@ func TestDescribeAWK(t *testing.T) {
 		{
 			name: "errored topic keeps a row", args: []string{"nosuch", "awk-topic"}, columns: len(describePartitionsHeaders), rows: 3, code: 1,
 			check: func(t *testing.T, rows [][]string) {
-				if row := rows[2]; row[0] != "nosuch" || row[1] != "-" || !strings.Contains(row[10], "UNKNOWN_TOPIC_OR_PARTITION") {
+				if row := rows[2]; row[0] != "nosuch" || row[1] != "-" || row[10] != "UNKNOWN_TOPIC_OR_PARTITION" {
 					t.Errorf("errored row = %v", row)
 				}
 			},
@@ -140,7 +140,7 @@ func TestDescribeJSON(t *testing.T) {
 	if configs, ok := js["configs"].([]any); !ok || len(configs) == 0 {
 		t.Errorf("configs = %v", js["configs"])
 	}
-	if nosuch["topic"] != "nosuch" || nosuch["partition_count"] != nil || nosuch["internal"] != nil || !strings.Contains(nosuch["error"].(string), "UNKNOWN_TOPIC_OR_PARTITION") {
+	if nosuch["topic"] != "nosuch" || nosuch["partition_count"] != nil || nosuch["internal"] != nil || nosuch["error"] != "UNKNOWN_TOPIC_OR_PARTITION" {
 		t.Errorf("nosuch = %v", nosuch)
 	}
 	if parts, ok := nosuch["partitions"].([]any); !ok || len(parts) != 0 {

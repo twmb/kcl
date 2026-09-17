@@ -34,7 +34,7 @@ type DescribeOpts struct {
 }
 
 var (
-	describeSummaryHeaders    = []string{"TOPIC", "TOPIC-ID", "PARTITIONS", "REPLICATION", "INTERNAL", "ERROR"}
+	describeSummaryHeaders    = []string{"TOPIC", "TOPIC-ID", "PARTITIONS", "REPLICATION", "ERROR"}
 	describePartitionsHeaders = []string{"TOPIC", "PARTITION", "LEADER", "LEADER-EPOCH", "REPLICAS", "ISR", "OFFLINE-REPLICAS", "START-OFFSET", "END-OFFSET", "STABLE-OFFSET", "ERROR"}
 	describeConfigsHeaders    = []string{"TOPIC", "KEY", "VALUE", "SOURCE", "SENSITIVE", "ERROR"}
 )
@@ -79,9 +79,10 @@ partition, or the rows of the --section given. A partition row is TOPIC
 PARTITION LEADER LEADER-EPOCH REPLICAS ISR OFFLINE-REPLICAS START-OFFSET
 END-OFFSET STABLE-OFFSET ERROR; the offsets come from ListOffsets, and
 STABLE-OFFSET is filled only with --stable. A summary row is TOPIC TOPIC-ID
-PARTITIONS REPLICATION INTERNAL ERROR, and a configs row is TOPIC KEY VALUE
-SOURCE SENSITIVE ERROR. The configs a topic runs with also come from "kcl
-config describe TOPIC -tt".
+PARTITIONS REPLICATION ERROR, and a configs row is TOPIC KEY VALUE SOURCE
+SENSITIVE ERROR. The configs a topic runs with also come from "kcl config
+describe TOPIC -tt". Text marks an internal topic with a * after its name;
+json carries internal as a key.
 
 Health filters show only partitions matching the condition; the min ISR
 filters read min.insync.replicas from the topic's configs.
@@ -304,7 +305,7 @@ func Describe(cl *client.Client, opts DescribeOpts, topics []string) error {
 		errStr := ""
 		for _, err := range errs {
 			if err != nil {
-				errStr = err.Error()
+				errStr = out.ErrCell(err)
 				break
 			}
 		}
@@ -361,7 +362,7 @@ func Describe(cl *client.Client, opts DescribeOpts, topics []string) error {
 				Internal:          d.meta.IsInternal,
 			}
 			if d.err != nil {
-				tj.Error = d.err.Error()
+				tj.Error = out.ErrCell(d.err)
 				tj.PartitionCount, tj.ReplicationFactor, tj.Internal = out.Unknown, out.Unknown, out.Unknown
 			}
 			if showPartitions {
@@ -407,17 +408,14 @@ func Describe(cl *client.Client, opts DescribeOpts, topics []string) error {
 		}
 		table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "topics", describeHeaders(section)...)
 		for _, d := range described {
-			errStr := ""
-			if d.err != nil {
-				errStr = d.err.Error()
-			}
+			errStr := out.ErrCell(d.err)
 			switch section {
 			case "summary":
 				if d.err != nil {
-					table.Row(d.name(), topicIDCell(d.meta.TopicID), out.Unknown, out.Unknown, out.Unknown, errStr)
+					table.Row(d.name(), topicIDCell(d.meta.TopicID), out.Unknown, out.Unknown, errStr)
 					continue
 				}
-				table.Row(d.name(), topicIDCell(d.meta.TopicID), len(d.meta.Partitions), d.replication(), d.meta.IsInternal, errStr)
+				table.Row(d.name(), topicIDCell(d.meta.TopicID), len(d.meta.Partitions), d.replication(), errStr)
 			case "partitions":
 				if d.err != nil {
 					table.Row(d.name(), out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, errStr)
@@ -451,20 +449,21 @@ func Describe(cl *client.Client, opts DescribeOpts, topics []string) error {
 			}
 			if showSummary || d.err != nil {
 				tw := out.NewTabWriter()
-				fmt.Fprintf(tw, "TOPIC\t%v\n", d.name())
+				name := fmt.Sprint(d.name())
+				if d.meta.IsInternal {
+					name += "*"
+				}
+				fmt.Fprintf(tw, "TOPIC\t%s\n", name)
 				if d.meta.TopicID != [16]byte{} {
 					fmt.Fprintf(tw, "TOPIC-ID\t%x\n", d.meta.TopicID)
 				}
 				if d.err != nil {
-					fmt.Fprintf(tw, "ERROR\t%v\n", d.err)
+					fmt.Fprintf(tw, "ERROR\t%s\n", out.ErrCell(d.err))
 					tw.Flush()
 					continue
 				}
 				fmt.Fprintf(tw, "PARTITIONS\t%d\n", len(d.meta.Partitions))
 				fmt.Fprintf(tw, "REPLICATION\t%d\n", d.replication())
-				if d.meta.IsInternal {
-					fmt.Fprintf(tw, "INTERNAL\ttrue\n")
-				}
 				tw.Flush()
 			}
 

@@ -89,7 +89,7 @@ func TestListOffsets(t *testing.T) {
 	if len(awk) != 3 {
 		t.Fatalf("awk = %v", awk)
 	}
-	if awk[0][1] != "lo-a" || awk[0][10] != "-" || awk[1][2] != "9" || awk[1][10] == "-" || awk[2][1] != "nosuch" || awk[2][0] != "-" || !strings.Contains(awk[2][10], "UNKNOWN_TOPIC_OR_PARTITION") {
+	if awk[0][1] != "lo-a" || awk[0][10] != "-" || awk[1][2] != "9" || awk[1][10] == "-" || awk[2][1] != "nosuch" || awk[2][0] != "-" || awk[2][10] != "UNKNOWN_TOPIC_OR_PARTITION" {
 		t.Errorf("error rows = %v", awk)
 	}
 }

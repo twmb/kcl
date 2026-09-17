@@ -8,6 +8,8 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kmsg"
+
+	"github.com/twmb/kcl/out"
 )
 
 func TestList(t *testing.T) {
@@ -64,7 +66,7 @@ func TestList(t *testing.T) {
 				case "awk":
 					for _, row := range awkRows(t, got, len(ListHeaders)) {
 						topics = append(topics, row[0])
-						if row[5] != "-" {
+						if row[4] != "-" {
 							errors++
 						}
 					}
@@ -110,5 +112,35 @@ func TestListDetailed(t *testing.T) {
 	doc := jsonDoc(t, got, "topic.describe")
 	if rows := rowsOf(t, doc, "topics"); len(rows) != 2 || !strings.Contains(got, `"partitions":[`) {
 		t.Errorf("detailed json = %s", got)
+	}
+}
+
+// TestListInternalMark pins how an internal topic shows: a * after its name
+// in text, no mark and no column in awk, and the internal key in JSON. kfake
+// has no internal topic, so the rows are built by hand.
+func TestListInternalMark(t *testing.T) {
+	rows, failed := ListRows(12, []kmsg.MetadataResponseTopic{
+		{Topic: kmsg.StringPtr("__consumer_offsets"), IsInternal: true, Partitions: []kmsg.MetadataResponseTopicPartition{{Replicas: []int32{1}}}},
+		{Topic: kmsg.StringPtr("plain"), Partitions: []kmsg.MetadataResponseTopicPartition{{Replicas: []int32{1}}}},
+	}, true)
+	if failed || len(rows) != 2 {
+		t.Fatalf("rows = %v, failed %v", rows, failed)
+	}
+	// No command is running here, so the awk table is checked against
+	// no registration rather than the one an earlier test left behind.
+	out.SetRunning(nil)
+	text := captureStdout(t, func() { ListTable("text", "topic.list", rows).Flush() })
+	if !strings.Contains(text, "__consumer_offsets*") || strings.Contains(text, "plain*") || strings.Contains(text, "INTERNAL") {
+		t.Errorf("text = %q, want the internal topic starred and no INTERNAL column", text)
+	}
+	awk := captureStdout(t, func() { ListTable("awk", "topic.list", rows).Flush() })
+	for _, row := range awkRows(t, awk, len(ListHeaders)) {
+		if strings.HasSuffix(row[0], "*") || slices.Contains(row, "true") || slices.Contains(row, "false") {
+			t.Errorf("awk row = %q, want no mark and no internal cell", row)
+		}
+	}
+	maps := ListRowMaps(rows)
+	if maps[0]["internal"] != true || maps[1]["internal"] != false || maps[0]["topic"] != "__consumer_offsets" {
+		t.Errorf("json rows = %v", maps)
 	}
 }

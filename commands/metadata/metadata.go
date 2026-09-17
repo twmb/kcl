@@ -43,8 +43,8 @@ with an error keeps its row, with the error in ERROR, and the command exits 1.
 section by default; awk prints the topics section by default, since the
 sections have different columns; json carries the sections asked for. The
 rows are CLUSTER-ID CONTROLLER, ID HOST PORT RACK, and TOPIC TOPIC-ID
-PARTITIONS REPLICATION INTERNAL ERROR. In text the controller broker is
-marked with *.
+PARTITIONS REPLICATION ERROR. In text the controller broker and an internal
+topic are marked with *; json carries internal as a key.
 
 For what Metadata does not answer, the authorized operations or the
 cluster's own view of its brokers, use "kcl cluster describe", which issues
@@ -178,11 +178,7 @@ SEE ALSO:
 					}
 					table.Flush()
 				case "topics":
-					table := topic.ListTable(cl.Format(), cl.Command())
-					for _, row := range topicRows {
-						table.Row(row...)
-					}
-					table.Flush()
+					topic.ListTable(cl.Format(), cl.Command(), topicRows).Flush()
 				}
 
 			default:
@@ -210,11 +206,7 @@ SEE ALSO:
 				}
 				if ptopics {
 					sectionBreak()
-					table := topic.ListTable(cl.Format(), cl.Command())
-					for _, row := range topicRows {
-						table.Row(row...)
-					}
-					table.Flush()
+					topic.ListTable(cl.Format(), cl.Command(), topicRows).Flush()
 				}
 			}
 			if failed {
