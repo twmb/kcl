@@ -2,9 +2,12 @@
 package acl
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
+	"slices"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -141,16 +144,200 @@ as the principal of the user that created the token.
 	return cmd
 }
 
+// aclHeaders are the identity columns of every acl table: the resource,
+// then who may do what from where.
+var aclHeaders = []string{"TYPE", "NAME", "PATTERN", "PRINCIPAL", "HOST", "OPERATION", "PERMISSION"}
+
+// aclResultHeaders are the columns of a create or delete, the identity and
+// then the per-ACL result.
+var aclResultHeaders = append(slices.Clone(aclHeaders), "ERROR", "MESSAGE")
+
+// aclRow is one ACL as the tables print it, with the result of a mutation
+// when there is one. A dry run leaves err and msg Unknown: nothing was
+// asked, so there is no result to report.
+type aclRow struct {
+	typ        string
+	name       string
+	pattern    string
+	principal  string
+	host       string
+	operation  string
+	permission string
+	err        any
+	msg        any
+}
+
+func (r aclRow) identity() []any {
+	return []any{r.typ, r.name, r.pattern, r.principal, r.host, r.operation, r.permission}
+}
+
+func (r aclRow) result() []any {
+	return append(r.identity(), r.err, r.msg)
+}
+
+// sortACLs orders rows by principal and then by resource, so that a listing
+// reads as what each principal may do.
+func sortACLs(rows []aclRow) {
+	slices.SortFunc(rows, func(a, b aclRow) int {
+		return cmp.Or(
+			strings.Compare(a.principal, b.principal),
+			strings.Compare(a.typ, b.typ),
+			strings.Compare(a.name, b.name),
+			strings.Compare(a.pattern, b.pattern),
+			strings.Compare(a.host, b.host),
+			strings.Compare(a.operation, b.operation),
+			strings.Compare(a.permission, b.permission),
+		)
+	})
+}
+
+// aclFilter is the one filter list and delete send, as the flags spell it.
+type aclFilter struct {
+	resourceType    string
+	resourceName    string
+	resourcePattern string
+	principal       string
+	host            string
+	operation       string
+	permission      string
+}
+
+func (f aclFilter) validate() error {
+	return validateFilters(f.resourceType, f.resourcePattern, f.operation, f.permission)
+}
+
+func optional(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+func (f aclFilter) describeRequest() *kmsg.DescribeACLsRequest {
+	return &kmsg.DescribeACLsRequest{
+		ResourceType:        atoiResourceType(f.resourceType),
+		ResourceName:        optional(f.resourceName),
+		ResourcePatternType: atoiResourcePattern(f.resourcePattern),
+		Principal:           optional(f.principal),
+		Host:                optional(f.host),
+		Operation:           atoiOperation(f.operation),
+		PermissionType:      atoiPermission(f.permission),
+	}
+}
+
+func (f aclFilter) deleteRequest() *kmsg.DeleteACLsRequest {
+	return &kmsg.DeleteACLsRequest{
+		Filters: []kmsg.DeleteACLsRequestFilter{{
+			ResourceType:        atoiResourceType(f.resourceType),
+			ResourceName:        optional(f.resourceName),
+			ResourcePatternType: atoiResourcePattern(f.resourcePattern),
+			Principal:           optional(f.principal),
+			Host:                optional(f.host),
+			Operation:           atoiOperation(f.operation),
+			PermissionType:      atoiPermission(f.permission),
+		}},
+	}
+}
+
+// describe asks for every ACL the filter matches, sorted.
+func (f aclFilter) describe(cl *client.Client) ([]aclRow, error) {
+	kresp, err := cl.Client().Request(context.Background(), f.describeRequest())
+	if err != nil {
+		return nil, fmt.Errorf("unable to describe acls: %v", err)
+	}
+	resp := kresp.(*kmsg.DescribeACLsResponse)
+	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		return nil, fmt.Errorf("%s%s", err, brokerMessage(resp.ErrorMessage))
+	}
+	rows := []aclRow{}
+	for _, resource := range resp.Resources {
+		for _, acl := range resource.ACLs {
+			rows = append(rows, aclRow{
+				typ:        resource.ResourceType.String(),
+				name:       resource.ResourceName,
+				pattern:    resource.ResourcePatternType.String(),
+				principal:  acl.Principal,
+				host:       acl.Host,
+				operation:  acl.Operation.String(),
+				permission: acl.PermissionType.String(),
+			})
+		}
+	}
+	sortACLs(rows)
+	return rows, nil
+}
+
+// brokerMessage is ": " and the message a broker attached to an error, or
+// nothing.
+func brokerMessage(msg *string) string {
+	if msg == nil || *msg == "" {
+		return ""
+	}
+	return ": " + *msg
+}
+
+// errorCells are the ERROR and MESSAGE cells for a per-ACL result: the
+// error name and the message the broker attached, or "" and "" on success.
+func errorCells(code int16, msg *string) (string, string) {
+	if code == 0 {
+		return "", ""
+	}
+	var m string
+	if msg != nil {
+		m = *msg
+	}
+	return kerr.TypedErrorForCode(code).Message, m
+}
+
+// filterFlags installs the filter flags list and delete share. The generic
+// --type, --name, --principal, and --host flags are the filter form of an
+// ACL: each defaults to matching everything, unlike create, where a
+// resource flag names the one resource an ACL is created for.
+func filterFlags(cmd *cobra.Command, f *aclFilter) {
+	cmd.Flags().StringVar(&f.resourceType, "type", "any", "resource type to match; any matches every type")
+	cmd.Flags().StringVar(&f.resourceName, "name", "", "resource name to match; empty matches every name")
+	cmd.Flags().StringVar(&f.resourcePattern, "pattern", "match", "resource pattern type to match; match means all (Kafka 2.0.0+)")
+	cmd.Flags().StringVar(&f.principal, "principal", "", "principal to match; empty matches every principal")
+	cmd.Flags().StringVar(&f.host, "host", "", "host to match; empty matches every host")
+	cmd.Flags().StringVar(&f.operation, "operation", "any", "operation to match; any matches every operation (alias: --op)")
+	cmd.Flags().StringVar(&f.operation, "op", "any", "")
+	cmd.Flags().StringVar(&f.permission, "permission", "any", "permission to match; any matches allow and deny (alias: --perm)")
+	cmd.Flags().StringVar(&f.permission, "perm", "any", "")
+	cmd.Flags().MarkHidden("op")
+	cmd.Flags().MarkHidden("perm")
+	registerCompletions(cmd, map[string][]string{
+		"type":       resourceTypeValues,
+		"pattern":    patternValues,
+		"operation":  operationValues,
+		"permission": permissionValues,
+	})
+
+	// The resource flags are shortcuts for --type and --name.
+	var topicFlag, groupFlag, txnIDFlag, dtokenFlag string
+	cmd.Flags().StringVarP(&topicFlag, "topic", "t", "", "match ACLs for this topic (--type topic --name TOPIC)")
+	cmd.Flags().StringVarP(&groupFlag, "group", "g", "", "match ACLs for this group (--type group --name GROUP)")
+	cmd.Flags().BoolVar(new(bool), "cluster", false, "match cluster ACLs (--type cluster)")
+	cmd.Flags().StringVar(&txnIDFlag, "transactional-id", "", "match ACLs for this transactional ID")
+	cmd.Flags().StringVar(&dtokenFlag, "delegation-token", "", "match ACLs for this delegation token")
+	cmd.PreRunE = func(_ *cobra.Command, _ []string) error {
+		switch {
+		case topicFlag != "":
+			f.resourceType, f.resourceName = "topic", topicFlag
+		case groupFlag != "":
+			f.resourceType, f.resourceName = "group", groupFlag
+		case cmd.Flags().Changed("cluster"):
+			f.resourceType = "cluster"
+		case txnIDFlag != "":
+			f.resourceType, f.resourceName = "transactional_id", txnIDFlag
+		case dtokenFlag != "":
+			f.resourceType, f.resourceName = "delegation_token", dtokenFlag
+		}
+		return nil
+	}
+}
+
 func describeCommand(cl *client.Client) *cobra.Command {
-	var (
-		resourceType    string
-		resourceName    string
-		resourcePattern string
-		principal       string
-		host            string
-		operation       string
-		permission      string
-	)
+	var f aclFilter
 
 	cmd := &cobra.Command{
 		Use:     "list",
@@ -160,9 +347,16 @@ func describeCommand(cl *client.Client) *cobra.Command {
 
 List ACLs on a filter basis (Kafka 0.11.0+).
 
-Listing ACLs works on a filter basis: anything matching the requested filter
-is returned. For resource names, principals, and hosts, using a wildcard
-matches ACLs with wildcards; to match everything, leave the filter empty.
+Listing works on a filter: every ACL matching the filter is returned. The
+--type, --name, --pattern, --principal, --host, --operation, and --permission
+flags are the filter form, where each one left at its default matches
+everything; they are not the resource flags "kcl acl create" takes, which
+name the one resource an ACL is created for. The --topic, --group, --cluster,
+--transactional-id, and --delegation-token flags are shortcuts for --type and
+--name. For resource names, principals, and hosts, a wildcard matches only
+ACLs with wildcards; to match everything, leave the filter empty.
+
+Rows are sorted by principal and then by resource.
 
 EXAMPLES:
   kcl acl list                                           # list all ACLs
@@ -178,104 +372,22 @@ SEE ALSO:
 `,
 		Args: cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
-			if err := validateFilters(resourceType, resourcePattern, operation, permission); err != nil {
+			if err := f.validate(); err != nil {
 				return err
 			}
-
-			var pname, pprincipal, phost *string
-			if resourceName != "" {
-				pname = &resourceName
-			}
-			if principal != "" {
-				pprincipal = &principal
-			}
-			if host != "" {
-				phost = &host
-			}
-
-			req := &kmsg.DescribeACLsRequest{
-				ResourceType:        atoiResourceType(resourceType),
-				ResourceName:        pname,
-				ResourcePatternType: atoiResourcePattern(resourcePattern),
-				Principal:           pprincipal,
-				Host:                phost,
-				Operation:           atoiOperation(operation),
-				PermissionType:      atoiPermission(permission),
-			}
-
-			kresp, err := cl.Client().Request(context.Background(), req)
+			rows, err := f.describe(cl)
 			if err != nil {
-				return fmt.Errorf("unable to describe acls: %v", err)
+				return err
 			}
-			resp := kresp.(*kmsg.DescribeACLsResponse)
-			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-				additional := ""
-				if resp.ErrorMessage != nil {
-					additional = ": " + *resp.ErrorMessage
-				}
-				return fmt.Errorf("%s%s", err, additional)
-			}
-
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "acls",
-				"TYPE", "NAME", "PATTERN", "PRINCIPAL", "HOST", "OPERATION", "PERMISSION")
-			for _, resource := range resp.Resources {
-				for _, acl := range resource.ACLs {
-					table.Row(
-						resource.ResourceType,
-						resource.ResourceName,
-						resource.ResourcePatternType,
-						acl.Principal,
-						acl.Host,
-						acl.Operation,
-						acl.PermissionType,
-					)
-				}
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "acls", aclHeaders...)
+			for _, r := range rows {
+				table.Row(r.identity()...)
 			}
 			return table.Flush()
 		},
 	}
-
-	cmd.Flags().StringVar(&resourceType, "type", "any", "resource type filter; default 'any' matches all resource types")
-	cmd.Flags().StringVar(&resourceName, "name", "", "resource name filter; empty matches all")
-	cmd.Flags().StringVar(&resourcePattern, "pattern", "match", "resource name pattern filter; match means all (Kafka 2.0.0+)")
-	cmd.Flags().StringVar(&principal, "principal", "", "principal filter; empty matches all")
-	cmd.Flags().StringVar(&host, "host", "", "host filter; empty matches all")
-	cmd.Flags().StringVar(&operation, "operation", "any", "operation filter; any matches all (alias: --op)")
-	cmd.Flags().StringVar(&operation, "op", "any", "")
-	cmd.Flags().StringVar(&permission, "permission", "any", "permission filter; any matches all (alias: --perm)")
-	cmd.Flags().StringVar(&permission, "perm", "any", "")
-	cmd.Flags().MarkHidden("op")
-	cmd.Flags().MarkHidden("perm")
-	registerCompletions(cmd, map[string][]string{
-		"type":       resourceTypeValues,
-		"pattern":    patternValues,
-		"operation":  operationValues,
-		"permission": permissionValues,
-	})
-
-	// Ergonomic resource-specific flags (shortcuts for --type + --name).
-	var topicFlag, groupFlag, txnIDFlag, dtokenFlag string
-	cmd.Flags().StringVarP(&topicFlag, "topic", "t", "", "topic resource filter")
-	cmd.Flags().StringVarP(&groupFlag, "group", "g", "", "group resource filter")
-	cmd.Flags().BoolVar(new(bool), "cluster", false, "cluster resource filter")
-	cmd.Flags().StringVar(&txnIDFlag, "transactional-id", "", "transactional ID resource filter")
-	cmd.Flags().StringVar(&dtokenFlag, "delegation-token", "", "delegation token resource filter")
-	cmd.PreRunE = func(_ *cobra.Command, _ []string) error {
-		switch {
-		case topicFlag != "":
-			resourceType, resourceName = "topic", topicFlag
-		case groupFlag != "":
-			resourceType, resourceName = "group", groupFlag
-		case cmd.Flags().Changed("cluster"):
-			resourceType = "cluster"
-		case txnIDFlag != "":
-			resourceType, resourceName = "transactional_id", txnIDFlag
-		case dtokenFlag != "":
-			resourceType, resourceName = "delegation_token", dtokenFlag
-		}
-		return nil
-	}
-
+	out.Columns(cmd, aclHeaders...)
+	filterFlags(cmd, &f)
 	return cmd
 }
 
@@ -316,6 +428,9 @@ ACL creation is combinatorial: all principals x all hosts x all resources x
 all operations. Requires at least one principal, one resource, and one
 operation. Hosts default to "*" (all) if not specified.
 
+Every ACL prints with its result. --dry-run prints the same rows without
+asking the cluster for anything, so ERROR and MESSAGE are unknown.
+
 EXAMPLES:
   kcl acl create --topic foo --allow-principal User:alice --operation read
   kcl acl create --group '*' --allow-principal User:bob --operation read --operation describe
@@ -340,9 +455,7 @@ SEE ALSO:
 					allowPrincipals = append(allowPrincipals, p)
 				}
 			}
-			for _, h := range oldHosts {
-				allowHosts = append(allowHosts, h)
-			}
+			allowHosts = append(allowHosts, oldHosts...)
 			for i, t := range oldTypes {
 				if i < len(oldNames) {
 					switch client.Strnorm(t) {
@@ -434,18 +547,28 @@ SEE ALSO:
 				}
 			}
 
-			if dryRun {
-				fmt.Fprintf(os.Stderr, "Dry run: %d ACL(s) would be created:\n", len(req.Creations))
-				tw := out.BeginTabWrite()
-				defer tw.Flush()
-				fmt.Fprintf(tw, "TYPE\tNAME\tPATTERN\tPRINCIPAL\tHOST\tOPERATION\tPERMISSION\n")
-				for _, c := range req.Creations {
-					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-						c.ResourceType, c.ResourceName, c.ResourcePatternType,
-						c.Principal, c.Host, c.Operation, c.PermissionType,
-					)
+			rows := make([]aclRow, len(req.Creations))
+			for i, c := range req.Creations {
+				rows[i] = aclRow{
+					typ:        c.ResourceType.String(),
+					name:       c.ResourceName,
+					pattern:    c.ResourcePatternType.String(),
+					principal:  c.Principal,
+					host:       c.Host,
+					operation:  c.Operation.String(),
+					permission: c.PermissionType.String(),
+					err:        out.Unknown,
+					msg:        out.Unknown,
 				}
-				return nil
+			}
+
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results", aclResultHeaders...).ResultColumns()
+			if dryRun {
+				table.SetDryRun(true)
+				for _, r := range rows {
+					table.Row(r.result()...)
+				}
+				return table.Flush()
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), req)
@@ -453,42 +576,17 @@ SEE ALSO:
 				return fmt.Errorf("unable to create acls: %v", err)
 			}
 			resp := kresp.(*kmsg.CreateACLsResponse)
-
 			if len(resp.Results) != len(req.Creations) {
-				fmt.Fprintf(os.Stderr, "Kafka replied with only %d responses to our %d creations! Dumping response as JSON...",
-					len(resp.Results), len(req.Creations))
-				out.MarshalJSON(cl.Command(), 1, map[string]any{
-					"response": kresp,
-				})
-				return nil
+				return fmt.Errorf("Kafka answered %d results for %d creations", len(resp.Results), len(req.Creations))
 			}
-
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
-				"TYPE", "NAME", "PATTERN", "PRINCIPAL", "HOST", "OPERATION", "PERMISSION", "ERROR", "ERROR-MSG")
 			for i, result := range resp.Results {
-				errStr, errMsg := "OK", ""
-				if err := kerr.ErrorForCode(result.ErrorCode); err != nil {
-					errStr = err.Error()
-					if result.ErrorMessage != nil {
-						errMsg = *result.ErrorMessage
-					}
-				}
-				creation := req.Creations[i]
-				table.Row(
-					creation.ResourceType,
-					creation.ResourceName,
-					creation.ResourcePatternType,
-					creation.Principal,
-					creation.Host,
-					creation.Operation,
-					creation.PermissionType,
-					errStr,
-					errMsg,
-				)
+				rows[i].err, rows[i].msg = errorCells(result.ErrorCode, result.ErrorMessage)
+				table.Row(rows[i].result()...)
 			}
 			return table.Flush()
 		},
 	}
+	out.Columns(cmd, aclResultHeaders...)
 
 	// Primary flags: the ergonomic interface.
 	cmd.Flags().StringArrayVar(&allowPrincipals, "allow-principal", nil, "principal to allow (repeatable)")
@@ -502,7 +600,7 @@ SEE ALSO:
 	cmd.Flags().BoolVar(&cluster, "cluster", false, "cluster resource")
 	cmd.Flags().StringArrayVar(&operations, "operation", nil, "operation to allow or deny (repeatable)")
 	cmd.Flags().StringVar(&pattern, "pattern", "literal", "resource pattern type: literal or prefixed (Kafka 2.0.0+)")
-	cmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "preview ACLs that would be created without creating them")
+	cmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "print the ACLs that would be created without creating them")
 
 	// Deprecated flags: hidden, and they still work.
 	cmd.Flags().StringArrayVar(&oldTypes, "type", nil, "")
@@ -528,15 +626,9 @@ SEE ALSO:
 
 func deleteCommand(cl *client.Client) *cobra.Command {
 	var (
-		resourceType    string
-		resourceName    string
-		resourcePattern string
-		principal       string
-		host            string
-		operation       string
-		permission      string
-		dryRun          bool
-		noConfirm       bool
+		f         aclFilter
+		dryRun    bool
+		noConfirm bool
 	)
 
 	cmd := &cobra.Command{
@@ -546,246 +638,124 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 
 Delete ACLs on a filter basis (Kafka 0.11.0+).
 
-Like describing, deleting ACLs works on a filter basis: anything matching the
-requested filter is described. Note that for resource names, principals, and
-hosts, using a wildcard matches ACLs with wildcards; to match everything, leave
-the principal and host empty.
+Like listing, deleting works on a filter: every ACL matching the filter is
+deleted. The --type, --name, --pattern, --principal, --host, --operation, and
+--permission flags are the filter form, where each one left at its default
+matches everything; they are not the resource flags "kcl acl create" takes.
+The --topic, --group, --cluster, --transactional-id, and --delegation-token
+flags are shortcuts for --type and --name. For resource names, principals,
+and hosts, a wildcard matches only ACLs with wildcards; to match everything,
+leave the filter empty.
 
-The delete request actually allows many filters to be passed at once, but it is
-a bit difficult to express that from a CLI. So, kcl only allows one filter at a
-time.
+The delete request allows many filters at once, but that is hard to express
+from a CLI, so kcl sends one filter per command.
 
-Every unspecified filter matches everything, so a bare "kcl acl delete" matches
-every ACL in the cluster. What protects you is the confirmation: the command
-first prints every ACL the filter matched and asks before issuing the delete,
-the same as rpk and kafka-acls.sh. Use --dry-run to see the matches and stop
-there, or --yes/-y to skip the prompt entirely.
+Every unspecified filter matches everything, so a bare "kcl acl delete"
+matches every ACL in the cluster. What protects you is the confirmation: the
+command first prints every ACL the filter matched and asks before deleting,
+the same as rpk and kafka-acls.sh. Declining, or a stdin that is not a
+terminal, prints the matches as a dry run and exits 0. Use --dry-run to see
+the matches and stop there, or --yes/-y to skip the prompt entirely.
 
-For more detailed information about ACLs, read kcl acl --help.
+EXAMPLES:
+  kcl acl delete                                 # every ACL, after confirming
+  kcl acl delete --topic foo                     # all ACLs for topic foo
+  kcl acl delete --cluster --principal User:old  # all cluster ACLs for a principal
+  kcl acl delete --topic foo --dry-run           # show the matches, delete nothing
+
+SEE ALSO:
+  kcl acl list      list ACLs
+  kcl acl create    create ACLs
+  kcl acl --help    detailed ACL documentation
 `,
-
-		Example: `kcl acl delete                                 # every ACL, after confirming
-kcl acl delete --topic foo                     # all ACLs for topic foo
-kcl acl delete --cluster --principal User:old  # all cluster ACLs for a principal
-kcl acl delete --topic foo --dry-run           # show the matches, delete nothing`,
 		Args: cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
-			if err := validateFilters(resourceType, resourcePattern, operation, permission); err != nil {
+			if err := f.validate(); err != nil {
 				return err
 			}
-			var pname, pprincipal, phost *string
-			if resourceName != "" {
-				pname = &resourceName
-			}
-			if principal != "" {
-				pprincipal = &principal
-			}
-			if host != "" {
-				phost = &host
-			}
 
-			if dryRun {
-				// Use a describe request to show what would match.
-				descReq := &kmsg.DescribeACLsRequest{
-					ResourceType:        atoiResourceType(resourceType),
-					ResourceName:        pname,
-					ResourcePatternType: atoiResourcePattern(resourcePattern),
-					Principal:           pprincipal,
-					Host:                phost,
-					Operation:           atoiOperation(operation),
-					PermissionType:      atoiPermission(permission),
-				}
-
-				kresp, err := cl.Client().Request(context.Background(), descReq)
-				if err != nil {
-					return fmt.Errorf("unable to describe acls: %v", err)
-				}
-				resp := kresp.(*kmsg.DescribeACLsResponse)
-				if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-					additional := ""
-					if resp.ErrorMessage != nil {
-						additional = ": " + *resp.ErrorMessage
-					}
-					return fmt.Errorf("%s%s", err, additional)
-				}
-
-				if cl.Format() != "json" {
-					fmt.Fprintln(os.Stderr, "Dry run: the following ACLs would be deleted:")
-				}
-				table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "acls",
-					"TYPE", "NAME", "PATTERN", "PRINCIPAL", "HOST", "OPERATION", "PERMISSION")
-				for _, resource := range resp.Resources {
-					for _, acl := range resource.ACLs {
-						table.Row(
-							resource.ResourceType,
-							resource.ResourceName,
-							resource.ResourcePatternType,
-							acl.Principal,
-							acl.Host,
-							acl.Operation,
-							acl.PermissionType,
-						)
-					}
+			// plan prints the matched ACLs in the result shape, with
+			// no result: a dry run.
+			plan := func(matched []aclRow) error {
+				table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "deleted", aclResultHeaders...).ResultColumns()
+				table.SetDryRun(true)
+				for _, r := range matched {
+					r.err, r.msg = out.Unknown, out.Unknown
+					table.Row(r.result()...)
 				}
 				return table.Flush()
 			}
 
-			if !noConfirm {
-				// Describe first to show what will be deleted, then prompt.
-				descReq := &kmsg.DescribeACLsRequest{
-					ResourceType:        atoiResourceType(resourceType),
-					ResourceName:        pname,
-					ResourcePatternType: atoiResourcePattern(resourcePattern),
-					Principal:           pprincipal,
-					Host:                phost,
-					Operation:           atoiOperation(operation),
-					PermissionType:      atoiPermission(permission),
-				}
-
-				kresp, err := cl.Client().Request(context.Background(), descReq)
+			if dryRun || !noConfirm {
+				matched, err := f.describe(cl)
 				if err != nil {
-					return fmt.Errorf("unable to describe acls: %v", err)
+					return err
 				}
-				resp := kresp.(*kmsg.DescribeACLsResponse)
-				if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-					additional := ""
-					if resp.ErrorMessage != nil {
-						additional = ": " + *resp.ErrorMessage
-					}
-					return fmt.Errorf("%s%s", err, additional)
+				if dryRun {
+					return plan(matched)
 				}
-
-				var matched int
-				for _, resource := range resp.Resources {
-					matched += len(resource.ACLs)
-				}
-				if matched == 0 {
+				if len(matched) == 0 {
+					// The same empty table -y prints when its
+					// filter matches nothing.
 					fmt.Fprintln(os.Stderr, "No ACLs match the filter; nothing to delete.")
-					return nil
+					return out.NewFormattedTable(cl.Format(), cl.Command(), 1, "deleted", aclResultHeaders...).ResultColumns().Flush()
 				}
-
-				fmt.Fprintln(os.Stderr, "The following ACLs will be deleted:")
-				tw := out.BeginTabWrite()
-				fmt.Fprintf(tw, "TYPE\tNAME\tPATTERN\tPRINCIPAL\tHOST\tOPERATION\tPERMISSION\n")
-				for _, resource := range resp.Resources {
-					for _, acl := range resource.ACLs {
-						fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-							resource.ResourceType,
-							resource.ResourceName,
-							resource.ResourcePatternType,
-							acl.Principal,
-							acl.Host,
-							acl.Operation,
-							acl.PermissionType,
-						)
+				text := cl.Format() == out.FormatText
+				if text {
+					fmt.Fprintln(os.Stderr, "The following ACLs will be deleted:")
+					table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "acls", aclHeaders...)
+					for _, r := range matched {
+						table.Row(r.identity()...)
 					}
+					table.Flush()
 				}
-				tw.Flush()
-
-				if !confirm(fmt.Sprintf("\nProceed with deletion of %s? [y/N] ", plural(matched, "ACL"))) {
-					return nil
+				if out.Confirm(fmt.Sprintf("Proceed with deletion of %s?", plural(len(matched), "ACL"))) != out.Yes {
+					if text {
+						return nil
+					}
+					return plan(matched)
 				}
 			}
 
-			req := &kmsg.DeleteACLsRequest{
-				Filters: []kmsg.DeleteACLsRequestFilter{{
-					ResourceType:        atoiResourceType(resourceType),
-					ResourceName:        pname,
-					ResourcePatternType: atoiResourcePattern(resourcePattern),
-					Principal:           pprincipal,
-					Host:                phost,
-					Operation:           atoiOperation(operation),
-					PermissionType:      atoiPermission(permission),
-				}},
-			}
-
-			kresp, err := cl.Client().Request(context.Background(), req)
+			kresp, err := cl.Client().Request(context.Background(), f.deleteRequest())
 			if err != nil {
-				return fmt.Errorf("unable to describe acls: %v", err)
+				return fmt.Errorf("unable to delete acls: %v", err)
 			}
 			resp := kresp.(*kmsg.DeleteACLsResponse)
-
 			if len(resp.Results) != 1 {
 				return fmt.Errorf("we requested one filter, but got %d responses", len(resp.Results))
 			}
-
 			result := resp.Results[0]
 			if err := kerr.ErrorForCode(result.ErrorCode); err != nil {
-				additional := ""
-				if result.ErrorMessage != nil {
-					additional = ": " + *result.ErrorMessage
-				}
-				return fmt.Errorf("%s%s", err, additional)
+				return fmt.Errorf("%s%s", err, brokerMessage(result.ErrorMessage))
 			}
 
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "deleted",
-				"TYPE", "NAME", "PATTERN", "PRINCIPAL", "HOST", "OPERATION", "PERMISSION", "ERROR", "ERROR-MSG")
+			rows := make([]aclRow, 0, len(result.MatchingACLs))
 			for _, acl := range result.MatchingACLs {
-				errStr, errMsg := "OK", ""
-				if err = kerr.ErrorForCode(acl.ErrorCode); err != nil {
-					errStr = err.Error()
-					if acl.ErrorMessage != nil {
-						errMsg = *acl.ErrorMessage
-					}
+				r := aclRow{
+					typ:        acl.ResourceType.String(),
+					name:       acl.ResourceName,
+					pattern:    acl.ResourcePatternType.String(),
+					principal:  acl.Principal,
+					host:       acl.Host,
+					operation:  acl.Operation.String(),
+					permission: acl.PermissionType.String(),
 				}
-				table.Row(
-					acl.ResourceType,
-					acl.ResourceName,
-					acl.ResourcePatternType,
-					acl.Principal,
-					acl.Host,
-					acl.Operation,
-					acl.PermissionType,
-					errStr,
-					errMsg,
-				)
+				r.err, r.msg = errorCells(acl.ErrorCode, acl.ErrorMessage)
+				rows = append(rows, r)
+			}
+			sortACLs(rows)
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "deleted", aclResultHeaders...).ResultColumns()
+			for _, r := range rows {
+				table.Row(r.result()...)
 			}
 			return table.Flush()
 		},
 	}
-
-	cmd.Flags().StringVar(&resourceType, "type", "any", "resource type filter; any matches all resource types")
-	cmd.Flags().StringVar(&resourceName, "name", "", "resource name filter; empty matches all")
-	cmd.Flags().StringVar(&resourcePattern, "pattern", "match", "resource name pattern filter; match means all (Kafka 2.0.0+)")
-	cmd.Flags().StringVar(&principal, "principal", "", "principal filter; empty matches all")
-	cmd.Flags().StringVar(&host, "host", "", "host filter; empty matches all")
-	cmd.Flags().StringVar(&operation, "operation", "any", "operation filter; any matches all (alias: --op)")
-	cmd.Flags().StringVar(&operation, "op", "any", "")
-	cmd.Flags().StringVar(&permission, "permission", "any", "permission filter; any matches all (alias: --perm)")
-	cmd.Flags().StringVar(&permission, "perm", "any", "")
-	cmd.Flags().MarkHidden("op")
-	cmd.Flags().MarkHidden("perm")
-	registerCompletions(cmd, map[string][]string{
-		"type":       resourceTypeValues,
-		"pattern":    patternValues,
-		"operation":  operationValues,
-		"permission": permissionValues,
-	})
-	cmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "print ACLs that would be deleted without actually deleting them")
-	cmd.Flags().BoolVarP(&noConfirm, "yes", "y", false, "skip confirmation prompt before deleting")
-
-	// Ergonomic resource-specific flags.
-	var topicFlag, groupFlag, txnIDFlag, dtokenFlag string
-	cmd.Flags().StringVarP(&topicFlag, "topic", "t", "", "topic resource filter")
-	cmd.Flags().StringVarP(&groupFlag, "group", "g", "", "group resource filter")
-	cmd.Flags().BoolVar(new(bool), "cluster", false, "cluster resource filter")
-	cmd.Flags().StringVar(&txnIDFlag, "transactional-id", "", "transactional ID resource filter")
-	cmd.Flags().StringVar(&dtokenFlag, "delegation-token", "", "delegation token resource filter")
-	cmd.PreRunE = func(_ *cobra.Command, _ []string) error {
-		switch {
-		case topicFlag != "":
-			resourceType, resourceName = "topic", topicFlag
-		case groupFlag != "":
-			resourceType, resourceName = "group", groupFlag
-		case cmd.Flags().Changed("cluster"):
-			resourceType = "cluster"
-		case txnIDFlag != "":
-			resourceType, resourceName = "transactional_id", txnIDFlag
-		case dtokenFlag != "":
-			resourceType, resourceName = "delegation_token", dtokenFlag
-		}
-		return nil
-	}
+	out.Columns(cmd, aclResultHeaders...)
+	filterFlags(cmd, &f)
+	cmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "print the ACLs that would be deleted without deleting them")
+	cmd.Flags().BoolVarP(&noConfirm, "yes", "y", false, "skip the confirmation prompt before deleting")
 
 	return cmd
 }
