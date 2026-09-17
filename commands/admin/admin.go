@@ -5,8 +5,8 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"os"
 	"slices"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -61,13 +61,30 @@ func Command(cl *client.Client) *cobra.Command {
 	return cmd
 }
 
+var (
+	electHeaders    = []string{"TOPIC", "PARTITION", "ERROR", "MESSAGE"}
+	brokersHeaders  = []string{"ID", "HOST", "PORT", "RACK"}
+	clusterHeaders  = []string{"CLUSTER-ID", "CONTROLLER", "AUTHORIZED-OPERATIONS"}
+	quorumHeaders   = []string{"TOPIC", "PARTITION", "LEADER", "LEADER-EPOCH", "HIGH-WATERMARK", "ROLE", "REPLICA", "LOG-END-OFFSET", "LAST-FETCH-TIMESTAMP", "LAST-CAUGHT-UP-TIMESTAMP", "ERROR"}
+	replicasHeaders = quorumHeaders[5:10]
+)
+
+// brokerMessage is ": " and the message a broker attached to an error, or
+// nothing.
+func brokerMessage(msg *string) string {
+	if msg == nil || *msg == "" {
+		return ""
+	}
+	return ": " + *msg
+}
+
 func ElectLeadersCommand(cl *client.Client) *cobra.Command {
 	var allPartitions bool
 	var unclean bool
 	var dryRun bool
 
 	cmd := &cobra.Command{
-		Use:   "elect-leaders",
+		Use:   "elect-leaders [TOPIC:P,P...]",
 		Short: "Trigger leader elections for partitions.",
 		Long: `Trigger leader elections for partitions.
 
@@ -75,27 +92,71 @@ Trigger leader elections for topic partitions (Kafka 2.2.0+).
 
 This command allows for triggering leader elections on any topic and any
 partition, as well as on all topic partitions. To run on all, you must not
-pass any topic flags, and you must use the --all-partitions flag.
+pass any topics, and you must use the --all-partitions flag.
 
 The format for triggering topic partitions is "foo:1,2,3", where foo is a
-topic and 1,2,3 are partition numbers.
+topic and 1,2,3 are partition numbers. A bare topic is every partition of the
+topic.
 
-Use --dry-run to preview without applying.
+The result prints one row per partition with ERROR and MESSAGE. --dry-run
+prints the partitions that would be elected, with no result, and asks the
+cluster for nothing but the partition list.
+
+EXAMPLES:
+  kcl cluster elect-leaders foo:1,2,3 bar:9
+  kcl cluster elect-leaders foo --unclean
+  kcl cluster elect-leaders --all-partitions --dry-run
+
+SEE ALSO:
+  kcl topic describe    see each partition's leader
 `,
-		Example: "kcl cluster elect-leaders foo:1,2,3 bar:9",
 		RunE: func(_ *cobra.Command, topicParts []string) error {
 			tps, err := flagutil.ParseTopicPartitions(topicParts)
 			if err != nil {
-				return fmt.Errorf("unable to parse topic partitions: %v", err)
+				return out.Errf(out.ExitUsage, "unable to parse topic partitions: %v", err)
 			}
-			if dryRun {
-				if cl.Format() == out.FormatText {
-					fmt.Fprintln(os.Stderr, "Dry run: would elect leaders for the following partitions:")
+			if allPartitions && len(tps) > 0 {
+				return out.Errf(out.ExitUsage, "--all-partitions takes no TOPIC:P arguments")
+			}
+			if !allPartitions && len(tps) == 0 {
+				return out.Errf(out.ExitUsage, "no partitions given: name TOPIC:P,P... or use --all-partitions")
+			}
+
+			// A bare topic, or every topic for a dry run of
+			// --all-partitions, is resolved from metadata. A real
+			// --all-partitions run sends no topics at all.
+			var metaTopics []kmsg.MetadataRequestTopic
+			for topic, partitions := range tps {
+				if len(partitions) == 0 {
+					metaTopics = append(metaTopics, kmsg.MetadataRequestTopic{Topic: kmsg.StringPtr(topic)})
 				}
-				table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "partitions", "TOPIC", "PARTITION")
+			}
+			if len(metaTopics) > 0 || allPartitions && dryRun {
+				resp, err := (&kmsg.MetadataRequest{Topics: metaTopics}).RequestWith(context.Background(), cl.Client())
+				if err != nil {
+					return fmt.Errorf("unable to get metadata: %v", err)
+				}
+				for _, topic := range resp.Topics {
+					if topic.Topic == nil {
+						continue
+					}
+					if err := kerr.ErrorForCode(topic.ErrorCode); err != nil {
+						return fmt.Errorf("unable to get metadata for topic %s: %v", *topic.Topic, err)
+					}
+					for _, partition := range topic.Partitions {
+						tps[*topic.Topic] = append(tps[*topic.Topic], partition.Partition)
+					}
+				}
+			}
+
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results", electHeaders...).ResultColumns()
+			if dryRun {
+				table.SetDryRun(true)
 				for _, topic := range slices.Sorted(maps.Keys(tps)) {
-					for _, p := range tps[topic] {
-						table.Row(topic, p)
+					partitions := slices.Clone(tps[topic])
+					slices.Sort(partitions)
+					for _, p := range partitions {
+						table.Row(topic, p, out.Unknown, out.Unknown)
 					}
 				}
 				return table.Flush()
@@ -107,19 +168,13 @@ Use --dry-run to preview without applying.
 			if unclean {
 				req.ElectionType = 1
 			}
-
-			topics := []kmsg.ElectLeadersRequestTopic{}
-			if allPartitions {
-				topics = nil
-			} else if len(topics) == 0 {
-				return fmt.Errorf("no topics requested for leader election, and not triggering all; nothing to do")
-			}
-
-			for topic, partitions := range tps {
-				req.Topics = append(req.Topics, kmsg.ElectLeadersRequestTopic{
-					Topic:      topic,
-					Partitions: partitions,
-				})
+			if !allPartitions {
+				for topic, partitions := range tps {
+					req.Topics = append(req.Topics, kmsg.ElectLeadersRequestTopic{
+						Topic:      topic,
+						Partitions: partitions,
+					})
+				}
 			}
 
 			kresp, err := cl.Client().Request(context.Background(), req)
@@ -132,28 +187,42 @@ Use --dry-run to preview without applying.
 				return fmt.Errorf("%v", err)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
-				"TOPIC", "PARTITION", "ERROR", "MESSAGE")
+			type row struct {
+				topic     string
+				partition int32
+				err       string
+				msg       string
+			}
+			var rows []row
 			for _, topic := range resp.Topics {
-				for _, partition := range topic.Partitions {
-					errKind := ""
-					var msg string
-					if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
-						errKind = err.Error()
+				for _, p := range topic.Partitions {
+					var errName, msg string
+					if p.ErrorCode != 0 {
+						errName = kerr.TypedErrorForCode(p.ErrorCode).Message
+						if p.ErrorMessage != nil {
+							msg = *p.ErrorMessage
+						}
 					}
-					if partition.ErrorMessage != nil {
-						msg = *partition.ErrorMessage
-					}
-					table.Row(topic.Topic, partition.Partition, errKind, msg)
+					rows = append(rows, row{topic.Topic, p.Partition, errName, msg})
 				}
+			}
+			slices.SortFunc(rows, func(a, b row) int {
+				if a.topic != b.topic {
+					return strings.Compare(a.topic, b.topic)
+				}
+				return int(a.partition - b.partition)
+			})
+			for _, r := range rows {
+				table.Row(r.topic, r.partition, r.err, r.msg)
 			}
 			return table.Flush()
 		},
 	}
+	out.Columns(cmd, electHeaders...)
 
 	cmd.Flags().BoolVar(&allPartitions, "all-partitions", false, "trigger leader election on all topics for all partitions")
 	cmd.Flags().BoolVar(&unclean, "unclean", false, "allow unclean leader election (Kafka 2.4.0+)")
-	cmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "preview which partitions would have leaders elected without applying")
+	cmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "print the partitions that would have leaders elected without electing any")
 
 	return cmd
 }
@@ -168,17 +237,26 @@ func DescribeClusterCommand(cl *client.Client) *cobra.Command {
 		Short:   "Describe the Kafka cluster (Kafka 3.0+).",
 		Long: `Describe the Kafka cluster (Kafka 3.0+).
 
-This command prints the cluster ID, controller ID, and a table of all brokers
-in the cluster.
-
-This issues DescribeCluster, which answers cluster-level questions: the cluster
-ID, which broker is controller, the broker list, and (with
+This issues DescribeCluster, which answers cluster-level questions: the
+cluster ID, which broker is controller, the broker list, and (with
 --include-authorized-ops) what the current principal may do. For topics and
 partitions, use "kcl cluster metadata", which issues Metadata instead.
+
+Text prints the cluster summary and then the broker table, sorted by broker
+ID. awk prints one section: the broker rows ID HOST PORT RACK by default, or
+with --section cluster one row CLUSTER-ID CONTROLLER AUTHORIZED-OPERATIONS.
+AUTHORIZED-OPERATIONS is the bitfield the broker answers and is unknown
+without --include-authorized-ops.
+
+EXAMPLES:
+  kcl cluster describe
+  kcl cluster describe --section cluster --format awk    # the ID and controller only
+
+SEE ALSO:
+  kcl cluster metadata    topics, partitions, and brokers, from Metadata
 `,
 		Args: cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
-			// Validate --section.
 			switch section {
 			case "", "cluster", "brokers":
 			default:
@@ -198,84 +276,83 @@ partitions, use "kcl cluster metadata", which issues Metadata instead.
 
 			resp := kresp.(*kmsg.DescribeClusterResponse)
 			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-				additional := ""
-				if resp.ErrorMessage != nil {
-					additional = ": " + *resp.ErrorMessage
+				return out.Errf(out.ExitError, "%s%s", err, brokerMessage(resp.ErrorMessage))
+			}
+
+			brokers := slices.Clone(resp.Brokers)
+			slices.SortFunc(brokers, func(a, b kmsg.DescribeClusterResponseBroker) int { return int(a.NodeID - b.NodeID) })
+			rack := func(b kmsg.DescribeClusterResponseBroker) string {
+				if b.Rack != nil {
+					return *b.Rack
 				}
-				return out.Errf(out.ExitError, "%s%s", err, additional)
+				return ""
+			}
+			var authorizedOps any = out.Unknown
+			if includeAuthorizedOps {
+				authorizedOps = resp.ClusterAuthorizedOperations
 			}
 
 			switch cl.Format() {
-			case "json":
+			case out.FormatJSON:
 				type brokerJSON struct {
 					ID   int32  `json:"id"`
 					Host string `json:"host"`
 					Port int32  `json:"port"`
-					Rack string `json:"rack,omitempty"`
+					Rack string `json:"rack"`
 				}
-				brokers := make([]brokerJSON, len(resp.Brokers))
-				for i, b := range resp.Brokers {
-					brokers[i] = brokerJSON{ID: b.NodeID, Host: b.Host, Port: b.Port}
-					if b.Rack != nil {
-						brokers[i].Rack = *b.Rack
-					}
+				bs := make([]brokerJSON, len(brokers))
+				for i, b := range brokers {
+					bs[i] = brokerJSON{ID: b.NodeID, Host: b.Host, Port: b.Port, Rack: rack(b)}
 				}
-				fields := map[string]any{
-					"cluster_id":    resp.ClusterID,
-					"controller_id": resp.ControllerID,
-					"brokers":       brokers,
-				}
-				if includeAuthorizedOps {
-					fields["authorized_operations"] = resp.ClusterAuthorizedOperations
-				}
-				out.MarshalJSON(cl.Command(), 1, fields)
+				out.MarshalJSON(cl.Command(), 1, map[string]any{
+					"cluster_id":            resp.ClusterID,
+					"controller_id":         resp.ControllerID,
+					"authorized_operations": authorizedOps,
+					"brokers":               bs,
+				})
 
-			case "awk":
-				awkSection := section
-				if awkSection == "" {
-					awkSection = "brokers"
+			case out.FormatAWK:
+				if section == "cluster" {
+					table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "cluster", clusterHeaders...)
+					table.Row(resp.ClusterID, resp.ControllerID, authorizedOps)
+					return table.Flush()
 				}
-				switch awkSection {
-				case "cluster":
-					fmt.Printf("%s\t%d\n", resp.ClusterID, resp.ControllerID)
-				case "brokers":
-					for _, broker := range resp.Brokers {
-						var rack string
-						if broker.Rack != nil {
-							rack = *broker.Rack
-						}
-						fmt.Printf("%d\t%s\t%d\t%s\n", broker.NodeID, broker.Host, broker.Port, rack)
-					}
+				table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "brokers", brokersHeaders...)
+				for _, b := range brokers {
+					table.Row(b.NodeID, b.Host, b.Port, rack(b))
 				}
+				return table.Flush()
 
 			default:
 				if showCluster {
-					fmt.Printf("CLUSTER ID: %s\n", resp.ClusterID)
-					fmt.Printf("CONTROLLER: %d\n", resp.ControllerID)
+					tw := out.BeginTabWrite()
+					fmt.Fprintf(tw, "CLUSTER-ID\t%s\n", resp.ClusterID)
+					fmt.Fprintf(tw, "CONTROLLER\t%d\n", resp.ControllerID)
 					if includeAuthorizedOps {
-						fmt.Printf("AUTHORIZED OPS: %d\n", resp.ClusterAuthorizedOperations)
+						fmt.Fprintf(tw, "AUTHORIZED-OPERATIONS\t%d\n", resp.ClusterAuthorizedOperations)
 					}
+					tw.Flush()
 				}
-
 				if showBrokers {
 					if showCluster {
 						fmt.Println()
 					}
-					tw := out.BeginTabWrite()
-					fmt.Fprintf(tw, "ID\tHOST\tPORT\tRACK\n")
-					for _, broker := range resp.Brokers {
-						var rack string
-						if broker.Rack != nil {
-							rack = *broker.Rack
-						}
-						fmt.Fprintf(tw, "%d\t%s\t%d\t%s\n", broker.NodeID, broker.Host, broker.Port, rack)
+					table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "brokers", brokersHeaders...)
+					for _, b := range brokers {
+						table.Row(b.NodeID, b.Host, b.Port, rack(b))
 					}
-					tw.Flush()
+					return table.Flush()
 				}
 			}
 			return nil
 		},
 	}
+	out.ColumnsFunc(cmd, func() []string {
+		if section == "cluster" {
+			return clusterHeaders
+		}
+		return brokersHeaders
+	})
 
 	cmd.Flags().StringVar(&section, "section", "", "output section (cluster, brokers; default: all for text, brokers for awk)")
 	cmd.Flags().BoolVar(&includeAuthorizedOps, "include-authorized-ops", false, "include cluster authorized operations in the response")
@@ -293,18 +370,28 @@ func DescribeQuorumCommand(cl *client.Client) *cobra.Command {
 This command describes the quorum status for the __cluster_metadata partition,
 including the leader, epoch, high watermark, and information about voters
 and observers.
+
+Text prints the partition summary and then one table of its replicas, each
+row a voter or an observer. awk prints one row per replica, the partition
+columns repeated on each: TOPIC PARTITION LEADER LEADER-EPOCH HIGH-WATERMARK
+ROLE REPLICA LOG-END-OFFSET LAST-FETCH-TIMESTAMP LAST-CAUGHT-UP-TIMESTAMP
+ERROR. --section prints the voters or the observers alone; a partition the
+broker could not describe is one row with ERROR set.
+
+EXAMPLES:
+  kcl cluster describe-quorum
+  kcl cluster describe-quorum --section voters
+
+SEE ALSO:
+  kcl cluster describe    the cluster ID, controller, and brokers
 `,
 		Args: cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
-			// Validate --section.
 			switch section {
 			case "", "voters", "observers":
 			default:
 				return out.Errf(out.ExitUsage, "invalid --section %q: must be voters or observers", section)
 			}
-
-			showVoters := section == "" || section == "voters"
-			showObservers := section == "" || section == "observers"
 
 			req := kmsg.NewPtrDescribeQuorumRequest()
 			req.Topics = []kmsg.DescribeQuorumRequestTopic{{
@@ -319,105 +406,162 @@ and observers.
 
 			resp := kresp.(*kmsg.DescribeQuorumResponse)
 			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-				additional := ""
-				if resp.ErrorMessage != nil {
-					additional = ": " + *resp.ErrorMessage
+				return fmt.Errorf("%s%s", err, brokerMessage(resp.ErrorMessage))
+			}
+
+			// A partition the broker could not describe is in the
+			// document with its error, and the command exits 1.
+			var failed bool
+			for _, topic := range resp.Topics {
+				for _, p := range topic.Partitions {
+					failed = failed || p.ErrorCode != 0
 				}
-				return fmt.Errorf("%s%s", err, additional)
 			}
 
 			switch cl.Format() {
-			case "json":
-				type replicaJSON struct {
-					ReplicaID             int32 `json:"replica_id"`
-					LogEndOffset          int64 `json:"log_end_offset"`
-					LastFetchTimestamp    int64 `json:"last_fetch_timestamp"`
-					LastCaughtUpTimestamp int64 `json:"last_caught_up_timestamp"`
-				}
-				type partJSON struct {
-					Topic         string        `json:"topic"`
-					Partition     int32         `json:"partition"`
-					Leader        int32         `json:"leader"`
-					LeaderEpoch   int32         `json:"leader_epoch"`
-					HighWatermark int64         `json:"high_watermark"`
-					Voters        []replicaJSON `json:"voters,omitempty"`
-					Observers     []replicaJSON `json:"observers,omitempty"`
-				}
-				var parts []partJSON
-				for _, topic := range resp.Topics {
-					for _, p := range topic.Partitions {
-						pj := partJSON{
-							Topic: topic.Topic, Partition: p.Partition,
-							Leader: p.LeaderID, LeaderEpoch: p.LeaderEpoch,
-							HighWatermark: p.HighWatermark,
-						}
-						for _, v := range p.CurrentVoters {
-							pj.Voters = append(pj.Voters, replicaJSON{v.ReplicaID, v.LogEndOffset, v.LastFetchTimestamp, v.LastCaughtUpTimestamp})
-						}
-						for _, o := range p.Observers {
-							pj.Observers = append(pj.Observers, replicaJSON{o.ReplicaID, o.LogEndOffset, o.LastFetchTimestamp, o.LastCaughtUpTimestamp})
-						}
-						parts = append(parts, pj)
-					}
-				}
-				out.MarshalJSON(cl.Command(), 1, map[string]any{"partitions": parts})
+			case out.FormatJSON:
+				out.MarshalJSON(cl.Command(), 1, map[string]any{"partitions": quorumJSON(resp, section)})
 
-			case "awk":
-				for _, topic := range resp.Topics {
-					for _, p := range topic.Partitions {
-						if showVoters {
-							for _, v := range p.CurrentVoters {
-								fmt.Printf("%s\t%d\tvoter\t%d\t%d\t%d\t%d\n", topic.Topic, p.Partition, v.ReplicaID, v.LogEndOffset, v.LastFetchTimestamp, v.LastCaughtUpTimestamp)
-							}
-						}
-						if showObservers {
-							for _, o := range p.Observers {
-								fmt.Printf("%s\t%d\tobserver\t%d\t%d\t%d\t%d\n", topic.Topic, p.Partition, o.ReplicaID, o.LogEndOffset, o.LastFetchTimestamp, o.LastCaughtUpTimestamp)
-							}
-						}
-					}
+			case out.FormatAWK:
+				table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "replicas", quorumHeaders...).ResultColumns()
+				for _, r := range quorumRows(resp, section) {
+					table.Row(r...)
 				}
+				return table.Flush()
 
 			default:
 				for _, topic := range resp.Topics {
 					for _, p := range topic.Partitions {
-						if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
-							fmt.Printf("%s partition %d: %v\n", topic.Topic, p.Partition, err)
+						tw := out.BeginTabWrite()
+						fmt.Fprintf(tw, "TOPIC\t%s\n", topic.Topic)
+						fmt.Fprintf(tw, "PARTITION\t%d\n", p.Partition)
+						if p.ErrorCode != 0 {
+							fmt.Fprintf(tw, "ERROR\t%s%s\n", kerr.TypedErrorForCode(p.ErrorCode).Message, brokerMessage(p.ErrorMessage))
+							tw.Flush()
 							continue
 						}
-						fmt.Printf("%s partition %d: leader %d, epoch %d, high-watermark %d\n",
-							topic.Topic, p.Partition, p.LeaderID, p.LeaderEpoch, p.HighWatermark)
+						fmt.Fprintf(tw, "LEADER\t%d\n", p.LeaderID)
+						fmt.Fprintf(tw, "LEADER-EPOCH\t%d\n", p.LeaderEpoch)
+						fmt.Fprintf(tw, "HIGH-WATERMARK\t%d\n", p.HighWatermark)
+						tw.Flush()
+						fmt.Println()
 
-						if showVoters && len(p.CurrentVoters) > 0 {
-							fmt.Println()
-							fmt.Println("VOTERS:")
-							tw := out.BeginTabWrite()
-							fmt.Fprintf(tw, "  REPLICA\tLOG-END-OFFSET\tLAST-FETCH-TIMESTAMP\tLAST-CAUGHT-UP-TIMESTAMP\n")
-							for _, v := range p.CurrentVoters {
-								fmt.Fprintf(tw, "  %d\t%d\t%d\t%d\n",
-									v.ReplicaID, v.LogEndOffset, v.LastFetchTimestamp, v.LastCaughtUpTimestamp)
-							}
-							tw.Flush()
+						table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "replicas", replicasHeaders...)
+						for _, r := range replicaRows(p, section) {
+							table.Row(r...)
 						}
-
-						if showObservers && len(p.Observers) > 0 {
-							fmt.Println()
-							fmt.Println("OBSERVERS:")
-							tw := out.BeginTabWrite()
-							fmt.Fprintf(tw, "  REPLICA\tLOG-END-OFFSET\tLAST-FETCH-TIMESTAMP\tLAST-CAUGHT-UP-TIMESTAMP\n")
-							for _, o := range p.Observers {
-								fmt.Fprintf(tw, "  %d\t%d\t%d\t%d\n",
-									o.ReplicaID, o.LogEndOffset, o.LastFetchTimestamp, o.LastCaughtUpTimestamp)
-							}
-							tw.Flush()
-						}
+						table.Flush()
 					}
 				}
+			}
+			if failed {
+				return out.ErrSilent
 			}
 			return nil
 		},
 	}
+	out.Columns(cmd, quorumHeaders...)
 
 	cmd.Flags().StringVar(&section, "section", "", "output section (voters, observers; default: all)")
 	return cmd
+}
+
+// replicaRows are the ROLE REPLICA LOG-END-OFFSET LAST-FETCH-TIMESTAMP
+// LAST-CAUGHT-UP-TIMESTAMP rows of one partition, voters then observers,
+// each sorted by replica, filtered by section.
+func replicaRows(p kmsg.DescribeQuorumResponseTopicPartition, section string) [][]any {
+	var rows [][]any
+	add := func(role string, replicas []kmsg.DescribeQuorumResponseTopicPartitionReplicaState) {
+		replicas = slices.Clone(replicas)
+		slices.SortFunc(replicas, func(a, b kmsg.DescribeQuorumResponseTopicPartitionReplicaState) int {
+			return int(a.ReplicaID - b.ReplicaID)
+		})
+		for _, r := range replicas {
+			rows = append(rows, []any{role, r.ReplicaID, r.LogEndOffset, r.LastFetchTimestamp, r.LastCaughtUpTimestamp})
+		}
+	}
+	if section != "observers" {
+		add("voter", p.CurrentVoters)
+	}
+	if section != "voters" {
+		add("observer", p.Observers)
+	}
+	return rows
+}
+
+// quorumRows are the awk rows: one per replica with the partition columns
+// repeated, or one row with the replica columns unknown for a partition
+// that errored.
+func quorumRows(resp *kmsg.DescribeQuorumResponse, section string) [][]any {
+	var rows [][]any
+	for _, topic := range resp.Topics {
+		for _, p := range topic.Partitions {
+			if p.ErrorCode != 0 {
+				rows = append(rows, []any{
+					topic.Topic, p.Partition, out.Unknown, out.Unknown, out.Unknown,
+					out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown,
+					kerr.TypedErrorForCode(p.ErrorCode).Message + brokerMessage(p.ErrorMessage),
+				})
+				continue
+			}
+			for _, r := range replicaRows(p, section) {
+				row := []any{topic.Topic, p.Partition, p.LeaderID, p.LeaderEpoch, p.HighWatermark}
+				row = append(row, r...)
+				rows = append(rows, append(row, ""))
+			}
+		}
+	}
+	return rows
+}
+
+type quorumReplicaJSON struct {
+	ReplicaID             int32 `json:"replica_id"`
+	LogEndOffset          int64 `json:"log_end_offset"`
+	LastFetchTimestamp    int64 `json:"last_fetch_timestamp"`
+	LastCaughtUpTimestamp int64 `json:"last_caught_up_timestamp"`
+}
+
+// quorumPartitionJSON is one partition. Voters and observers are [] when
+// empty, and the section --section did not ask for is left out.
+type quorumPartitionJSON struct {
+	Topic         string              `json:"topic"`
+	Partition     int32               `json:"partition"`
+	Leader        int32               `json:"leader"`
+	LeaderEpoch   int32               `json:"leader_epoch"`
+	HighWatermark int64               `json:"high_watermark"`
+	Error         string              `json:"error"`
+	Voters        []quorumReplicaJSON `json:"voters,omitzero"`
+	Observers     []quorumReplicaJSON `json:"observers,omitzero"`
+}
+
+func quorumJSON(resp *kmsg.DescribeQuorumResponse, section string) []quorumPartitionJSON {
+	parts := []quorumPartitionJSON{}
+	replicas := func(rs []kmsg.DescribeQuorumResponseTopicPartitionReplicaState) []quorumReplicaJSON {
+		js := make([]quorumReplicaJSON, 0, len(rs))
+		for _, r := range rs {
+			js = append(js, quorumReplicaJSON{r.ReplicaID, r.LogEndOffset, r.LastFetchTimestamp, r.LastCaughtUpTimestamp})
+		}
+		slices.SortFunc(js, func(a, b quorumReplicaJSON) int { return int(a.ReplicaID - b.ReplicaID) })
+		return js
+	}
+	for _, topic := range resp.Topics {
+		for _, p := range topic.Partitions {
+			pj := quorumPartitionJSON{
+				Topic: topic.Topic, Partition: p.Partition,
+				Leader: p.LeaderID, LeaderEpoch: p.LeaderEpoch,
+				HighWatermark: p.HighWatermark,
+			}
+			if p.ErrorCode != 0 {
+				pj.Error = kerr.TypedErrorForCode(p.ErrorCode).Message + brokerMessage(p.ErrorMessage)
+			}
+			if section != "observers" {
+				pj.Voters = replicas(p.CurrentVoters)
+			}
+			if section != "voters" {
+				pj.Observers = replicas(p.Observers)
+			}
+			parts = append(parts, pj)
+		}
+	}
+	return parts
 }

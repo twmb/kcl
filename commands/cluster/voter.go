@@ -49,15 +49,15 @@ EXAMPLES:
 			for _, l := range listeners {
 				name, hostport, ok := strings.Cut(l, "://")
 				if !ok {
-					return fmt.Errorf("invalid listener %q: expected NAME://host:port", l)
+					return out.Errf(out.ExitUsage, "invalid listener %q: expected NAME://host:port", l)
 				}
 				host, portStr, err := net.SplitHostPort(hostport)
 				if err != nil {
-					return fmt.Errorf("invalid listener %q: %v", l, err)
+					return out.Errf(out.ExitUsage, "invalid listener %q: %v", l, err)
 				}
 				port, err := strconv.Atoi(portStr)
 				if err != nil {
-					return fmt.Errorf("invalid port in listener %q: %v", l, err)
+					return out.Errf(out.ExitUsage, "invalid port in listener %q: %v", l, err)
 				}
 				req.Listeners = append(req.Listeners, kmsg.AddRaftVoterRequestListener{
 					Name: name,
@@ -161,11 +161,11 @@ func parseDirectoryID(s string) ([16]byte, error) {
 	}
 	s = strings.ReplaceAll(s, "-", "")
 	if len(s) != 32 {
-		return id, fmt.Errorf("directory-id must be a 32-char hex string (UUID), got %d chars", len(s))
+		return id, out.Errf(out.ExitUsage, "directory-id must be a 32-char hex string (UUID), got %d chars", len(s))
 	}
 	_, err := hex.Decode(id[:], []byte(s))
 	if err != nil {
-		return id, fmt.Errorf("directory-id is not valid hex: %v", err)
+		return id, out.Errf(out.ExitUsage, "directory-id is not valid hex: %v", err)
 	}
 	return id, nil
 }
