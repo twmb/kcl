@@ -244,10 +244,9 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 		Long: `Print broker API versions for each Kafka request type (Kafka 0.10.0+).
 
 Each row is a request the broker supports and the maximum version it speaks.
-A request kcl does not know prints as Unknown; --with-key-nums adds the
-request key so you can tell which one it is. KEY is always a column in JSON
-and awk and is unknown (null in JSON, - in awk) without the flag; text hides
-it then.
+A request kcl does not know prints as Unknown; --with-key-nums shows the
+request key in text so you can tell which one it is. json and awk always
+carry KEY.
 
 EXAMPLES:
   kcl misc api-versions
@@ -285,15 +284,11 @@ SEE ALSO:
 				if kind == "" {
 					kind = "Unknown"
 				}
-				var key any = out.Unknown
-				if keys {
-					key = k
-				}
 				if text && !keys {
 					table.Row(kind, ver)
 					return
 				}
-				table.Row(kind, key, ver)
+				table.Row(kind, k, ver)
 			})
 			return table.Flush()
 		},
@@ -553,11 +548,15 @@ EXAMPLES:
 
 			shards := cl.Client().RequestSharded(context.Background(), req)
 			sort.Slice(shards, func(i, j int) bool { return shards[i].Meta.NodeID < shards[j].Meta.NodeID })
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "epochs", epochHeaders...).ResultColumns()
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "epochs", epochHeaders...).ErrorColumn()
 
+			// A broker that could not be asked is reported on stderr,
+			// since its partitions are unknown, and the command exits 1.
+			var failed bool
 			for _, shard := range shards {
 				if shard.Err != nil {
 					fmt.Fprintf(os.Stderr, "unable to issue request to broker %d (%s:%d): %v\n", shard.Meta.NodeID, shard.Meta.Host, shard.Meta.Port, shard.Err)
+					failed = true
 					continue
 				}
 
@@ -567,22 +566,21 @@ EXAMPLES:
 				for _, topic := range resp.Topics {
 					sort.Slice(topic.Partitions, func(i, j int) bool { return topic.Partitions[i].Partition < topic.Partitions[j].Partition })
 					for _, partition := range topic.Partitions {
-						var msg string
-						if partition.ErrorCode != 0 {
-							msg = kerr.TypedErrorForCode(partition.ErrorCode).Message
-						}
 						table.Row(
 							shard.Meta.NodeID,
 							topic.Topic,
 							partition.Partition,
 							partition.LeaderEpoch,
 							partition.EndOffset,
-							msg,
+							out.ErrName(partition.ErrorCode),
 						)
 					}
 				}
 			}
-			return table.Flush()
+			if err := table.Flush(); err != nil || failed {
+				return out.ErrSilent
+			}
+			return nil
 		},
 	}
 

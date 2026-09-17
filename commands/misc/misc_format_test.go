@@ -124,9 +124,9 @@ func TestAllErrorsListed(t *testing.T) {
 	}
 }
 
-// TestAPIVersionsKeyColumn pins that KEY is always a column in JSON and awk,
-// unknown without --with-key-nums, and that text hides it then. -v keeps the
-// command offline.
+// TestAPIVersionsKeyColumn pins that KEY is always filled in JSON and awk,
+// since the key is known for free, and that --with-key-nums only shows it in
+// text. -v keeps the command offline.
 func TestAPIVersionsKeyColumn(t *testing.T) {
 	awk, err := runMisc(t, "--format", "awk", "misc", "api-versions", "-v", "3.5.0")
 	if err != nil {
@@ -138,8 +138,8 @@ func TestAPIVersionsKeyColumn(t *testing.T) {
 	}
 	for _, row := range rows {
 		fields := strings.Split(row, "\t")
-		if len(fields) != len(apiVersionsHeaders) || fields[1] != "-" {
-			t.Errorf("awk row = %q, want %d fields with KEY -", row, len(apiVersionsHeaders))
+		if len(fields) != len(apiVersionsHeaders) || fields[1] == "-" {
+			t.Errorf("awk row = %q, want %d fields with KEY filled", row, len(apiVersionsHeaders))
 			break
 		}
 	}
@@ -166,8 +166,8 @@ func TestAPIVersionsKeyColumn(t *testing.T) {
 	if err := json.Unmarshal([]byte(js), &doc); err != nil {
 		t.Fatalf("not JSON: %v\n%s", err, js)
 	}
-	if len(doc.Versions) == 0 || doc.Versions[0].Key != nil {
-		t.Errorf("JSON key without the flag = %v, want null", doc.Versions[0].Key)
+	if len(doc.Versions) == 0 || doc.Versions[0].Key == nil || *doc.Versions[0].Key != 0 || doc.Versions[0].Name != "Produce" {
+		t.Errorf("JSON first row without the flag = %+v, want Produce with key 0", doc.Versions[0])
 	}
 
 	text, err := runMisc(t, "misc", "api-versions", "-v", "3.5.0")
