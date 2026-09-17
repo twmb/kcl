@@ -37,6 +37,11 @@ func TestDescribeAWK(t *testing.T) {
 					if row[2] != "0" || row[3] == "-" || row[7] != "0" || row[8] != "3" || row[9] != "-" || row[10] != "-" {
 						t.Errorf("partition row = %v", row)
 					}
+					// The one broker is the replica list and the
+					// ISR, with no brackets; no replica is offline.
+					if row[4] != "0" || row[5] != "0" || row[6] != "-" {
+						t.Errorf("replica cells = %q %q %q, want 0 0 -", row[4], row[5], row[6])
+					}
 				}
 			},
 		},
@@ -174,24 +179,6 @@ func TestDescribeJSON(t *testing.T) {
 	got, code = runKcl(t, addr, "describe", "js", "--stable", "--format", "json")
 	if code != 0 || !strings.Contains(got, `"stable_offset":2`) {
 		t.Errorf("--stable: exit %d %s", code, got)
-	}
-}
-
-func TestInt32sToString(t *testing.T) {
-	tests := []struct {
-		input []int32
-		want  string
-	}{
-		{[]int32{1, 2, 3}, "[1,2,3]"},
-		{[]int32{0}, "[0]"},
-		{nil, "[]"},
-		{[]int32{}, "[]"},
-	}
-	for _, tt := range tests {
-		got := int32sToString(tt.input)
-		if got != tt.want {
-			t.Errorf("int32sToString(%v) = %q, want %q", tt.input, got, tt.want)
-		}
 	}
 }
 

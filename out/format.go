@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"text/tabwriter"
@@ -205,7 +206,7 @@ func (t *FormattedTable) flushJSON() {
 		m := make(map[string]any, len(t.jsonKeys))
 		for j, key := range t.jsonKeys {
 			if j < len(row) {
-				m[key] = row[j]
+				m[key] = jsonCell(row[j])
 			}
 		}
 		data = append(data, m)
@@ -245,29 +246,69 @@ func AwkRow(values ...any) {
 // that is Unknown, nil, or prints as "" is "-", so a script can count on every
 // column being there.
 func awkCell(v any) string {
-	switch v := v.(type) {
-	case nil, unknown:
-		return "-"
-	case string:
-		if v == "" {
-			return "-"
-		}
-		return v
-	}
-	if s := fmt.Sprint(v); s != "" {
+	if s, ok := cellText(v); ok && s != "" {
 		return s
 	}
 	return "-"
 }
 
-// textCell is the text of one cell: "-" for Unknown and nil, and otherwise
-// what the value prints as, an empty string included.
+// textCell is the text of one cell: "-" for Unknown, nil, and a nil pointer,
+// and otherwise what the value prints as, an empty string included.
 func textCell(v any) string {
-	switch v.(type) {
-	case nil, unknown:
-		return "-"
+	if s, ok := cellText(v); ok {
+		return s
 	}
-	return fmt.Sprint(v)
+	return "-"
+}
+
+// cellText is what v prints as in text and awk, and false when v is not a
+// value at all: Unknown, nil, or a nil pointer. A slice is its elements
+// joined by "," with no brackets, so that a replica list is one awk field,
+// and an empty slice is "". A pointer, the *string or *int64 a kmsg response
+// carries, is what it points to. A Stringer is its String, and anything else
+// prints as fmt.Sprint does.
+func cellText(v any) (string, bool) {
+	switch v := v.(type) {
+	case nil, unknown:
+		return "", false
+	case string:
+		return v, true
+	case []string:
+		return strings.Join(v, ","), true
+	case []byte:
+		return string(v), true
+	}
+	rv := reflect.ValueOf(v)
+	if rv.Kind() == reflect.Pointer && rv.IsNil() {
+		return "", false
+	}
+	if s, ok := v.(fmt.Stringer); ok {
+		return s.String(), true
+	}
+	switch rv.Kind() {
+	case reflect.Pointer:
+		return cellText(rv.Elem().Interface())
+	case reflect.Slice, reflect.Array:
+		strs := make([]string, rv.Len())
+		for i := range strs {
+			strs[i] = textCell(rv.Index(i).Interface())
+		}
+		return strings.Join(strs, ","), true
+	}
+	return fmt.Sprint(v), true
+}
+
+// jsonCell is v as JSON prints it. A nil slice is [], since a list a row
+// carries is known and empty rather than unknown; a type that marshals
+// itself is left to do so.
+func jsonCell(v any) any {
+	if _, ok := v.(json.Marshaler); ok {
+		return v
+	}
+	if rv := reflect.ValueOf(v); rv.Kind() == reflect.Slice && rv.IsNil() {
+		return []any{}
+	}
+	return v
 }
 
 // dryRunKey is the top-level JSON key a dry run carries, from both a table

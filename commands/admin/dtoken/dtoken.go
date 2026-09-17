@@ -5,7 +5,6 @@ import (
 	"cmp"
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -94,25 +93,11 @@ func createRow(resp *kmsg.CreateDelegationTokenResponse) []any {
 	}
 }
 
-// renewers is the RENEWERS cell: a comma joined list in text and awk and an
-// array in JSON. A token with no renewers of its own is renewed by its
-// owner, so that is who is listed.
-type renewers []string
-
-func (r renewers) String() string {
-	return strings.Join(r, ",")
-}
-
-func (r renewers) MarshalJSON() ([]byte, error) {
-	if r == nil {
-		r = renewers{}
-	}
-	return json.Marshal([]string(r))
-}
-
-// describeRow is one row of a describe.
+// describeRow is one row of a describe. RENEWERS is a list, comma joined in
+// text and awk and an array in JSON; a token with no renewers of its own is
+// renewed by its owner, so that is who is listed.
 func describeRow(detail *kmsg.DescribeDelegationTokenResponseTokenDetail) []any {
-	var rs renewers
+	rs := make([]string, 0, len(detail.Renewers))
 	for _, renewer := range detail.Renewers {
 		rs = append(rs, principal(renewer.PrincipalType, renewer.PrincipalName))
 	}

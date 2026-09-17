@@ -37,14 +37,14 @@ func TestDescribeRow(t *testing.T) {
 	for _, test := range []struct {
 		name     string
 		renewers []kmsg.DescribeDelegationTokenResponseTokenDetailRenewer
-		wantText string
+		want     []string
 		wantJSON string
 	}{
-		{"no renewers is the owner", nil, "User:alice", `["User:alice"]`},
+		{"no renewers is the owner", nil, []string{"User:alice"}, `["User:alice"]`},
 		{"two renewers", []kmsg.DescribeDelegationTokenResponseTokenDetailRenewer{
 			{PrincipalType: "User", PrincipalName: "bob"},
 			{PrincipalType: "User", PrincipalName: "carol"},
-		}, "User:bob,User:carol", `["User:bob","User:carol"]`},
+		}, []string{"User:bob", "User:carol"}, `["User:bob","User:carol"]`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			detail := &kmsg.DescribeDelegationTokenResponseTokenDetail{
@@ -56,8 +56,8 @@ func TestDescribeRow(t *testing.T) {
 			if len(row) != len(describeHeaders) {
 				t.Fatalf("row has %d cells, headers %d", len(row), len(describeHeaders))
 			}
-			if got := fmt.Sprint(row[6]); got != test.wantText {
-				t.Errorf("RENEWERS text = %q, want %q", got, test.wantText)
+			if got, _ := row[6].([]string); !slices.Equal(got, test.want) {
+				t.Errorf("RENEWERS = %v, want %v", row[6], test.want)
 			}
 			raw, err := json.Marshal(row[6])
 			if err != nil {

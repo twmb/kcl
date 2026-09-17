@@ -239,22 +239,6 @@ SEE ALSO:
 	return cmd
 }
 
-// replicas is a replica list as the list table prints it: [1,2,3] in text
-// and awk, and an array in JSON, the way topic describe prints one.
-type replicas []int32
-
-func (r replicas) String() string {
-	strs := make([]string, len(r))
-	for i, v := range r {
-		strs[i] = strconv.FormatInt(int64(v), 10)
-	}
-	return "[" + strings.Join(strs, ",") + "]"
-}
-
-func (r replicas) MarshalJSON() ([]byte, error) {
-	return []byte(r.String()), nil
-}
-
 func listPartitionReassignments(cl *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "list [TOPIC:P...]",
@@ -312,9 +296,9 @@ SEE ALSO:
 			type row struct {
 				topic     string
 				partition int32
-				replicas  replicas
-				adding    replicas
-				removing  replicas
+				replicas  []int32
+				adding    []int32
+				removing  []int32
 			}
 			var rows []row
 			for _, topic := range resp.Topics {

@@ -7,7 +7,6 @@ import (
 	"slices"
 	"sort"
 	"strconv"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -313,7 +312,7 @@ func Describe(cl *client.Client, opts DescribeOpts, topics []string) error {
 		}
 		return []any{
 			topic, p.Partition, leader, epoch,
-			int32sToString(p.Replicas), int32sToString(p.ISR), int32sToString(p.OfflineReplicas),
+			orEmpty(p.Replicas), orEmpty(p.ISR), orEmpty(p.OfflineReplicas),
 			start, end, stable, errStr,
 		}
 	}
@@ -378,9 +377,9 @@ func Describe(cl *client.Client, opts DescribeOpts, topics []string) error {
 						Partition:       p.Partition,
 						Leader:          row[2],
 						LeaderEpoch:     row[3],
-						Replicas:        orEmpty(p.Replicas),
-						ISR:             orEmpty(p.ISR),
-						OfflineReplicas: orEmpty(p.OfflineReplicas),
+						Replicas:        row[4].([]int32),
+						ISR:             row[5].([]int32),
+						OfflineReplicas: row[6].([]int32),
 						StartOffset:     row[7],
 						EndOffset:       row[8],
 						StableOffset:    row[9],
@@ -564,14 +563,6 @@ func fetchTopicConfigs(ctx context.Context, cl kmsg.Requestor, topics []string) 
 		result[r.ResourceName] = r.Configs
 	}
 	return result, failed, nil
-}
-
-func int32sToString(vals []int32) string {
-	strs := make([]string, len(vals))
-	for i, v := range vals {
-		strs[i] = strconv.FormatInt(int64(v), 10)
-	}
-	return "[" + strings.Join(strs, ",") + "]"
 }
 
 func strval(s *string) string {

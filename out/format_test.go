@@ -335,6 +335,18 @@ func TestCellRules(t *testing.T) {
 		{"zero", 0, "0", "0", "0"},
 		{"false", false, "false", "false", "false"},
 		{"int64", int64(-1), "-1", "-1", "-1"},
+		{"int32 slice", []int32{0, 1, 2}, "0,1,2", "0,1,2", "[0,1,2]"},
+		{"int64 slice", []int64{5}, "5", "5", "[5]"},
+		{"string slice", []string{"a", "b"}, "a,b", "a,b", `["a","b"]`},
+		{"any slice", []any{"a", 1, nil}, "a,1,-", "a,1,-", `["a",1,null]`},
+		{"empty slice", []int32{}, "", "-", "[]"},
+		{"nil string pointer", (*string)(nil), "-", "-", "null"},
+		{"nil int64 pointer", (*int64)(nil), "-", "-", "null"},
+		{"string pointer", ptr("x"), "x", "x", `"x"`},
+		{"int64 pointer", ptr(int64(7)), "7", "7", "7"},
+		{"empty string pointer", ptr(""), "", "-", `""`},
+		{"bytes", []byte("raw"), "raw", "raw", `"cmF3"`},
+		{"stringer", stringer("s"), "s", "s", `"s"`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if got := textCell(test.cell); got != test.text {
@@ -351,6 +363,36 @@ func TestCellRules(t *testing.T) {
 				t.Errorf("json = %s, want %s", raw, test.jsonText)
 			}
 		})
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
+
+type stringer string
+
+func (s stringer) String() string { return string(s) }
+
+// TestSliceInTable pins that a list cell is one awk field with no brackets,
+// the same in text, and an array in JSON, with a nil slice printed as [].
+func TestSliceInTable(t *testing.T) {
+	rows := func(format string) string {
+		return captureStdout(func() {
+			table := NewFormattedTable(format, "topic.describe", 1, "partitions", "PARTITION", "REPLICAS", "ISR", "OFFLINE-REPLICAS", "NIL")
+			table.Row(0, []int32{0, 1, 2}, []int32{1}, []int32{}, []int32(nil))
+			table.Flush()
+		})
+	}
+	if got, exp := rows("awk"), "0\t0,1,2\t1\t-\t-\n"; got != exp {
+		t.Errorf("awk = %q, want %q", got, exp)
+	}
+	if got := rows("text"); !strings.Contains(got, "0          0,1,2     1") || strings.Contains(got, "[") {
+		t.Errorf("text = %q", got)
+	}
+	got := rows("json")
+	for _, want := range []string{`"replicas":[0,1,2]`, `"isr":[1]`, `"offline_replicas":[]`, `"nil":[]`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("json = %s, want %s", got, want)
+		}
 	}
 }
 
