@@ -57,7 +57,7 @@ The information printed:
   PRODUCER-ID          The producer ID of the producer
   PRODUCER-EPOCH       The producer epoch of the producer
   LAST-SEQUENCE        The last sequence number the producer produced
-  LAST-TIMESTAMP       The last timestamp the producer produced
+  LAST-TIMESTAMP       The last timestamp the producer produced, UTC (milliseconds in json)
   COORDINATOR-EPOCH    The epoch of the transactional coordinator for this last produce
   TXN-START-OFFSET     The first offset of the transaction
   ERROR                Why a partition could not be described, else empty
@@ -261,8 +261,9 @@ This command describes the state of one or more transactions, including
 the producer ID, epoch, timeout, and the topics/partitions involved. Rows
 are sorted by transactional ID.
 
-TOPICS is the partitions in the transaction: foo:0,1;bar:2 in text and awk,
-and an array of {topic, partitions} in JSON.
+START-TIMESTAMP is when the transaction began, in UTC (milliseconds in
+json). TOPICS is the partitions in the transaction: foo:0,1;bar:2 in text
+and awk, and an array of {topic, partitions} in JSON.
 
 EXAMPLES:
   kcl txn describe my-app-txn other-txn
@@ -349,12 +350,13 @@ func (ts txnTopics) MarshalJSON() ([]byte, error) {
 	return json.Marshal(ts.sorted())
 }
 
-// millis is a unix millisecond timestamp. Text and awk get the UTC time,
-// JSON gets the milliseconds themselves.
+// millis is a unix millisecond timestamp. Text and awk get the UTC time in
+// RFC 3339, one word, so that it is one awk field; JSON gets the
+// milliseconds themselves.
 type millis int64
 
 func (m millis) String() string {
-	return time.Unix(0, int64(m)*1e6).UTC().Format("2006-01-02 15:04:05.999")
+	return time.Unix(0, int64(m)*1e6).UTC().Format("2006-01-02T15:04:05.000Z")
 }
 
 func (m millis) MarshalJSON() ([]byte, error) {

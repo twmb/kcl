@@ -144,8 +144,8 @@ type, the client uses "User", which is the only type that exists in Kafka's
 SimpleAuthorizer.
 
 The token prints as one row: PRINCIPAL ISSUED EXPIRY MAX-AGE TOKEN-ID HMAC,
-the HMAC in base64. The token ID and HMAC are the username and password for
-SCRAM authentication with the token.
+the times in UTC and the HMAC in base64. The token ID and HMAC are the
+username and password for SCRAM authentication with the token.
 
 EXAMPLES:
   kcl dtoken create -r admin1 -r User:admin2
@@ -296,9 +296,9 @@ func describeTokensCommand(cl *client.Client) *cobra.Command {
 		Long: `Describe delegation tokens (Kafka 1.1.0+).
 
 This prints every token, or with --owner the tokens those owners created.
-Each row is PRINCIPAL ISSUED EXPIRY MAX-AGE TOKEN-ID HMAC RENEWERS, the HMAC
-in base64 and the renewers comma joined (an array in JSON). Rows are sorted
-by principal and then token ID.
+Each row is PRINCIPAL ISSUED EXPIRY MAX-AGE TOKEN-ID HMAC RENEWERS, the times
+in UTC, the HMAC in base64, and the renewers comma joined (an array in
+JSON). Rows are sorted by principal and then token ID.
 
 EXAMPLES:
   kcl dtoken describe                  # every token
@@ -350,8 +350,8 @@ SEE ALSO:
 	return cmd
 }
 
+// millisToStr is a unix millisecond timestamp as the UTC time in RFC 3339,
+// one word, so that it is one awk field.
 func millisToStr(millis int64) string {
-	return time.Unix(millis/1000, 0).
-		Add(time.Duration(millis%1000) * time.Millisecond).
-		Format("2006-01-02 15:04:05.999")
+	return time.UnixMilli(millis).UTC().Format("2006-01-02T15:04:05.000Z")
 }
