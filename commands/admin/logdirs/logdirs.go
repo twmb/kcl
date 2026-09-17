@@ -2,12 +2,14 @@ package logdirs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
@@ -50,9 +52,8 @@ func humanSize(bytes int64) string {
 // --human-readable was used. A broker that does not report a size sends -1,
 // which we print as a dash rather than as a number that looks like a size.
 //
-// The plain form is the number itself, so that JSON gets a JSON number.
-// -H is a display choice you asked for, and its KB and MB reach JSON as the
-// strings they are.
+// -H is a display choice for text: JSON and awk always get the number, so
+// that a size a script reads never changes type with a flag.
 func formatSize(bytes int64, human bool) any {
 	if bytes < 0 {
 		return out.Unknown
@@ -63,13 +64,35 @@ func formatSize(bytes int64, human bool) any {
 	return bytes
 }
 
+// errorCell is the ERROR cell for err: a Kafka error's name, or the text of
+// any other error, such as a broker that could not be reached.
+func errorCell(err error) string {
+	var ke *kerr.Error
+	if errors.As(err, &ke) {
+		return ke.Message
+	}
+	return err.Error()
+}
+
+// The columns of a describe: one row per partition directory, and under
+// --aggregate-into one row per broker, dir, or topic.
+var (
+	describeHeaders  = []string{"BROKER", "DIR", "TOPIC", "PARTITION", "SIZE", "OFFSET-LAG", "IS-FUTURE", "TOTAL", "USABLE", "CORDONED", "ERROR"}
+	aggregateHeaders = map[string][]string{
+		"broker": {"BROKER", "SIZE"},
+		"dir":    {"DIR", "SIZE"},
+		"topic":  {"TOPIC", "SIZE"},
+	}
+	alterHeaders = []string{"TOPIC", "PARTITION", "ERROR", "MESSAGE"}
+)
+
 func describeCommand(cl *client.Client) *cobra.Command {
 	var broker int32
 	var humanReadable bool
 	var sortBySize bool
 	var aggregateInto string
 	cmd := &cobra.Command{
-		Use:     "describe",
+		Use:     "describe [TOPIC:P...]",
 		Aliases: []string{"d"},
 		Short:   "Describe log directories for topic partitions.",
 		Long: `Describe log directories for topic partitions.
@@ -97,7 +120,8 @@ TOTAL and USABLE are the size and the free space of the volume the directory
 lives on, and require Kafka 3.3+. They cover local storage only: whatever the
 directory has tiered to remote storage is not counted. CORDONED is whether the
 broker has cordoned the directory, and requires Kafka 4.3+. A size a broker
-does not report prints as -.
+does not report prints as -. -H prints sizes as KB, MB, and GB in text; JSON
+and awk always carry the bytes.
 
 Input format is topic:1,2,3.
 
@@ -109,23 +133,34 @@ By default, this command will return log dirs for the partition leaders.
 If describing everything, this will merge all in sync replicas into the same
 response.
 
-You can direct this request to specific brokers with the --broker argument,
-which allows you to control whether you are asking for information about
-replicas vs. the leader.
+You can direct this request to a specific broker with --broker, which is the
+broker to ask, not the broker to describe: it lets you ask a follower about
+its replicas rather than the leader. Rows are sorted by broker, dir, topic,
+and partition, or by size with --sort-by-size. A broker or directory that
+errored is one row with ERROR set.
+
+--aggregate-into sums sizes by broker, dir, or topic and prints that one
+column and SIZE instead.
+
+EXAMPLES:
+  kcl logdirs describe foo:1,2,3 bar:3,4,5
+  kcl logdirs describe foo
+  kcl logdirs describe                        # describes all
+  kcl logdirs describe --aggregate-into topic # bytes per topic
+
+SEE ALSO:
+  kcl logdirs alter    move replicas between directories
 `,
 
-		Example: `kcl logdirs describe foo:1,2,3 bar:3,4,5
-
-kcl logdirs describe foo
-
-kcl logdirs describe   # describes all`,
-
 		RunE: func(_ *cobra.Command, topics []string) error {
+			if aggregateInto != "" && aggregateHeaders[aggregateInto] == nil {
+				return out.Errf(out.ExitUsage, "--aggregate-into must be broker, dir, or topic")
+			}
 			var req kmsg.DescribeLogDirsRequest
 			if topics != nil {
 				tps, err := flagutil.ParseTopicPartitions(topics)
 				if err != nil {
-					return fmt.Errorf("improper topic partitions format on: %v", err)
+					return out.Errf(out.ExitUsage, "improper topic partitions format on: %v", err)
 				}
 
 				// For any topic that has no partitions
@@ -162,7 +197,13 @@ kcl logdirs describe   # describes all`,
 				}
 			}
 
-			kresps := cl.Client().RequestSharded(context.Background(), &req)
+			var kresps []kgo.ResponseShard
+			if broker >= 0 {
+				kresp, err := cl.Client().Broker(int(broker)).Request(context.Background(), &req)
+				kresps = []kgo.ResponseShard{{Meta: kgo.BrokerMetadata{NodeID: broker}, Resp: kresp, Err: err}}
+			} else {
+				kresps = cl.Client().RequestSharded(context.Background(), &req)
+			}
 
 			// total, usable, and cordoned describe the whole directory
 			// rather than the partition, so every row in a directory
@@ -189,8 +230,8 @@ kcl logdirs describe   # describes all`,
 				}
 				resp := kresp.Resp.(*kmsg.DescribeLogDirsResponse)
 				for _, dir := range resp.Dirs {
-					if err := kerr.ErrorForCode(dir.ErrorCode); err != nil {
-						rows = append(rows, logdirRow{broker: kresp.Meta.NodeID, dir: dir.Dir, err: err})
+					if dir.ErrorCode != 0 {
+						rows = append(rows, logdirRow{broker: kresp.Meta.NodeID, dir: dir.Dir, err: kerr.TypedErrorForCode(dir.ErrorCode)})
 						continue
 					}
 					for _, topic := range dir.Topics {
@@ -229,6 +270,9 @@ kcl logdirs describe   # describes all`,
 				})
 			}
 
+			// -H is for people; a script always gets the bytes.
+			human := humanReadable && cl.Format() == out.FormatText
+
 			// Aggregate mode: sum sizes by broker, dir, or topic.
 			if aggregateInto != "" {
 				type aggEntry struct {
@@ -248,8 +292,6 @@ kcl logdirs describe   # describes all`,
 						key = fmt.Sprintf("%d:%s", r.broker, r.dir)
 					case "topic":
 						key = r.topic
-					default:
-						return out.Errf(out.ExitUsage, "--aggregate-into must be broker, dir, or topic")
 					}
 					agg[key] += r.size
 				}
@@ -263,35 +305,39 @@ kcl logdirs describe   # describes all`,
 					}
 					return entries[i].key < entries[j].key
 				})
-				header := strings.ToUpper(aggregateInto)
-				aggTable := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "dirs",
-					header, "SIZE")
+				aggTable := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "dirs", aggregateHeaders[aggregateInto]...)
 				for _, e := range entries {
-					aggTable.Row(e.key, formatSize(e.size, humanReadable))
+					aggTable.Row(e.key, formatSize(e.size, human))
 				}
 				return aggTable.Flush()
 			}
 
-			// TOTAL, USABLE, and CORDONED are appended rather than slotted
-			// next to SIZE so that an awk script keeps the columns it
-			// already indexes.
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "dirs",
-				"BROKER", "ERR", "DIR", "TOPIC", "PARTITION", "SIZE", "OFFSET-LAG", "IS-FUTURE", "TOTAL", "USABLE", "CORDONED")
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "dirs", describeHeaders...).ResultColumns()
 			for _, r := range rows {
 				if r.err != nil {
-					table.Row(r.broker, r.err, r.dir, "", "", "", "", "", "", "", "")
+					var dir any = out.Unknown
+					if r.dir != "" {
+						dir = r.dir
+					}
+					table.Row(r.broker, dir, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, errorCell(r.err))
 					continue
 				}
-				table.Row(r.broker, "", r.dir, r.topic, r.partition,
-					formatSize(r.size, humanReadable), r.offsetLag, r.isFuture,
-					formatSize(r.total, humanReadable), formatSize(r.usable, humanReadable), r.cordoned)
+				table.Row(r.broker, r.dir, r.topic, r.partition,
+					formatSize(r.size, human), r.offsetLag, r.isFuture,
+					formatSize(r.total, human), formatSize(r.usable, human), r.cordoned, "")
 			}
 			return table.Flush()
 		},
 	}
+	out.ColumnsFunc(cmd, func() []string {
+		if h := aggregateHeaders[aggregateInto]; h != nil {
+			return h
+		}
+		return describeHeaders
+	})
 
 	cmd.Flags().Int32VarP(&broker, "broker", "b", -1, "a specific broker to direct the request to")
-	cmd.Flags().BoolVarP(&humanReadable, "human-readable", "H", false, "print sizes in human-readable format (KB, MB, GB)")
+	cmd.Flags().BoolVarP(&humanReadable, "human-readable", "H", false, "print sizes as KB, MB, and GB in text")
 	cmd.Flags().BoolVar(&sortBySize, "sort-by-size", false, "sort output by partition size (largest first)")
 	cmd.Flags().StringVar(&aggregateInto, "aggregate-into", "", "aggregate sizes by dimension (broker, dir, topic)")
 	return cmd
@@ -300,7 +346,7 @@ kcl logdirs describe   # describes all`,
 func alterReplicasCommand(cl *client.Client) *cobra.Command {
 	var broker int32
 	cmd := &cobra.Command{
-		Use:   "alter",
+		Use:   "alter TOPIC:P=DIR...",
 		Short: "Move topic replicas to a destination directory.",
 		Long: `Move topic replicas to a destination directory.
 
@@ -314,9 +360,15 @@ The input syntax is topic:1,2,3=/destination/directory.
 By default, this command will alter log dirs for the partition leaders.
 You can direct this request to specific brokers with the --broker argument,
 which allows you to alter replicas.
-`,
 
-		Example: `kcl logdirs alter foo:1,2,3=/dir bar:6=/dir2 baz:9=/dir`,
+The result prints one row per partition with ERROR and MESSAGE.
+
+EXAMPLES:
+  kcl logdirs alter foo:1,2,3=/dir bar:6=/dir2 baz:9=/dir
+
+SEE ALSO:
+  kcl logdirs describe    describe log directories
+`,
 
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, topics []string) error {
@@ -324,11 +376,11 @@ which allows you to alter replicas.
 			for _, topic := range topics {
 				parts := strings.Split(topic, "=")
 				if len(parts) != 2 {
-					return fmt.Errorf("improper format for dest-dir = split (expected two strings after split, got %d)", len(parts))
+					return out.Errf(out.ExitUsage, "improper format %q: want TOPIC:P=DIR", topic)
 				}
 				tps, err := flagutil.ParseTopicPartitions([]string{parts[0]})
 				if err != nil {
-					return fmt.Errorf("improper topic partitions format on %q: %v", parts[0], err)
+					return out.Errf(out.ExitUsage, "improper topic partitions format on %q: %v", parts[0], err)
 				}
 				dest := parts[1]
 				existing := dests[dest]
@@ -366,20 +418,37 @@ which allows you to alter replicas.
 			}
 
 			resp := kresp.(*kmsg.AlterReplicaLogDirsResponse)
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
-				"TOPIC", "PARTITION", "ERROR")
+			type row struct {
+				topic     string
+				partition int32
+				err       string
+			}
+			var rows []row
 			for _, topic := range resp.Topics {
 				for _, partition := range topic.Partitions {
-					msg := ""
-					if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
-						msg = err.Error()
+					var errName string
+					if partition.ErrorCode != 0 {
+						errName = kerr.TypedErrorForCode(partition.ErrorCode).Message
 					}
-					table.Row(topic.Topic, partition.Partition, msg)
+					rows = append(rows, row{topic.Topic, partition.Partition, errName})
 				}
+			}
+			sort.Slice(rows, func(i, j int) bool {
+				if rows[i].topic != rows[j].topic {
+					return rows[i].topic < rows[j].topic
+				}
+				return rows[i].partition < rows[j].partition
+			})
+			// The response carries no message, so MESSAGE is always
+			// empty; it is there so that every mutation reads alike.
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results", alterHeaders...).ResultColumns()
+			for _, r := range rows {
+				table.Row(r.topic, r.partition, r.err, "")
 			}
 			return table.Flush()
 		},
 	}
+	out.Columns(cmd, alterHeaders...)
 	cmd.Flags().Int32VarP(&broker, "broker", "b", -1, "a specific broker to direct the request to")
 	return cmd
 }
