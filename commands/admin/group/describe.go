@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,6 +28,7 @@ func describeCommand(cl *client.Client) *cobra.Command {
 		regex               bool
 		lagExpr             string
 		by                  string
+		instanceIDs         bool
 	)
 
 	cmd := &cobra.Command{
@@ -45,8 +47,16 @@ Use --section to show only a specific part:
   --section lag       per-partition committed, log start, and log end offsets, and lag
   --section members   member assignments
 
-In awk format, every lag row begins with the group it belongs to, so rows
-from several groups can be told apart.
+In awk format, every row begins with the group it belongs to, so rows from
+several groups can be told apart.
+
+Use --instance-ids to show each member's group instance id (a static
+member's group.instance.id) in an INSTANCE-ID column after HOST, on the lag
+rows and the members rows. awk and json always carry the column, empty
+without the flag.
+
+The members section has the same columns for both protocols; MEMBER-EPOCH
+and TARGET-ASSIGNMENT are empty for a classic group, which has neither.
 
 Use --lag to keep only the rows whose lag matches: '>0' for the rows that
 are behind, '>=1000' or '1000' for those at least a thousand behind,
@@ -59,12 +69,12 @@ members whole, and TOTAL-LAG stays the group's full total.
 Use --by to roll the lag section up. Each view has its own columns, and
 --lag then filters at that grain:
   --by partition   one row per partition (the default)
-                   TOPIC PARTITION CURRENT-OFFSET LOG-START-OFFSET LOG-END-OFFSET LAG MEMBER-ID CLIENT-ID HOST
+                   TOPIC PARTITION CURRENT-OFFSET LOG-START-OFFSET LOG-END-OFFSET LAG MEMBER-ID CLIENT-ID HOST INSTANCE-ID
   --by topic       one row per topic
                    TOPIC PARTITIONS LAG
   --by member      one row per member; partitions no member owns share a
                    row with an empty MEMBER-ID
-                   MEMBER-ID PARTITIONS LAG CLIENT-ID HOST
+                   MEMBER-ID PARTITIONS LAG CLIENT-ID HOST INSTANCE-ID
   --by group       one table with a row per group, across every group
                    GROUP STATE MEMBERS PARTITIONS LAG
 
@@ -85,6 +95,7 @@ EXAMPLES:
   kcl group describe g --by member            # lag per member of g
   kcl group describe g --by topic             # lag per topic of g
   kcl group describe --consumer-protocol      # KIP-848 groups
+  kcl group describe g --instance-ids         # with each member's group.instance.id
 
 SEE ALSO:
   kcl group list       list all groups
@@ -98,7 +109,7 @@ SEE ALSO:
 			if err := validateBy(by, section); err != nil {
 				return err
 			}
-			opts := describeOpts{section: section, by: by}
+			opts := describeOpts{section: section, by: by, instanceIDs: instanceIDs}
 			if by == "group" {
 				opts.section = "lag"
 			}
@@ -173,6 +184,9 @@ SEE ALSO:
 			return nil
 		},
 	}
+	out.ColumnsFunc(cmd, func() []string {
+		return awkHeaders(describeOpts{section: section, by: by})
+	})
 
 	cmd.Flags().BoolVar(&readCommitted, "committed", false, "use committed (read_committed) offsets for lag computation instead of latest")
 	cmd.Flags().BoolVar(&useConsumerDescribe, "consumer-protocol", false, "use ConsumerGroupDescribe API for new consumer group protocol (KIP-848, Kafka 4.0+)")
@@ -180,16 +194,39 @@ SEE ALSO:
 	cmd.Flags().BoolVarP(&regex, "regex", "r", false, "treat group arguments as regular expressions")
 	cmd.Flags().StringVar(&lagExpr, "lag", "", "keep only rows whose lag matches (>N, >=N, <N, <=N, =N, or N for >=N); a group with none left is dropped")
 	cmd.Flags().StringVar(&by, "by", "partition", "roll the lag section up by partition, topic, member, or group")
+	cmd.Flags().BoolVar(&instanceIDs, "instance-ids", false, "show each member's group instance id in an INSTANCE-ID column")
 
 	return cmd
 }
 
 // describeOpts are the flags that shape what printGroups prints.
 type describeOpts struct {
-	section string
-	by      string
-	lag     *lagFilter // nil when --lag is not set
+	section     string
+	by          string
+	lag         *lagFilter // nil when --lag is not set
+	instanceIDs bool
 }
+
+// awkHeaders is the one row shape the flags select in awk: the --by group
+// table, else the --section, lag by default, every row led by its group.
+func awkHeaders(opts describeOpts) []string {
+	if opts.by == "group" {
+		return groupViewHeaders
+	}
+	switch opts.section {
+	case "summary":
+		return summaryHeaders
+	case "members":
+		return append([]string{"GROUP"}, memberHeaders...)
+	}
+	return append([]string{"GROUP"}, lagHeaders(opts.by)...)
+}
+
+var (
+	summaryHeaders   = []string{"GROUP", "COORDINATOR", "STATE", "BALANCER", "MEMBERS", "TOTAL-LAG", "ERROR"}
+	memberHeaders    = []string{"MEMBER-ID", "CLIENT-ID", "HOST", "INSTANCE-ID", "MEMBER-EPOCH", "SUBSCRIBED-TOPICS", "ASSIGNMENT", "TARGET-ASSIGNMENT"}
+	groupViewHeaders = []string{"GROUP", "STATE", "MEMBERS", "PARTITIONS", "LAG"}
+)
 
 // validateBy returns a usage error if by is not a view, or if it is a view
 // that reshapes the lag section while section asks for another one.
@@ -292,45 +329,25 @@ func classicPrintGroup(group describedGroup, fetched, starts, ends map[string]ma
 	}
 
 	pg := printGroup{
-		group:         group.Group,
-		coordinator:   group.Broker.NodeID,
-		state:         group.State,
-		balancer:      group.Protocol,
-		err:           describeError(group.ErrorCode, group.ErrorMessage),
-		nMembers:      len(group.Members),
-		rows:          buildRows(members, fetched, starts, ends),
-		memberHeaders: []string{"MEMBER-ID", "CLIENT-ID", "HOST", "ASSIGNMENT"},
-		memberJSON:    make([]map[string]any, 0, len(group.Members)),
+		group:       group.Group,
+		coordinator: group.Broker.NodeID,
+		state:       group.State,
+		balancer:    group.Protocol,
+		err:         describeError(group.ErrorCode, group.ErrorMessage),
+		rows:        buildRows(members, fetched, starts, ends),
+		members:     make([]describeMember, 0, len(group.Members)),
 	}
-	for _, member := range group.Members {
-		host := member.ClientHost
-		if member.InstanceID != nil {
-			host += " (instance=" + *member.InstanceID + ")"
-		}
-		var parts []string
-		var assignedTopics []string
-		for _, topic := range member.MemberAssignment.Topics {
-			ps := make([]string, len(topic.Partitions))
-			for i, p := range topic.Partitions {
-				ps[i] = fmt.Sprintf("%d", p)
-			}
-			parts = append(parts, topic.Topic+":"+strings.Join(ps, ","))
-			assignedTopics = append(assignedTopics, topic.Topic)
-		}
-		row := []any{member.MemberID, member.ClientID, host, strings.Join(parts, " ")}
-		pg.memberRows = append(pg.memberRows, row)
-		pg.awkMemberRows = append(pg.awkMemberRows, row)
-
-		m := map[string]any{
-			"member_id":       member.MemberID,
-			"client_id":       member.ClientID,
-			"host":            member.ClientHost,
-			"assigned_topics": assignedTopics,
-		}
-		if member.InstanceID != nil {
-			m["instance_id"] = *member.InstanceID
-		}
-		pg.memberJSON = append(pg.memberJSON, m)
+	for i, member := range group.Members {
+		pg.members = append(pg.members, describeMember{
+			memberID:   member.MemberID,
+			instanceID: member.InstanceID,
+			clientID:   member.ClientID,
+			host:       member.ClientHost,
+			epoch:      out.Unknown,
+			subscribed: member.MemberMetadata.Topics,
+			assignment: formatAssigned(members[i].assigned),
+			target:     out.Unknown,
+		})
 	}
 	return pg
 }
@@ -421,51 +438,26 @@ func describeConsumerGroups(cl *client.Client, groups []string, readCommitted bo
 		}
 
 		pg := printGroup{
-			group:         g.Group,
-			coordinator:   gi.broker,
-			state:         g.State,
-			balancer:      g.AssignorName,
-			err:           describeError(g.ErrorCode, g.ErrorMessage),
-			nMembers:      len(g.Members),
-			rows:          buildRows(members, fetchedOffsets[g.Group], starts, ends),
-			memberHeaders: []string{"MEMBER-ID", "CLIENT-ID", "HOST", "MEMBER-EPOCH", "SUBSCRIBED-TOPICS", "ASSIGNMENT", "TARGET-ASSIGNMENT"},
-			memberJSON:    make([]map[string]any, 0, len(g.Members)),
+			group:       g.Group,
+			coordinator: gi.broker,
+			state:       g.State,
+			balancer:    g.AssignorName,
+			err:         describeError(g.ErrorCode, g.ErrorMessage),
+			rows:        buildRows(members, fetchedOffsets[g.Group], starts, ends),
+			members:     make([]describeMember, 0, len(g.Members)),
 		}
 		for _, member := range g.Members {
-			var extras []string
-			if member.InstanceID != nil {
-				extras = append(extras, "instance="+*member.InstanceID)
-			}
-			if member.RackID != nil {
-				extras = append(extras, "rack="+*member.RackID)
-			}
-			host := member.ClientHost
-			if len(extras) > 0 {
-				host += " (" + strings.Join(extras, ",") + ")"
-			}
-			row := []any{
-				member.MemberID,
-				member.ClientID,
-				host,
-				member.MemberEpoch,
-				strings.Join(member.SubscribedTopics, ","),
-				formatAssignment(member.Assignment),
-				formatAssignment(member.TargetAssignment),
-			}
-			pg.memberRows = append(pg.memberRows, row)
-			pg.awkMemberRows = append(pg.awkMemberRows, append([]any{g.Group}, row...))
-
-			m := map[string]any{
-				"member_id":    member.MemberID,
-				"client_id":    member.ClientID,
-				"host":         member.ClientHost,
-				"member_epoch": member.MemberEpoch,
-				"assignment":   formatAssignment(member.Assignment),
-			}
-			if member.InstanceID != nil {
-				m["instance_id"] = *member.InstanceID
-			}
-			pg.memberJSON = append(pg.memberJSON, m)
+			pg.members = append(pg.members, describeMember{
+				memberID:   member.MemberID,
+				instanceID: member.InstanceID,
+				clientID:   member.ClientID,
+				host:       member.ClientHost,
+				rack:       member.RackID,
+				epoch:      member.MemberEpoch,
+				subscribed: member.SubscribedTopics,
+				assignment: formatAssignment(member.Assignment),
+				target:     formatAssignment(member.TargetAssignment),
+			})
 		}
 		printed = append(printed, pg)
 	}
@@ -538,16 +530,32 @@ func nameAssignedTopics(cl *client.Client, assignments []*kmsg.Assignment) {
 }
 
 func formatAssignment(a kmsg.Assignment) string {
-	var parts []string
+	assigned := make(map[string][]int32, len(a.TopicPartitions))
 	for _, tp := range a.TopicPartitions {
 		name := assignmentTopic(tp)
-		ps := make([]string, len(tp.Partitions))
-		for i, p := range tp.Partitions {
-			ps[i] = fmt.Sprintf("%d", p)
-		}
-		parts = append(parts, name+":"+strings.Join(ps, ","))
+		assigned[name] = append(assigned[name], tp.Partitions...)
 	}
-	return strings.Join(parts, " ")
+	return formatAssigned(assigned)
+}
+
+// formatAssigned is the partitions a member owns as one field, "t:0,1;u:2",
+// topics sorted and partitions ascending. Nothing owned is "".
+func formatAssigned(assigned map[string][]int32) string {
+	topics := make([]string, 0, len(assigned))
+	for topic := range assigned {
+		topics = append(topics, topic)
+	}
+	sort.Strings(topics)
+	var parts []string
+	for _, topic := range topics {
+		ps := make([]string, len(assigned[topic]))
+		sort.Slice(assigned[topic], func(i, j int) bool { return assigned[topic][i] < assigned[topic][j] })
+		for i, p := range assigned[topic] {
+			ps[i] = strconv.Itoa(int(p))
+		}
+		parts = append(parts, topic+":"+strings.Join(ps, ","))
+	}
+	return strings.Join(parts, ";")
 }
 
 func listGroupsByType(cl *client.Client, types []string) ([]string, error) {
@@ -849,26 +857,76 @@ func buildRows(members []rowMember, fetched, starts, ends map[string]map[int32]o
 }
 
 // printGroup is one described group as the printer sees it, from either
-// describe API. The members section differs between the two APIs, so each
-// hands over its member rows already shaped, per format.
+// describe API.
 type printGroup struct {
 	group       string
 	coordinator int32
 	state       string
 	balancer    string
 	err         string // why the broker could not describe the group, or ""
-	nMembers    int
 	rows        []describeRow
+	members     []describeMember
 
 	// The group's lag over every row, set by printGroups before --lag
 	// filters the rows.
 	totalLag      int64
 	totalLagValid bool
+}
 
-	memberHeaders []string
-	memberRows    [][]any
-	awkMemberRows [][]any
-	memberJSON    []map[string]any
+// describeMember is one member of the members section. The classic protocol
+// has no member epoch and no target assignment, so those are Unknown there.
+type describeMember struct {
+	memberID   string
+	instanceID *string
+	clientID   string
+	host       string
+	rack       *string
+	epoch      any // int32, or Unknown
+	subscribed []string
+	assignment string
+	target     any // string, or Unknown
+}
+
+// instanceCell is the INSTANCE-ID cell: Unknown unless --instance-ids, then
+// the id, or "" for a member without one.
+func instanceCell(opts describeOpts, id *string) any {
+	if !opts.instanceIDs {
+		return out.Unknown
+	}
+	if id == nil {
+		return ""
+	}
+	return *id
+}
+
+func (m describeMember) values(opts describeOpts) []any {
+	host := m.host
+	if m.rack != nil {
+		host += " (rack=" + *m.rack + ")"
+	}
+	return []any{m.memberID, m.clientID, host, instanceCell(opts, m.instanceID), m.epoch, strings.Join(m.subscribed, ","), m.assignment, m.target}
+}
+
+func (m describeMember) json(opts describeOpts) map[string]any {
+	subscribed := m.subscribed
+	if subscribed == nil {
+		subscribed = []string{}
+	}
+	var rack any = out.Unknown
+	if m.rack != nil {
+		rack = *m.rack
+	}
+	return map[string]any{
+		"member_id":         m.memberID,
+		"client_id":         m.clientID,
+		"host":              m.host,
+		"rack":              rack,
+		"instance_id":       instanceCell(opts, m.instanceID),
+		"member_epoch":      m.epoch,
+		"subscribed_topics": subscribed,
+		"assignment":        m.assignment,
+		"target_assignment": m.target,
+	}
 }
 
 func lagHeaders(by string) []string {
@@ -876,9 +934,9 @@ func lagHeaders(by string) []string {
 	case "topic":
 		return []string{"TOPIC", "PARTITIONS", "LAG"}
 	case "member":
-		return []string{"MEMBER-ID", "PARTITIONS", "LAG", "CLIENT-ID", "HOST"}
+		return []string{"MEMBER-ID", "PARTITIONS", "LAG", "CLIENT-ID", "HOST", "INSTANCE-ID"}
 	default:
-		return []string{"TOPIC", "PARTITION", "CURRENT-OFFSET", "LOG-START-OFFSET", "LOG-END-OFFSET", "LAG", "MEMBER-ID", "CLIENT-ID", "HOST"}
+		return []string{"TOPIC", "PARTITION", "CURRENT-OFFSET", "LOG-START-OFFSET", "LOG-END-OFFSET", "LAG", "MEMBER-ID", "CLIENT-ID", "HOST", "INSTANCE-ID"}
 	}
 }
 
@@ -896,19 +954,19 @@ func lagNum(r describeRow) any {
 	return r.lag
 }
 
-func lagValues(by string, r describeRow) []any {
-	switch by {
+func lagValues(opts describeOpts, r describeRow) []any {
+	switch opts.by {
 	case "topic":
 		return []any{r.topic, r.partitions, lagNum(r)}
 	case "member":
-		return []any{r.memberID, r.partitions, lagNum(r), r.clientID, r.host}
+		return []any{r.memberID, r.partitions, lagNum(r), r.clientID, r.host, instanceCell(opts, r.instanceID)}
 	default:
-		return []any{r.topic, r.partition, offsetNum(r.currentOffset), offsetNum(r.logStartOffset), offsetNum(r.logEndOffset), lagNum(r), r.memberID, r.clientID, r.host}
+		return []any{r.topic, r.partition, offsetNum(r.currentOffset), offsetNum(r.logStartOffset), offsetNum(r.logEndOffset), lagNum(r), r.memberID, r.clientID, r.host, instanceCell(opts, r.instanceID)}
 	}
 }
 
-func lagJSON(by string, r describeRow) map[string]any {
-	switch by {
+func lagJSON(opts describeOpts, r describeRow) map[string]any {
+	switch opts.by {
 	case "topic":
 		return map[string]any{
 			"topic":      r.topic,
@@ -917,23 +975,25 @@ func lagJSON(by string, r describeRow) map[string]any {
 		}
 	case "member":
 		return map[string]any{
-			"member_id":  r.memberID,
-			"partitions": r.partitions,
-			"lag":        lagNum(r),
-			"client_id":  r.clientID,
-			"host":       r.host,
+			"member_id":   r.memberID,
+			"partitions":  r.partitions,
+			"lag":         lagNum(r),
+			"client_id":   r.clientID,
+			"host":        r.host,
+			"instance_id": instanceCell(opts, r.instanceID),
 		}
 	default:
 		return map[string]any{
 			"topic":            r.topic,
 			"partition":        r.partition,
-			"current_offset":   r.currentOffset,
-			"log_start_offset": r.logStartOffset,
-			"log_end_offset":   r.logEndOffset,
-			"lag":              r.lag,
+			"current_offset":   offsetNum(r.currentOffset),
+			"log_start_offset": offsetNum(r.logStartOffset),
+			"log_end_offset":   offsetNum(r.logEndOffset),
+			"lag":              lagNum(r),
 			"member_id":        r.memberID,
 			"client_id":        r.clientID,
 			"host":             r.host,
+			"instance_id":      instanceCell(opts, r.instanceID),
 		}
 	}
 }
@@ -995,8 +1055,8 @@ func totalLag(rows []describeRow) (int64, bool) {
 
 // printGroups prints the described groups, in order, in the format. Text
 // prints the sections of each group under a GROUP line; awk prints the one
-// section, lag by default, with the group as the first column of every lag
-// row; JSON nests everything per group.
+// section, lag by default, with the group as the first column of every row;
+// JSON nests everything per group.
 //
 // The lag rows are shaped by --by first and filtered by --lag second, and a
 // group with no row left is dropped from every section, unless the broker
@@ -1033,20 +1093,24 @@ func printGroups(format, command string, opts describeOpts, groups []printGroup)
 	groups = kept
 
 	switch format {
-	case "json":
+	case out.FormatJSON:
 		jsonGroups := make([]map[string]any, 0, len(groups))
 		for _, g := range groups {
 			lagRows := make([]map[string]any, 0, len(g.rows))
 			for _, r := range g.rows {
-				lagRows = append(lagRows, lagJSON(opts.by, r))
+				lagRows = append(lagRows, lagJSON(opts, r))
+			}
+			members := make([]map[string]any, 0, len(g.members))
+			for _, m := range g.members {
+				members = append(members, m.json(opts))
 			}
 			jsonGroups = append(jsonGroups, map[string]any{
 				"group":       g.group,
 				"coordinator": g.coordinator,
 				"state":       g.state,
 				"balancer":    g.balancer,
-				"members":     g.memberJSON,
-				"total_lag":   g.totalLag,
+				"members":     members,
+				"total_lag":   g.totalLagNum(),
 				"lag":         lagRows,
 				"error":       g.err,
 			})
@@ -1055,30 +1119,27 @@ func printGroups(format, command string, opts describeOpts, groups []printGroup)
 			"groups": jsonGroups,
 		})
 
-	case "awk":
+	case out.FormatAWK:
 		sect := section
 		if sect == "" {
 			sect = "lag"
 		}
+		table := out.NewFormattedTable(format, command, 1, sect, awkHeaders(opts)...)
 		for _, g := range groups {
 			switch sect {
 			case "summary":
-				fmt.Printf("%s\t%d\t%s\t%s\t%d\t%d\t%s\n",
-					g.group, g.coordinator, g.state, g.balancer, g.nMembers, g.totalLag, g.err)
+				table.Row(g.summaryValues()...)
 			case "lag":
-				table := out.NewFormattedTable(format, command, 1, "lag", append([]string{"GROUP"}, lagHeaders(opts.by)...)...)
 				for _, r := range g.rows {
-					table.Row(append([]any{g.group}, lagValues(opts.by, r)...)...)
+					table.Row(append([]any{g.group}, lagValues(opts, r)...)...)
 				}
-				table.Flush()
 			case "members":
-				table := out.NewFormattedTable(format, command, 1, "members", g.memberHeaders...)
-				for _, row := range g.awkMemberRows {
-					table.Row(row...)
+				for _, m := range g.members {
+					table.Row(append([]any{g.group}, m.values(opts)...)...)
 				}
-				table.Flush()
 			}
 		}
+		table.Flush()
 
 	default: // text
 		for gi, g := range groups {
@@ -1099,27 +1160,31 @@ func printGroups(format, command string, opts describeOpts, groups []printGroup)
 				}
 				fmt.Fprintf(tw, "STATE\t%s\n", g.state)
 				fmt.Fprintf(tw, "BALANCER\t%s\n", g.balancer)
-				fmt.Fprintf(tw, "MEMBERS\t%d\n", g.nMembers)
+				fmt.Fprintf(tw, "MEMBERS\t%d\n", len(g.members))
 				if g.totalLagValid {
 					fmt.Fprintf(tw, "TOTAL-LAG\t%d\n", g.totalLag)
 				}
 				tw.Flush()
 			}
 
-			if showLag && len(g.rows) > 0 {
-				table := out.NewFormattedTable(format, command, 1, "lag", lagHeaders(opts.by)...)
+			// A section asked for by name prints its header even
+			// with no rows, so that an Empty group under --section
+			// members prints something; the default view skips an
+			// empty table.
+			if showLag && (len(g.rows) > 0 || section == "lag") {
+				rows := make([][]any, 0, len(g.rows))
 				for _, r := range g.rows {
-					table.Row(lagValues(opts.by, r)...)
+					rows = append(rows, lagValues(opts, r))
 				}
-				table.Flush()
+				printTextTable(command, lagHeaders(opts.by), rows, opts)
 			}
 
-			if showMembers && len(g.memberRows) > 0 {
-				table := out.NewFormattedTable(format, command, 1, "members", g.memberHeaders...)
-				for _, row := range g.memberRows {
-					table.Row(row...)
+			if showMembers && (len(g.members) > 0 || section == "members") {
+				rows := make([][]any, 0, len(g.members))
+				for _, m := range g.members {
+					rows = append(rows, m.values(opts))
 				}
-				table.Flush()
+				printTextTable(command, memberHeaders, rows, opts)
 			}
 
 			if gi < len(groups)-1 {
@@ -1129,13 +1194,42 @@ func printGroups(format, command string, opts describeOpts, groups []printGroup)
 	}
 }
 
+// printTextTable prints one text table, without the INSTANCE-ID column
+// unless --instance-ids asked for it.
+func printTextTable(command string, headers []string, rows [][]any, opts describeOpts) {
+	if i := slices.Index(headers, "INSTANCE-ID"); i >= 0 && !opts.instanceIDs {
+		headers = slices.Delete(slices.Clone(headers), i, i+1)
+		for j, row := range rows {
+			rows[j] = slices.Delete(row, i, i+1)
+		}
+	}
+	table := out.NewFormattedTable(out.FormatText, command, 1, "rows", headers...)
+	for _, row := range rows {
+		table.Row(row...)
+	}
+	table.Flush()
+}
+
+func (g printGroup) totalLagNum() any {
+	if !g.totalLagValid {
+		return out.Unknown
+	}
+	return g.totalLag
+}
+
+// summaryValues is the group's summary row, in summaryHeaders order.
+func (g printGroup) summaryValues() []any {
+	return []any{g.group, g.coordinator, g.state, g.balancer, len(g.members), g.totalLagNum(), g.err}
+}
+
 // printGroupView prints the --by group table: one row per group, across
 // every group, filtered by --lag on the group's total. A group the broker
 // could not describe has no row; its error goes to stderr, since the summary
 // that would carry it is not printed. When no row is left, text and awk print
 // nothing and JSON prints an empty list.
 func printGroupView(format, command string, opts describeOpts, groups []printGroup) {
-	table := out.NewFormattedTable(format, command, 1, "groups", "GROUP", "STATE", "MEMBERS", "PARTITIONS", "LAG")
+	table := out.NewFormattedTable(format, command, 1, "groups", groupViewHeaders...).
+		WithKeys(map[string]string{"MEMBERS": "member_count", "PARTITIONS": "partition_count", "LAG": "total_lag"})
 	var rows int
 	for _, g := range groups {
 		if g.err != "" {
@@ -1145,14 +1239,10 @@ func printGroupView(format, command string, opts describeOpts, groups []printGro
 		if !opts.lag.matches(g.totalLag, g.totalLagValid) {
 			continue
 		}
-		var lag any = g.totalLag
-		if !g.totalLagValid {
-			lag = out.Unknown
-		}
-		table.Row(g.group, g.state, g.nMembers, len(g.rows), lag)
+		table.Row(g.group, g.state, len(g.members), len(g.rows), g.totalLagNum())
 		rows++
 	}
-	if rows == 0 && format != "json" {
+	if rows == 0 && format != out.FormatJSON {
 		return
 	}
 	table.Flush()

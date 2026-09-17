@@ -208,6 +208,13 @@ func TestDescribeLogStartOffset(t *testing.T) {
 // speaks the KIP-848 protocol.
 func joinGroup(t *testing.T, c *kfake.Cluster, group string, consumer bool, topics ...string) {
 	t.Helper()
+	joinGroupAs(t, c, group, consumer, "", topics...)
+}
+
+// joinGroupAs is joinGroup with a group instance id, a static member, when
+// instance is not empty.
+func joinGroupAs(t *testing.T, c *kfake.Cluster, group string, consumer bool, instance string, topics ...string) {
+	t.Helper()
 	assigned := make(chan struct{})
 	var once sync.Once
 	opts := []kgo.Opt{
@@ -219,6 +226,9 @@ func joinGroup(t *testing.T, c *kfake.Cluster, group string, consumer bool, topi
 		kgo.OnPartitionsAssigned(func(context.Context, *kgo.Client, map[string][]int32) {
 			once.Do(func() { close(assigned) })
 		}),
+	}
+	if instance != "" {
+		opts = append(opts, kgo.InstanceID(instance))
 	}
 	if consumer {
 		ctx := context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true)
@@ -485,7 +495,9 @@ func TestValidateBy(t *testing.T) {
 }
 
 // TestDescribeBy pins the --by views against two groups, on both describe
-// paths. agg has a member owning both partitions of t, lag 2 and 8, and a
+// paths, and that the --by group document names its counts member_count,
+// partition_count, and total_lag rather than the default document's array
+// keys. agg has a member owning both partitions of t, lag 2 and 8, and a
 // commit on u that no member owns, lag 0; other has only a commit on u, lag
 // 4. The 848 group is the same as agg but joined with the consumer protocol.
 func TestDescribeBy(t *testing.T) {
@@ -546,7 +558,7 @@ func TestDescribeBy(t *testing.T) {
 				if owner[1] == "-" || owner[2] != "2" || owner[3] != "10" || owner[4] != "kgo" || owner[5] == "-" {
 					t.Errorf("owner row = %q, want a member with 2 partitions, lag 10, client kgo, and a host", owner)
 				}
-				if want := []string{path.group, "-", "1", "0", "-", "-"}; !slices.Equal(unowned, want) {
+				if want := []string{path.group, "-", "1", "0", "-", "-", "-"}; !slices.Equal(unowned, want) {
 					t.Errorf("unowned row = %q, want %q", unowned, want)
 				}
 			})
@@ -580,9 +592,9 @@ func TestDescribeBy(t *testing.T) {
 					Groups  []struct {
 						Group      string `json:"group"`
 						State      string `json:"state"`
-						Members    int    `json:"members"`
-						Partitions int    `json:"partitions"`
-						Lag        int64  `json:"lag"`
+						Members    int    `json:"member_count"`
+						Partitions int    `json:"partition_count"`
+						Lag        int64  `json:"total_lag"`
 					} `json:"groups"`
 				}
 				if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
@@ -641,4 +653,179 @@ func TestDescribeBy(t *testing.T) {
 			t.Errorf("err = %v, want a usage error", err)
 		}
 	})
+}
+
+// TestDescribeMembersShape pins the members section: the same columns for
+// both protocols, led by the group in awk, with MEMBER-EPOCH and
+// TARGET-ASSIGNMENT empty for a classic group, and INSTANCE-ID after HOST
+// that --instance-ids fills. Without the flag the column is null in JSON
+// and absent from text; an Empty group under --section members still
+// prints the header.
+func TestDescribeMembersShape(t *testing.T) {
+	c, cl := newTestCluster(t)
+	adm := kadm.NewClient(cl)
+	ctx := context.Background()
+
+	if _, err := adm.CreateTopic(ctx, 2, 1, nil, "t"); err != nil {
+		t.Fatal(err)
+	}
+	produceTo(t, c, "t", 3, 0, 1)
+	joinGroupAs(t, c, "static", false, "inst-1", "t")
+	joinGroup(t, c, "dyn848", true, "t")
+	commitAt(t, adm, "empty", "t", 0, 1)
+
+	for _, test := range []struct {
+		name      string
+		group     string
+		args      []string
+		epoch     string // "-" for classic, a number otherwise
+		instance  string // the INSTANCE-ID cell
+		target    string
+		wantEpoch bool
+	}{
+		{name: "classic without the flag", group: "static", epoch: "-", instance: "-", target: "-"},
+		{name: "classic with the flag", group: "static", args: []string{"--instance-ids"}, epoch: "-", instance: "inst-1", target: "-"},
+		{name: "consumer with the flag", group: "dyn848", args: []string{"--consumer-protocol", "--instance-ids"}, instance: "-", target: "t:0,1", wantEpoch: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			args := append([]string{"group", "describe", test.group, "--section", "members", "--format", "awk"}, test.args...)
+			stdout, err := runGroup(t, c, "", args...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkAwkFields(t, stdout, args...)
+			rows := awkRows(stdout)
+			if len(rows) != 1 {
+				t.Fatalf("got %d rows, want 1:\n%s", len(rows), stdout)
+			}
+			row := rows[0]
+			// GROUP MEMBER-ID CLIENT-ID HOST INSTANCE-ID MEMBER-EPOCH SUBSCRIBED-TOPICS ASSIGNMENT TARGET-ASSIGNMENT
+			if len(row) != 9 || row[0] != test.group || row[1] == "-" || row[4] != test.instance || row[6] != "t" || row[7] != "t:0,1" || row[8] != test.target {
+				t.Errorf("row = %q, want group %s, a member, instance %s, subscribed t, assignment t:0,1, target %s", row, test.group, test.instance, test.target)
+			}
+			if test.wantEpoch {
+				if _, err := strconv.Atoi(row[5]); err != nil {
+					t.Errorf("MEMBER-EPOCH = %q, want a number", row[5])
+				}
+			} else if row[5] != test.epoch {
+				t.Errorf("MEMBER-EPOCH = %q, want %q", row[5], test.epoch)
+			}
+		})
+	}
+
+	t.Run("json instance_id follows the flag", func(t *testing.T) {
+		type doc struct {
+			Groups []struct {
+				Members []map[string]any `json:"members"`
+				Lag     []map[string]any `json:"lag"`
+			} `json:"groups"`
+		}
+		for _, test := range []struct {
+			args []string
+			want any
+		}{
+			{nil, nil},
+			{[]string{"--instance-ids"}, "inst-1"},
+		} {
+			stdout, err := runGroup(t, c, "", append([]string{"group", "describe", "static", "--format", "json"}, test.args...)...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var d doc
+			if err := unmarshalJSON(stdout, &d); err != nil {
+				t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+			}
+			if len(d.Groups) != 1 || len(d.Groups[0].Members) != 1 || len(d.Groups[0].Lag) != 2 {
+				t.Fatalf("unexpected document: %s", stdout)
+			}
+			m := d.Groups[0].Members[0]
+			if v, ok := m["instance_id"]; !ok || v != test.want {
+				t.Errorf("%v: members[0].instance_id = %v (present %v), want %v", test.args, v, ok, test.want)
+			}
+			if v, ok := d.Groups[0].Lag[0]["instance_id"]; !ok || v != test.want {
+				t.Errorf("%v: lag[0].instance_id = %v (present %v), want %v", test.args, v, ok, test.want)
+			}
+			for _, key := range []string{"member_epoch", "target_assignment"} {
+				if v, ok := m[key]; !ok || v != nil {
+					t.Errorf("%v: members[0].%s = %v (present %v), want null for a classic member", test.args, key, v, ok)
+				}
+			}
+			if m["assignment"] != "t:0,1" {
+				t.Errorf("members[0].assignment = %v, want t:0,1", m["assignment"])
+			}
+		}
+	})
+
+	t.Run("text shows INSTANCE-ID only with the flag", func(t *testing.T) {
+		stdout, err := runGroup(t, c, "", "group", "describe", "static", "--section", "members")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(stdout, "INSTANCE-ID") || slices.Contains(strings.Fields(stdout), "inst-1") {
+			t.Errorf("INSTANCE-ID printed without --instance-ids:\n%s", stdout)
+		}
+		stdout, err = runGroup(t, c, "", "group", "describe", "static", "--section", "members", "--instance-ids")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(stdout, "HOST  ") || !strings.Contains(stdout, "INSTANCE-ID") || !slices.Contains(strings.Fields(stdout), "inst-1") {
+			t.Errorf("INSTANCE-ID not printed with --instance-ids:\n%s", stdout)
+		}
+	})
+
+	t.Run("empty group prints the members header", func(t *testing.T) {
+		stdout, err := runGroup(t, c, "", "group", "describe", "empty", "--section", "members")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if lines := strings.Split(strings.TrimSuffix(stdout, "\n"), "\n"); len(lines) != 1 || !strings.HasPrefix(lines[0], "MEMBER-ID") {
+			t.Errorf("want the header alone, got:\n%s", stdout)
+		}
+	})
+}
+
+// TestDescribeUnknownIsNull pins that an offset the group has not committed
+// is null in JSON rather than -1, and a dash in awk, so that no consumer
+// has to know the sentinel.
+func TestDescribeUnknownIsNull(t *testing.T) {
+	c, cl := newTestCluster(t)
+	adm := kadm.NewClient(cl)
+	if _, err := adm.CreateTopic(t.Context(), 1, 1, nil, "empty"); err != nil {
+		t.Fatal(err)
+	}
+	joinGroup(t, c, "nothing", false, "empty")
+
+	stdout, err := runGroup(t, c, "", "group", "describe", "nothing", "--format", "json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Groups []struct {
+			TotalLag any              `json:"total_lag"`
+			Lag      []map[string]any `json:"lag"`
+		} `json:"groups"`
+	}
+	if err := unmarshalJSON(stdout, &doc); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+	}
+	if len(doc.Groups) != 1 || len(doc.Groups[0].Lag) != 1 {
+		t.Fatalf("unexpected document: %s", stdout)
+	}
+	row := doc.Groups[0].Lag[0]
+	for _, key := range []string{"current_offset", "lag"} {
+		if v, ok := row[key]; !ok || v != nil {
+			t.Errorf("lag[0].%s = %v (present %v), want null", key, v, ok)
+		}
+	}
+	if doc.Groups[0].TotalLag != nil {
+		t.Errorf("total_lag = %v, want null", doc.Groups[0].TotalLag)
+	}
+
+	stdout, err = runGroup(t, c, "", "group", "describe", "nothing", "--format", "awk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows := awkRows(stdout); len(rows) != 1 || rows[0][3] != "-" || rows[0][6] != "-" {
+		t.Errorf("want CURRENT-OFFSET and LAG as dashes, got:\n%s", stdout)
+	}
 }
