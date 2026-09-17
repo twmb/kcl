@@ -55,22 +55,31 @@ member's group.instance.id) in an INSTANCE-ID column after RACK, on the lag
 rows and the members rows. awk and json always carry the column, empty
 without the flag.
 
-The members section has the same columns for both protocols; RACK,
-MEMBER-EPOCH, and TARGET-ASSIGNMENT are empty for a classic group, which
-reports none of them.
+The members section has the same columns for both protocols. A classic
+group reports no RACK, MEMBER-EPOCH, or TARGET-ASSIGNMENT, so those are
+unknown for its members: a dash in text and awk, null in json. INSTANCE-ID
+is unknown the same way without --instance-ids.
+
+A partition row ends in ERROR and MESSAGE: the error the coordinator
+answered for its committed offset, or the error its leader answered for
+its log offsets, and the command exits 1. A group the coordinator refused
+as a whole, GROUP_AUTHORIZATION_FAILED say, has no partition rows; the
+error is on its summary row instead, with STATE and MEMBERS as the broker
+described them.
 
 Use --lag to keep only the rows whose lag matches: '>0' for the rows that
 are behind, '>=1000' or '1000' for those at least a thousand behind,
 '<10', '<=10', or '=0'. A row whose lag we could not compute, printed as
-a dash, never matches. A group left with no matching rows is left out
-entirely, so describing every group with --lag '>0' lists only the
-groups that are behind. A group that survives prints its summary and
-members whole, and TOTAL-LAG stays the group's full total.
+a dash, never matches, though its error still exits 1. A group left with
+no matching rows is left out entirely, so describing every group with
+--lag '>0' lists only the groups that are behind. A group that survives
+prints its summary and members whole, and TOTAL-LAG stays the group's
+full total.
 
 Use --by to roll the lag section up. Each view has its own columns, and
 --lag then filters at that grain:
   --by partition   one row per partition (the default)
-                   TOPIC PARTITION CURRENT-OFFSET LOG-START-OFFSET LOG-END-OFFSET LAG MEMBER-ID CLIENT-ID HOST RACK INSTANCE-ID
+                   TOPIC PARTITION CURRENT-OFFSET LOG-START-OFFSET LOG-END-OFFSET LAG MEMBER-ID CLIENT-ID HOST RACK INSTANCE-ID ERROR MESSAGE
   --by topic       one row per topic
                    TOPIC PARTITIONS LAG
   --by member      one row per member; partitions no member owns share a
@@ -79,10 +88,12 @@ Use --by to roll the lag section up. Each view has its own columns, and
   --by group       one table with a row per group, across every group
                    GROUP STATE MEMBERS PARTITIONS LAG
 
-PARTITIONS is how many partitions the row rolls up. LAG is their sum, or a
-dash when none of them has a lag we could compute. --by group prints only
-that table, and --by topic, member, or group cannot be combined with
---section summary or members, which the view does not change.
+PARTITIONS is how many partitions the row rolls up. LAG is their sum over
+the partitions whose lag we could compute, or a dash when none has one; a
+rolled up row carries no ERROR, but a partition's error still exits 1.
+--by group prints only that table, and --by topic, member, or group cannot
+be combined with --section summary or members, which the view does not
+change.
 
 EXAMPLES:
   kcl group describe                          # all groups, all sections
@@ -148,10 +159,6 @@ SEE ALSO:
 			if err != nil {
 				return err
 			}
-			fetchedOffsets, err := fetchOffsets(cl, groups)
-			if err != nil {
-				return err
-			}
 			tps := make(map[string]map[int32]struct{})
 			for _, group := range described {
 				for _, member := range group.Members {
@@ -160,7 +167,7 @@ SEE ALSO:
 					}
 				}
 			}
-			starts, ends, err := listOffsets(cl, tps, fetchedOffsets, readCommitted)
+			fetched, starts, ends, err := fetchLag(cl, opts, groups, tps, readCommitted)
 			if err != nil {
 				return err
 			}
@@ -170,19 +177,9 @@ SEE ALSO:
 			})
 			var printed []printGroup
 			for _, group := range described {
-				printed = append(printed, classicPrintGroup(group, fetchedOffsets[group.Group], starts, ends))
+				printed = append(printed, classicPrintGroup(group, fetched[group.Group], starts, ends))
 			}
-			printGroups(cl.Format(), cl.Command(), opts, printed)
-
-			// A group the broker could not describe, GROUP_ID_NOT_FOUND above
-			// all, is printed with its error and is a failure, as a missing
-			// topic is for topic describe.
-			for _, d := range described {
-				if d.ErrorCode != 0 {
-					return out.ErrSilent
-				}
-			}
-			return nil
+			return printGroups(cl.Format(), cl.Command(), opts, printed)
 		},
 	}
 	out.ColumnsFunc(cmd, func() []string {
@@ -301,16 +298,23 @@ func validateSection(section string) error {
 	}
 }
 
-// describeError is the ERROR and MESSAGE of a group the broker could not
-// describe, "" and "" otherwise.
-func describeError(code int16, message *string) (string, string) {
-	if code == 0 {
-		return "", ""
+// setErrors sets the group's ERROR and MESSAGE: the describe error when the
+// broker could not describe the group, else the error the coordinator
+// answered its OffsetFetch with, else "". A group the broker described is
+// known, whatever its offsets did.
+func (g *printGroup) setErrors(code int16, message *string, offsets error) {
+	switch {
+	case code != 0:
+		g.err, g.message = out.ErrName(code), out.BrokerMessage(message)
+	case offsets != nil:
+		g.known = true
+		g.err = out.ErrCell(offsets)
+	default:
+		g.known = true
 	}
-	return out.ErrName(code), out.BrokerMessage(message)
 }
 
-func classicPrintGroup(group describedGroup, fetched, starts, ends map[string]map[int32]offset) printGroup {
+func classicPrintGroup(group describedGroup, fetched groupOffsets, starts, ends map[string]map[int32]offset) printGroup {
 	var members []rowMember
 	for _, member := range group.Members {
 		m := rowMember{
@@ -331,10 +335,12 @@ func classicPrintGroup(group describedGroup, fetched, starts, ends map[string]ma
 		coordinator: group.Broker.NodeID,
 		state:       group.State,
 		balancer:    group.Protocol,
-		rows:        buildRows(members, fetched, starts, ends),
 		members:     make([]describeMember, 0, len(group.Members)),
 	}
-	pg.err, pg.message = describeError(group.ErrorCode, group.ErrorMessage)
+	pg.setErrors(group.ErrorCode, group.ErrorMessage, fetched.err)
+	if pg.err == "" {
+		pg.rows = buildRows(members, fetched.topics, starts, ends)
+	}
 	for i, member := range group.Members {
 		pg.members = append(pg.members, describeMember{
 			memberID:   member.MemberID,
@@ -410,11 +416,7 @@ func describeConsumerGroups(cl *client.Client, groups []string, readCommitted bo
 		}
 	}
 
-	fetchedOffsets, err := fetchOffsets(cl, groups)
-	if err != nil {
-		return err
-	}
-	starts, ends, err := listOffsets(cl, tps, fetchedOffsets, readCommitted)
+	fetched, starts, ends, err := fetchLag(cl, opts, groups, tps, readCommitted)
 	if err != nil {
 		return err
 	}
@@ -448,10 +450,12 @@ func describeConsumerGroups(cl *client.Client, groups []string, readCommitted bo
 			coordinator: gi.broker,
 			state:       g.State,
 			balancer:    g.AssignorName,
-			rows:        buildRows(members, fetchedOffsets[g.Group], starts, ends),
 			members:     make([]describeMember, 0, len(g.Members)),
 		}
-		pg.err, pg.message = describeError(g.ErrorCode, g.ErrorMessage)
+		pg.setErrors(g.ErrorCode, g.ErrorMessage, fetched[g.Group].err)
+		if pg.err == "" {
+			pg.rows = buildRows(members, fetched[g.Group].topics, starts, ends)
+		}
 		for _, member := range g.Members {
 			pg.members = append(pg.members, describeMember{
 				memberID:   member.MemberID,
@@ -469,14 +473,7 @@ func describeConsumerGroups(cl *client.Client, groups []string, readCommitted bo
 		printed = append(printed, pg)
 	}
 
-	printGroups(cl.Format(), cl.Command(), opts, printed)
-
-	for _, g := range allGroups {
-		if g.group.ErrorCode != 0 {
-			return out.ErrSilent
-		}
-	}
-	return nil
+	return printGroups(cl.Format(), cl.Command(), opts, printed)
 }
 
 // assignmentTopic is the topic an assignment names, or its ID in hex when
@@ -632,10 +629,29 @@ type offset struct {
 	err error
 }
 
-// fetchOffsets fetches the committed offsets of each group, keyed by group,
-// then topic, then partition.
-func fetchOffsets(cl *client.Client, groups []string) (map[string]map[string]map[int32]offset, error) {
-	fetched := make(map[string]map[string]map[int32]offset)
+// groupOffsets is one group's committed offsets, by topic then partition,
+// or the error the coordinator answered the group as a whole with, which
+// v8 and later of OffsetFetch carry per group: GROUP_AUTHORIZATION_FAILED,
+// or NOT_COORDINATOR after the retries ran out. A request we could not
+// issue at all is the group's error too.
+type groupOffsets struct {
+	err    error
+	topics map[string]map[int32]offset
+}
+
+// fetchLag fetches what the lag rows need: every group's committed offsets,
+// and the log start and end of every partition in tps or committed to.
+func fetchLag(cl *client.Client, opts describeOpts, groups []string, tps map[string]map[int32]struct{}, readCommitted bool) (fetched map[string]groupOffsets, starts, ends map[string]map[int32]offset, err error) {
+	if fetched, err = fetchOffsets(cl, groups); err != nil {
+		return nil, nil, nil, err
+	}
+	starts, ends, err = listOffsets(cl, tps, fetched, readCommitted)
+	return fetched, starts, ends, err
+}
+
+// fetchOffsets fetches the committed offsets of each group, keyed by group.
+func fetchOffsets(cl *client.Client, groups []string) (map[string]groupOffsets, error) {
+	fetched := make(map[string]groupOffsets)
 	var failures int
 	for _, group := range groups {
 		req := kmsg.NewPtrOffsetFetchRequest()
@@ -643,17 +659,31 @@ func fetchOffsets(cl *client.Client, groups []string) (map[string]map[string]map
 		resp, err := req.RequestWith(context.Background(), cl.Client())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "unable to issue OffsetFetch for group %s: %v\n", group, err)
+			fetched[group] = groupOffsets{err: err}
 			failures++
 			continue
 		}
+		// franz-go folds a one group response into the top level; the
+		// group's own entry is checked too, for a broker that answers the
+		// batch shape with more than we asked for.
+		code := resp.ErrorCode
+		for _, g := range resp.Groups {
+			if g.Group == group && g.ErrorCode != 0 {
+				code = g.ErrorCode
+			}
+		}
+		if err := kerr.ErrorForCode(code); err != nil {
+			fetched[group] = groupOffsets{err: err}
+			continue
+		}
 
-		groupOffsets := make(map[string]map[int32]offset)
-		fetched[group] = groupOffsets
+		topics := make(map[string]map[int32]offset)
+		fetched[group] = groupOffsets{topics: topics}
 		for _, topic := range resp.Topics {
-			topicOffsets := groupOffsets[topic.Topic]
+			topicOffsets := topics[topic.Topic]
 			if topicOffsets == nil {
 				topicOffsets = make(map[int32]offset)
-				groupOffsets[topic.Topic] = topicOffsets
+				topics[topic.Topic] = topicOffsets
 			}
 			for _, partition := range topic.Partitions {
 				topicOffsets[partition.Partition] = offset{
@@ -673,9 +703,9 @@ func fetchOffsets(cl *client.Client, groups []string) (map[string]map[string]map
 // tps, the member assignments, and every partition any group has committed
 // to, which may be one no member owns any more. A ListOffsets request answers
 // one timestamp per partition, so start and end are two requests.
-func listOffsets(cl *client.Client, tps map[string]map[int32]struct{}, fetched map[string]map[string]map[int32]offset, readCommitted bool) (starts, ends map[string]map[int32]offset, err error) {
-	for _, groupOffsets := range fetched {
-		for topic, parts := range groupOffsets {
+func listOffsets(cl *client.Client, tps map[string]map[int32]struct{}, fetched map[string]groupOffsets, readCommitted bool) (starts, ends map[string]map[int32]offset, err error) {
+	for _, g := range fetched {
+		for topic, parts := range g.topics {
 			for p := range parts {
 				addPartitions(tps, topic, []int32{p})
 			}
@@ -716,25 +746,35 @@ func listOffsetsForTopicPartitions(cl *client.Client, tps map[string]map[int32]s
 
 	shards := cl.Client().RequestSharded(context.Background(), req)
 	listed := make(map[string]map[int32]offset)
+	set := func(topic string, partition int32, o offset) {
+		partOffsets := listed[topic]
+		if partOffsets == nil {
+			partOffsets = make(map[int32]offset)
+			listed[topic] = partOffsets
+		}
+		partOffsets[partition] = o
+	}
 	var failures int
 	for _, shard := range shards {
+		// A broker we could not ask answers with its error for every
+		// partition it was asked about, so each row carries it.
 		if shard.Err != nil {
 			shardFail("ListOffsets", shard, &failures)
+			for _, topic := range shard.Req.(*kmsg.ListOffsetsRequest).Topics {
+				for _, partition := range topic.Partitions {
+					set(topic.Topic, partition.Partition, offset{at: -1, err: shard.Err})
+				}
+			}
 			continue
 		}
 
 		resp := shard.Resp.(*kmsg.ListOffsetsResponse)
 		for _, topic := range resp.Topics {
-			partOffsets := listed[topic.Topic]
-			if partOffsets == nil {
-				partOffsets = make(map[int32]offset)
-				listed[topic.Topic] = partOffsets
-			}
 			for _, partition := range topic.Partitions {
-				partOffsets[partition.Partition] = offset{
+				set(topic.Topic, partition.Partition, offset{
 					at:  partition.Offset,
 					err: kerr.ErrorForCode(partition.ErrorCode),
-				}
+				})
 			}
 		}
 	}
@@ -812,13 +852,17 @@ func buildRows(members []rowMember, fetched, starts, ends map[string]map[int32]o
 		if row.err == nil {
 			row.err = end.err
 		}
+		if row.err == nil {
+			row.err = start.err
+		}
 		switch {
 		case end.at >= 0 && committed.at >= 0:
 			row.lag = end.at - committed.at
 			row.lagValid = true
-		case end.at > 0 && committed.at == -1:
+		case end.at >= 0 && committed.at == -1:
 			// Nothing is committed, so the whole log is unread: from
-			// its start when we know it, else from zero.
+			// its start when we know it, else from zero. An empty log
+			// is lag 0, known.
 			row.lag = end.at
 			row.lagValid = true
 			if start.at >= 0 {
@@ -873,7 +917,8 @@ type printGroup struct {
 	coordinator int32
 	state       string
 	balancer    string
-	err         string // why the broker could not describe the group, or ""
+	known       bool   // the broker described the group: state, balancer, and members are known
+	err         string // why the broker could not describe the group or fetch its offsets, or ""
 	message     string // the text the broker attached to err, or ""
 	rows        []describeRow
 	members     []describeMember
@@ -957,8 +1002,15 @@ func lagHeaders(by string) []string {
 	case "member":
 		return []string{"MEMBER-ID", "PARTITIONS", "LAG", "CLIENT-ID", "HOST", "RACK", "INSTANCE-ID"}
 	default:
-		return []string{"TOPIC", "PARTITION", "CURRENT-OFFSET", "LOG-START-OFFSET", "LOG-END-OFFSET", "LAG", "MEMBER-ID", "CLIENT-ID", "HOST", "RACK", "INSTANCE-ID"}
+		return []string{"TOPIC", "PARTITION", "CURRENT-OFFSET", "LOG-START-OFFSET", "LOG-END-OFFSET", "LAG", "MEMBER-ID", "CLIENT-ID", "HOST", "RACK", "INSTANCE-ID", "ERROR", "MESSAGE"}
 	}
+}
+
+// errCell is the ERROR cell of a partition row: the kerr name of the error
+// the coordinator or the leader answered, or "". Neither OffsetFetch nor
+// ListOffsets attaches a message, so MESSAGE is "".
+func (r describeRow) errCell() string {
+	return out.ErrCell(r.err)
 }
 
 func offsetNum(o int64) any {
@@ -982,7 +1034,7 @@ func lagValues(opts describeOpts, r describeRow) []any {
 	case "member":
 		return []any{r.memberID, r.partitions, lagNum(r), r.clientID, r.host, rowRackCell(r), instanceCell(opts, r.instanceID)}
 	default:
-		return []any{r.topic, r.partition, offsetNum(r.currentOffset), offsetNum(r.logStartOffset), offsetNum(r.logEndOffset), lagNum(r), r.memberID, r.clientID, r.host, rowRackCell(r), instanceCell(opts, r.instanceID)}
+		return []any{r.topic, r.partition, offsetNum(r.currentOffset), offsetNum(r.logStartOffset), offsetNum(r.logEndOffset), lagNum(r), r.memberID, r.clientID, r.host, rowRackCell(r), instanceCell(opts, r.instanceID), r.errCell(), ""}
 	}
 }
 
@@ -1017,6 +1069,8 @@ func lagJSON(opts describeOpts, r describeRow) map[string]any {
 			"host":             r.host,
 			"rack":             rowRackCell(r),
 			"instance_id":      instanceCell(opts, r.instanceID),
+			"error":            r.errCell(),
+			"message":          "",
 		}
 	}
 }
@@ -1086,13 +1140,33 @@ func totalLag(rows []describeRow) (int64, bool) {
 // could not describe it: that group still prints its error. The summary's
 // TOTAL-LAG is the group's full total, computed before both. --by group is
 // one table across every group rather than sections per group.
-func printGroups(format, command string, opts describeOpts, groups []printGroup) {
+//
+// It returns ErrSilent when any group carries an error or any partition row
+// did before the view and the filter, so that the command exits 1 on a
+// failure the output may not show. A partition error the view rolls up or
+// the filter drops, which never matches, goes to stderr instead.
+func printGroups(format, command string, opts describeOpts, groups []printGroup) error {
+	var failed bool
 	for i := range groups {
 		groups[i].totalLag, groups[i].totalLagValid = totalLag(groups[i].rows)
+		failed = failed || groups[i].err != ""
+		for _, r := range groups[i].rows {
+			if r.err == nil {
+				continue
+			}
+			failed = true
+			if opts.by != "partition" || opts.lag != nil {
+				fmt.Fprintf(os.Stderr, "unable to describe group %s partition %s/%d: %s\n", groups[i].group, r.topic, r.partition, r.errCell())
+			}
+		}
+	}
+	var err error
+	if failed {
+		err = out.ErrSilent
 	}
 	if opts.by == "group" {
 		printGroupView(format, command, opts, groups)
-		return
+		return err
 	}
 
 	section := opts.section
@@ -1130,8 +1204,8 @@ func printGroups(format, command string, opts describeOpts, groups []printGroup)
 			jsonGroups = append(jsonGroups, map[string]any{
 				"group":       g.group,
 				"coordinator": g.coordinator,
-				"state":       g.state,
-				"balancer":    g.balancer,
+				"state":       g.stateCell(),
+				"balancer":    g.balancerCell(),
 				"members":     members,
 				"total_lag":   g.totalLagNum(),
 				"lag":         lagRows,
@@ -1149,6 +1223,9 @@ func printGroups(format, command string, opts describeOpts, groups []printGroup)
 			sect = "lag"
 		}
 		table := out.NewFormattedTable(format, command, 1, sect, awkHeaders(opts)...)
+		if sect == "summary" || sect == "lag" && opts.by == "partition" {
+			table.ErrorColumn()
+		}
 		for _, g := range groups {
 			switch sect {
 			case "summary":
@@ -1171,39 +1248,44 @@ func printGroups(format, command string, opts describeOpts, groups []printGroup)
 			showLag := section == "" || section == "lag"
 			showMembers := section == "" || section == "members"
 
-			if showSummary {
+			// A group with an error prints it whichever section was
+			// asked for, since the section may have nothing else to
+			// show for it.
+			if showSummary || g.err != "" {
 				tw := out.NewTabWriter()
 				fmt.Fprintf(tw, "GROUP\t%s\n", g.group)
 				fmt.Fprintf(tw, "COORDINATOR\t%d\n", g.coordinator)
-				// On group-level error (e.g. GROUP_ID_NOT_FOUND),
-				// skip the empty state/balancer/members fields.
+				if g.known && showSummary {
+					fmt.Fprintf(tw, "STATE\t%s\n", g.state)
+					fmt.Fprintf(tw, "BALANCER\t%s\n", g.balancer)
+					fmt.Fprintf(tw, "MEMBERS\t%d\n", len(g.members))
+					if g.totalLagValid {
+						fmt.Fprintf(tw, "TOTAL-LAG\t%d\n", g.totalLag)
+					}
+				}
 				if g.err != "" {
 					fmt.Fprintf(tw, "ERROR\t%s\n", g.err)
 					if g.message != "" {
 						fmt.Fprintf(tw, "MESSAGE\t%s\n", g.message)
 					}
-					tw.Flush()
-					continue
-				}
-				fmt.Fprintf(tw, "STATE\t%s\n", g.state)
-				fmt.Fprintf(tw, "BALANCER\t%s\n", g.balancer)
-				fmt.Fprintf(tw, "MEMBERS\t%d\n", len(g.members))
-				if g.totalLagValid {
-					fmt.Fprintf(tw, "TOTAL-LAG\t%d\n", g.totalLag)
 				}
 				tw.Flush()
+				if !g.known {
+					continue
+				}
 			}
 
 			// A section asked for by name prints its header even
 			// with no rows, so that an Empty group under --section
 			// members prints something; the default view skips an
-			// empty table.
-			if showLag && (len(g.rows) > 0 || section == "lag") {
+			// empty table, and a group whose offsets errored has no
+			// lag table, its error printed above.
+			if showLag && g.err == "" && (len(g.rows) > 0 || section == "lag") {
 				rows := make([][]any, 0, len(g.rows))
 				for _, r := range g.rows {
 					rows = append(rows, lagValues(opts, r))
 				}
-				printTextTable(command, lagHeaders(opts.by), rows, opts)
+				printTextTable(command, lagHeaders(opts.by), rows, opts, opts.by == "partition")
 			}
 
 			if showMembers && (len(g.members) > 0 || section == "members") {
@@ -1211,7 +1293,7 @@ func printGroups(format, command string, opts describeOpts, groups []printGroup)
 				for _, m := range g.members {
 					rows = append(rows, m.values(opts))
 				}
-				printTextTable(command, memberHeaders, rows, opts)
+				printTextTable(command, memberHeaders, rows, opts, false)
 			}
 
 			if gi < len(groups)-1 {
@@ -1219,11 +1301,13 @@ func printGroups(format, command string, opts describeOpts, groups []printGroup)
 			}
 		}
 	}
+	return err
 }
 
 // printTextTable prints one text table, without the INSTANCE-ID column
-// unless --instance-ids asked for it.
-func printTextTable(command string, headers []string, rows [][]any, opts describeOpts) {
+// unless --instance-ids asked for it. With errors set the table ends in
+// ERROR and MESSAGE, blank on a row the broker answered.
+func printTextTable(command string, headers []string, rows [][]any, opts describeOpts, errors bool) {
 	if i := slices.Index(headers, "INSTANCE-ID"); i >= 0 && !opts.instanceIDs {
 		headers = slices.Delete(slices.Clone(headers), i, i+1)
 		for j, row := range rows {
@@ -1231,6 +1315,9 @@ func printTextTable(command string, headers []string, rows [][]any, opts describ
 		}
 	}
 	table := out.NewFormattedTable(out.FormatText, command, 1, "rows", headers...)
+	if errors {
+		table.ErrorColumn()
+	}
 	for _, row := range rows {
 		table.Row(row...)
 	}
@@ -1244,9 +1331,33 @@ func (g printGroup) totalLagNum() any {
 	return g.totalLag
 }
 
+// stateCell is the group's state, Unknown when the broker could not
+// describe it; balancerCell and memberCount are the same for the rest of
+// the summary.
+func (g printGroup) stateCell() any {
+	if !g.known {
+		return out.Unknown
+	}
+	return g.state
+}
+
+func (g printGroup) balancerCell() any {
+	if !g.known {
+		return out.Unknown
+	}
+	return g.balancer
+}
+
+func (g printGroup) memberCount() any {
+	if !g.known {
+		return out.Unknown
+	}
+	return len(g.members)
+}
+
 // summaryValues is the group's summary row, in summaryHeaders order.
 func (g printGroup) summaryValues() []any {
-	return []any{g.group, g.coordinator, g.state, g.balancer, len(g.members), g.totalLagNum(), g.err, g.message}
+	return []any{g.group, g.coordinator, g.stateCell(), g.balancerCell(), g.memberCount(), g.totalLagNum(), g.err, g.message}
 }
 
 // printGroupView prints the --by group table: one row per group, across

@@ -14,8 +14,10 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/out"
@@ -340,9 +342,11 @@ func TestParseLagFilter(t *testing.T) {
 }
 
 // TestDescribeLagFilter pins --lag: a group with no partition left is dropped
-// from every format, a surviving group keeps its full TOTAL-LAG, a partition
-// whose lag is unknown never matches, and dropping every group prints
-// nothing in text and an empty groups list in JSON.
+// from every format, a surviving group keeps its full TOTAL-LAG, an empty
+// partition with nothing committed has lag 0 and matches =0, a partition
+// whose lag is unknown never matches while its error still exits 1, and
+// dropping every group prints nothing in text and an empty groups list in
+// JSON.
 func TestDescribeLagFilter(t *testing.T) {
 	c, cl := newTestCluster(t)
 	adm := kadm.NewClient(cl)
@@ -358,11 +362,11 @@ func TestDescribeLagFilter(t *testing.T) {
 	// caught-up: lag 0 on both.
 	commitAt(t, adm, "caught-up", "t", 0, 10)
 	commitAt(t, adm, "caught-up", "t", 1, 10)
-	// unknown: a member on an empty topic with nothing committed, so no
-	// lag can be computed.
-	joinGroup(t, c, "unknown", false, "empty")
+	// fresh: a member on an empty topic with nothing committed, so lag 0
+	// on both partitions, there being nothing to read.
+	joinGroup(t, c, "fresh", false, "empty")
 
-	all := []string{"behind", "caught-up", "unknown"}
+	all := []string{"behind", "caught-up", "fresh"}
 
 	t.Run("text keeps the behind group whole", func(t *testing.T) {
 		stdout, err := runDescribe(t, c, append(all, "--lag", ">5")...)
@@ -392,9 +396,14 @@ func TestDescribeLagFilter(t *testing.T) {
 	})
 
 	t.Run("unknown lag never matches", func(t *testing.T) {
-		stdout, err := runDescribe(t, c, "unknown", "--lag", "<=1000000")
-		if err != nil {
-			t.Fatal(err)
+		// The leader answers the log offsets of empty with an error,
+		// so no lag can be computed: the rows match nothing, and the
+		// command still exits 1 for the error it could not show.
+		h := c.Fault(kfake.Fault{Keys: []kmsg.Key{kmsg.ListOffsets}, Topic: "empty", Err: kerr.LeaderNotAvailable, Count: -1})
+		defer h.Remove()
+		stdout, err := runDescribe(t, c, "fresh", "--lag", "<=1000000")
+		if err != out.ErrSilent {
+			t.Fatalf("err = %v, want ErrSilent", err)
 		}
 		if stdout != "" {
 			t.Errorf("want nothing on stdout, got:\n%s", stdout)
@@ -428,7 +437,7 @@ func TestDescribeLagFilter(t *testing.T) {
 		}
 	})
 
-	t.Run("json keeps the caught-up group at =0", func(t *testing.T) {
+	t.Run("json keeps the caught-up and fresh groups at =0", func(t *testing.T) {
 		stdout, err := runDescribe(t, c, append(all, "--lag", "=0", "--format", "json")...)
 		if err != nil {
 			t.Fatal(err)
@@ -442,8 +451,11 @@ func TestDescribeLagFilter(t *testing.T) {
 		if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
 			t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
 		}
-		if len(doc.Groups) != 1 || doc.Groups[0].Group != "caught-up" || len(doc.Groups[0].Lag) != 2 {
-			t.Errorf("want caught-up with two rows, got: %s", stdout)
+		if len(doc.Groups) != 2 || doc.Groups[0].Group != "caught-up" || doc.Groups[1].Group != "fresh" || len(doc.Groups[0].Lag) != 2 || len(doc.Groups[1].Lag) != 2 {
+			t.Fatalf("want caught-up and fresh with two rows each, got: %s", stdout)
+		}
+		if row := doc.Groups[1].Lag[0]; row["current_offset"] != nil || row["lag"] != float64(0) {
+			t.Errorf("fresh row = %v, want current_offset null and lag 0", row)
 		}
 	})
 
@@ -789,7 +801,8 @@ func TestDescribeMembersShape(t *testing.T) {
 
 // TestDescribeUnknownIsNull pins that an offset the group has not committed
 // is null in JSON rather than -1, and a dash in awk, so that no consumer
-// has to know the sentinel.
+// has to know the sentinel. The lag of an empty partition with nothing
+// committed is 0, known: there is nothing to read.
 func TestDescribeUnknownIsNull(t *testing.T) {
 	c, cl := newTestCluster(t)
 	adm := kadm.NewClient(cl)
@@ -815,20 +828,18 @@ func TestDescribeUnknownIsNull(t *testing.T) {
 		t.Fatalf("unexpected document: %s", stdout)
 	}
 	row := doc.Groups[0].Lag[0]
-	for _, key := range []string{"current_offset", "lag"} {
-		if v, ok := row[key]; !ok || v != nil {
-			t.Errorf("lag[0].%s = %v (present %v), want null", key, v, ok)
-		}
+	if v, ok := row["current_offset"]; !ok || v != nil {
+		t.Errorf("lag[0].current_offset = %v (present %v), want null", v, ok)
 	}
-	if doc.Groups[0].TotalLag != nil {
-		t.Errorf("total_lag = %v, want null", doc.Groups[0].TotalLag)
+	if row["lag"] != float64(0) || doc.Groups[0].TotalLag != float64(0) {
+		t.Errorf("lag[0].lag = %v, total_lag = %v, want 0 and 0", row["lag"], doc.Groups[0].TotalLag)
 	}
 
 	stdout, err = runGroup(t, c, "", "group", "describe", "nothing", "--format", "awk")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rows := awkRows(stdout); len(rows) != 1 || rows[0][3] != "-" || rows[0][6] != "-" {
-		t.Errorf("want CURRENT-OFFSET and LAG as dashes, got:\n%s", stdout)
+	if rows := awkRows(stdout); len(rows) != 1 || rows[0][3] != "-" || rows[0][6] != "0" {
+		t.Errorf("want CURRENT-OFFSET as a dash and LAG 0, got:\n%s", stdout)
 	}
 }
