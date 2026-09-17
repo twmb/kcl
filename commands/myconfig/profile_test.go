@@ -682,6 +682,7 @@ func TestCurrentHonorsProfileFlag(t *testing.T) {
 	const profiles = "current_profile = \"prod\"\n[profiles.prod]\nseed_brokers = [\"p:9092\"]\n[profiles.dev]\nseed_brokers = [\"d:9092\"]\n"
 	for _, test := range []struct {
 		name    string
+		env     string
 		args    []string
 		want    string
 		wantErr string
@@ -689,8 +690,11 @@ func TestCurrentHonorsProfileFlag(t *testing.T) {
 		{name: "current_profile", args: []string{"profile", "current"}, want: "prod\n"},
 		{name: "-C wins", args: []string{"-C", "dev", "profile", "current"}, want: "dev\n"},
 		{name: "-C unknown", args: []string{"-C", "nope", "profile", "current"}, wantErr: "not found"},
+		{name: "KCL_PROFILE", env: "dev", args: []string{"profile", "current"}, want: "dev\n"},
+		{name: "-C wins over KCL_PROFILE", env: "dev", args: []string{"-C", "prod", "profile", "current"}, want: "prod\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("KCL_PROFILE", test.env)
 			path := filepath.Join(t.TempDir(), "config.toml")
 			if err := os.WriteFile(path, []byte(profiles), 0o644); err != nil {
 				t.Fatal(err)

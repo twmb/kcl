@@ -379,7 +379,7 @@ func New(root *cobra.Command) *Client {
 	root.PersistentFlags().StringSliceVarP(&c.registryURLs, "registry", "R", nil, "comma-separated list of schema registry URLs (overrides profile/config); shorthand for -X registry.urls=...")
 	root.PersistentFlags().StringVar(&c.asVersion, "as-version", "", "if nonempty, which version of Kafka versions to use (e.g. '0.8.0', '2.3.0')")
 	root.PersistentFlags().StringVar(&c.format, "format", "text", "output format (text, json, awk)")
-	root.PersistentFlags().StringVarP(&c.profileName, "profile", "C", "", "use a specific config profile")
+	root.PersistentFlags().StringVarP(&c.profileName, "profile", "C", "", "use a specific config profile (also KCL_PROFILE; -C wins)")
 	root.PersistentFlags().BoolVarP(&c.asJSON, "dump-json", "j", false, "dump response as json if supported")
 	root.PersistentFlags().MarkDeprecated("dump-json", "use --format json instead")
 	root.PersistentFlags().BoolVar(&c.awkHeader, "awk-header", false, "print the command's awk header row and exit")
@@ -625,8 +625,8 @@ func (c *Client) parseCfgFile() {
 
 	if len(raw.Profiles) > 0 {
 		name := raw.CurrentProfile
-		if c.profileName != "" {
-			name = c.profileName
+		if p := c.ProfileName(); p != "" {
+			name = p
 		}
 		if name == "" {
 			c.die(out.ExitUsage, "config has profiles but no current_profile set; use --profile or set current_profile in config")
@@ -655,9 +655,14 @@ func (c *Client) CfgFilePath() string {
 	return c.cfgPath
 }
 
-// ProfileName returns the profile named by -C, or "" if none was given.
+// ProfileName returns the profile named by -C, else by KCL_PROFILE, or "" if
+// neither names one. KCL_PROFILE is for the shell that would otherwise pass
+// -C to every command, and -C wins over it.
 func (c *Client) ProfileName() string {
-	return c.profileName
+	if c.profileName != "" {
+		return c.profileName
+	}
+	return os.Getenv("KCL_PROFILE")
 }
 
 // LoadedCfgFile returns the full loaded config file (may include contexts).

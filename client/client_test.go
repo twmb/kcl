@@ -1106,3 +1106,32 @@ func TestSASLMechanismAlias(t *testing.T) {
 		t.Errorf("-X list: %s", list)
 	}
 }
+
+// TestKCLProfileEnv pins that KCL_PROFILE selects the profile the way -C does,
+// and that -C wins when both are set.
+func TestKCLProfileEnv(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("current_profile = \"prod\"\n[profiles.prod]\nseed_brokers = [\"p:9092\"]\n[profiles.dev]\nseed_brokers = [\"d:9092\"]\n[profiles.ci]\nseed_brokers = [\"c:9092\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name string
+		env  string
+		flag string
+		want string
+	}{
+		{"current_profile", "", "", "p:9092"},
+		{"env", "dev", "", "d:9092"},
+		{"flag", "", "dev", "d:9092"},
+		{"flag wins", "ci", "dev", "d:9092"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("KCL_PROFILE", test.env)
+			c := &Client{cfgPath: path, format: "text", profileName: test.flag, cfg: defaultCfg()}
+			c.parseCfgFile()
+			if len(c.cfg.SeedBrokers) != 1 || c.cfg.SeedBrokers[0] != test.want {
+				t.Errorf("seed_brokers = %v, want [%s]", c.cfg.SeedBrokers, test.want)
+			}
+		})
+	}
+}

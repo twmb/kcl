@@ -161,7 +161,7 @@ func readCfgFile(path string, cfgFile *client.CfgFile) (missing bool, err error)
 func currentCommand(cl *client.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "current",
-		Short: "Print the profile in use: the one -C names, else current_profile.",
+		Short: "Print the profile in use: the one -C or KCL_PROFILE names, else current_profile.",
 		Args:  cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
 			cfgPath := cl.CfgFilePath()
@@ -571,7 +571,8 @@ func configHelpText(cl *client.Client) string {
 	return `Manage connection profiles.
 
 Profiles are [profiles.NAME] tables in the config file; current_profile names
-the one in use, and -C picks another for one command. The file is read from:
+the one in use, and -C or KCL_PROFILE picks another, -C for one command and
+KCL_PROFILE for a shell. The file is read from:
 
   ` + cl.DefaultCfgPath() + `
 
