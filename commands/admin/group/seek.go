@@ -399,7 +399,7 @@ SEE ALSO:
 			results := make([]seekRow, len(rows))
 			for i, r := range rows {
 				if cr, ok := committed.Lookup(r.topic, r.partition); ok && cr.Err != nil {
-					r.err = cr.Err.Error()
+					r.err = out.ErrCell(cr.Err)
 					if cr.Err == kerr.UnknownMemberID {
 						r.message = "group is not empty (a consumer may have joined)"
 					}

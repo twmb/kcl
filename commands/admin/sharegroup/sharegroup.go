@@ -105,10 +105,10 @@ SEE ALSO:
 			})
 
 			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "groups",
-				"BROKER", "GROUP", "STATE", "ERROR").ResultColumns()
+				"BROKER", "GROUP", "STATE", "ERROR").ErrorColumn()
 			for _, r := range rows {
 				if r.err != nil {
-					table.Row(r.broker, out.Unknown, out.Unknown, r.err.Error())
+					table.Row(r.broker, out.Unknown, out.Unknown, out.ErrCell(r.err))
 					continue
 				}
 				table.Row(r.broker, r.group, r.state, "")
@@ -126,9 +126,9 @@ SEE ALSO:
 // Column shapes of share-group describe, by --section. awk leads every row
 // with its group.
 var (
-	shareSummaryHeaders = []string{"GROUP", "COORDINATOR", "STATE", "EPOCH", "ASSIGNMENT-EPOCH", "ASSIGNOR", "MEMBERS", "TOTAL-LAG", "ERROR"}
-	shareMemberHeaders  = []string{"MEMBER-ID", "CLIENT-ID", "HOST", "MEMBER-EPOCH", "SUBSCRIBED-TOPICS", "ASSIGNMENT"}
-	shareOffsetHeaders  = []string{"TOPIC", "PARTITION", "START-OFFSET", "LEADER-EPOCH", "LAG", "ERROR"}
+	shareSummaryHeaders = []string{"GROUP", "COORDINATOR", "STATE", "EPOCH", "ASSIGNMENT-EPOCH", "ASSIGNOR", "MEMBERS", "TOTAL-LAG", "ERROR", "MESSAGE"}
+	shareMemberHeaders  = []string{"MEMBER-ID", "CLIENT-ID", "HOST", "RACK", "MEMBER-EPOCH", "SUBSCRIBED-TOPICS", "ASSIGNMENT"}
+	shareOffsetHeaders  = []string{"TOPIC", "PARTITION", "START-OFFSET", "LEADER-EPOCH", "LAG", "ERROR", "MESSAGE"}
 )
 
 // normSection is the section a --section value names, or "" when it names
@@ -157,6 +157,7 @@ type shareGroup struct {
 	coordinator int32
 	group       kmsg.ShareGroupDescribeResponseGroup
 	err         string // why the broker could not describe the group, or ""
+	message     string // the text the broker attached to err, or ""
 	offsets     []shareOffset
 	totalLag    int64
 	totalValid  bool // whether any partition reported a lag
@@ -169,6 +170,7 @@ type shareOffset struct {
 	leaderEpoch int32
 	lag         int64 // -1 when the broker did not report one
 	err         string
+	message     string
 }
 
 func (o shareOffset) lagNum() any {
@@ -179,7 +181,7 @@ func (o shareOffset) lagNum() any {
 }
 
 func (o shareOffset) values() []any {
-	return []any{o.topic, o.partition, o.startOffset, o.leaderEpoch, o.lagNum(), o.err}
+	return []any{o.topic, o.partition, o.startOffset, o.leaderEpoch, o.lagNum(), o.err, o.message}
 }
 
 func (o shareOffset) json() map[string]any {
@@ -190,6 +192,7 @@ func (o shareOffset) json() map[string]any {
 		"leader_epoch": o.leaderEpoch,
 		"lag":          o.lagNum(),
 		"error":        o.err,
+		"message":      o.message,
 	}
 }
 
@@ -201,15 +204,20 @@ func (g shareGroup) totalLagNum() any {
 }
 
 func (g shareGroup) summaryValues() []any {
-	return []any{g.group.GroupID, g.coordinator, g.group.GroupState, g.group.GroupEpoch, g.group.AssignmentEpoch, g.group.Assignor, len(g.group.Members), g.totalLagNum(), g.err}
+	return []any{g.group.GroupID, g.coordinator, g.group.GroupState, g.group.GroupEpoch, g.group.AssignmentEpoch, g.group.Assignor, len(g.group.Members), g.totalLagNum(), g.err, g.message}
 }
 
 func memberValues(member kmsg.ShareGroupDescribeResponseGroupMember) []any {
-	host := member.ClientHost
-	if member.RackID != nil {
-		host += " (rack=" + *member.RackID + ")"
+	return []any{member.MemberID, member.ClientID, member.ClientHost, rackCell(member.RackID), member.MemberEpoch, strings.Join(member.SubscribedTopicNames, ","), formatShareMemberAssignment(member)}
+}
+
+// rackCell is the RACK cell: the rack a member reported, or Unknown for a
+// member that reported none.
+func rackCell(rack *string) any {
+	if rack == nil {
+		return out.Unknown
 	}
-	return []any{member.MemberID, member.ClientID, host, member.MemberEpoch, strings.Join(member.SubscribedTopicNames, ","), formatShareMemberAssignment(member)}
+	return *rack
 }
 
 func memberJSON(member kmsg.ShareGroupDescribeResponseGroupMember) map[string]any {
@@ -217,33 +225,24 @@ func memberJSON(member kmsg.ShareGroupDescribeResponseGroupMember) map[string]an
 	if subscribed == nil {
 		subscribed = []string{}
 	}
-	var rack any = out.Unknown
-	if member.RackID != nil {
-		rack = *member.RackID
-	}
 	return map[string]any{
 		"member_id":         member.MemberID,
 		"client_id":         member.ClientID,
 		"host":              member.ClientHost,
-		"rack":              rack,
+		"rack":              rackCell(member.RackID),
 		"member_epoch":      member.MemberEpoch,
 		"subscribed_topics": subscribed,
 		"assignment":        formatShareMemberAssignment(member),
 	}
 }
 
-// errorText is the error a code names, with the broker's message after it
-// when there is one, or "".
-func errorText(code int16, message *string) string {
-	err := kerr.ErrorForCode(code)
-	if err == nil {
-		return ""
+// errorCells are the ERROR and MESSAGE of a group or partition the broker
+// answered with an error, "" and "" otherwise.
+func errorCells(code int16, message *string) (string, string) {
+	if code == 0 {
+		return "", ""
 	}
-	s := err.Error()
-	if message != nil && *message != "" {
-		s += ": " + *message
-	}
-	return s
+	return out.ErrName(code), out.BrokerMessage(message)
 }
 
 // describeShareGroups describes the groups and their offsets, sorted by
@@ -265,9 +264,9 @@ func describeShareGroups(cl *client.Client, groups []string) []shareGroup {
 			g := shareGroup{
 				coordinator: shard.Meta.NodeID,
 				group:       group,
-				err:         errorText(group.ErrorCode, group.ErrorMessage),
 				offsets:     []shareOffset{},
 			}
+			g.err, g.message = errorCells(group.ErrorCode, group.ErrorMessage)
 			if offsets, ok := offsetsByGroup[group.GroupID]; ok {
 				for _, topic := range offsets.Topics {
 					for _, p := range topic.Partitions {
@@ -277,8 +276,8 @@ func describeShareGroups(cl *client.Client, groups []string) []shareGroup {
 							startOffset: p.StartOffset,
 							leaderEpoch: p.LeaderEpoch,
 							lag:         p.Lag,
-							err:         errorText(p.ErrorCode, p.ErrorMessage),
 						}
+						o.err, o.message = errorCells(p.ErrorCode, p.ErrorMessage)
 						if o.lag >= 0 {
 							g.totalLag += o.lag
 							g.totalValid = true
@@ -386,6 +385,7 @@ SEE ALSO:
 						"total_lag":        g.totalLagNum(),
 						"offsets":          offsets,
 						"error":            g.err,
+						"message":          g.message,
 					})
 				}
 				out.MarshalJSON(cl.Command(), 1, map[string]any{
@@ -499,6 +499,9 @@ func printShareGroupSummary(g shareGroup) {
 	// state/epoch/members fields and surface just the error.
 	if g.err != "" {
 		fmt.Fprintf(tw, "ERROR\t%s\n", g.err)
+		if g.message != "" {
+			fmt.Fprintf(tw, "MESSAGE\t%s\n", g.message)
+		}
 		tw.Flush()
 		return
 	}
@@ -545,13 +548,7 @@ func formatShareMemberAssignment(member kmsg.ShareGroupDescribeResponseGroupMemb
 // 4.4 attaches a message to a failed delete (KIP-1331); an older broker
 // sends none and the message is empty.
 func deleteGroupResult(g kmsg.DeleteGroupsResponseGroup) (errStr, message string) {
-	if err := kerr.ErrorForCode(g.ErrorCode); err != nil {
-		errStr = err.Error()
-	}
-	if g.ErrorMessage != nil {
-		message = *g.ErrorMessage
-	}
-	return errStr, message
+	return out.ErrName(g.ErrorCode), out.BrokerMessage(g.ErrorMessage)
 }
 
 func deleteCommand(cl *client.Client) *cobra.Command {

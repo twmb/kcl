@@ -293,11 +293,7 @@ SEE ALSO:
 			}
 
 			if err := kerr.ErrorForCode(kresp.ErrorCode); err != nil {
-				msg := err.Error()
-				if kresp.ErrorMessage != nil {
-					msg += ": " + *kresp.ErrorMessage
-				}
-				return fmt.Errorf("%s", msg)
+				return out.BrokerErr(err, kresp.ErrorMessage)
 			}
 
 			// The results: each plan row with how its alter went. A
@@ -310,14 +306,7 @@ SEE ALSO:
 					answered[topic.Topic] = make(map[int32]result)
 				}
 				for _, p := range topic.Partitions {
-					var r result
-					if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
-						r.err = err.Error()
-						if p.ErrorMessage != nil {
-							r.message = *p.ErrorMessage
-						}
-					}
-					answered[topic.Topic][p.Partition] = r
+					answered[topic.Topic][p.Partition] = result{out.ErrName(p.ErrorCode), out.BrokerMessage(p.ErrorMessage)}
 				}
 			}
 			results := make([]seekRow, len(rows))

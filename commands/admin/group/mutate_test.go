@@ -130,7 +130,7 @@ func TestOffsetDelete(t *testing.T) {
 			t.Fatalf("want both partitions of u: %s", stdout)
 		}
 		refused, fine := results[0].(map[string]any), results[1].(map[string]any)
-		if refused["topic"] != "u" || refused["error"] != kerr.GroupSubscribedToTopic.Error() || refused["message"] != "" {
+		if refused["topic"] != "u" || refused["error"] != kerr.GroupSubscribedToTopic.Message || refused["message"] != "" {
 			t.Errorf("row = %v, want u 0 with GROUP_SUBSCRIBED_TO_TOPIC and an empty message", refused)
 		}
 		if fine["partition"] != float64(1) || fine["error"] != "" {
@@ -270,7 +270,7 @@ func TestSeekDocument(t *testing.T) {
 			t.Fatalf("want one result: %+v", d)
 		}
 		r := d.Results[0]
-		if r["error"] != kerr.UnknownMemberID.Error() || r["message"] != "group is not empty (a consumer may have joined)" {
+		if r["error"] != kerr.UnknownMemberID.Message || r["message"] != "group is not empty (a consumer may have joined)" {
 			t.Errorf("result row = %v, want UNKNOWN_MEMBER_ID with the not-empty hint", r)
 		}
 	})

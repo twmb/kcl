@@ -558,7 +558,7 @@ func TestDescribeBy(t *testing.T) {
 				if owner[1] == "-" || owner[2] != "2" || owner[3] != "10" || owner[4] != "kgo" || owner[5] == "-" {
 					t.Errorf("owner row = %q, want a member with 2 partitions, lag 10, client kgo, and a host", owner)
 				}
-				if want := []string{path.group, "-", "1", "0", "-", "-", "-"}; !slices.Equal(unowned, want) {
+				if want := []string{path.group, "-", "1", "0", "-", "-", "-", "-"}; !slices.Equal(unowned, want) {
 					t.Errorf("unowned row = %q, want %q", unowned, want)
 				}
 			})
@@ -699,16 +699,19 @@ func TestDescribeMembersShape(t *testing.T) {
 				t.Fatalf("got %d rows, want 1:\n%s", len(rows), stdout)
 			}
 			row := rows[0]
-			// GROUP MEMBER-ID CLIENT-ID HOST INSTANCE-ID MEMBER-EPOCH SUBSCRIBED-TOPICS ASSIGNMENT TARGET-ASSIGNMENT
-			if len(row) != 9 || row[0] != test.group || row[1] == "-" || row[4] != test.instance || row[6] != "t" || row[7] != "t:0,1" || row[8] != test.target {
-				t.Errorf("row = %q, want group %s, a member, instance %s, subscribed t, assignment t:0,1, target %s", row, test.group, test.instance, test.target)
+			// GROUP MEMBER-ID CLIENT-ID HOST RACK INSTANCE-ID MEMBER-EPOCH SUBSCRIBED-TOPICS ASSIGNMENT TARGET-ASSIGNMENT
+			if len(row) != 10 || row[0] != test.group || row[1] == "-" || row[4] != "-" || row[5] != test.instance || row[7] != "t" || row[8] != "t:0,1" || row[9] != test.target {
+				t.Errorf("row = %q, want group %s, a member, no rack, instance %s, subscribed t, assignment t:0,1, target %s", row, test.group, test.instance, test.target)
+			}
+			if strings.Contains(row[3], "rack=") {
+				t.Errorf("HOST = %q carries the rack; RACK is its own column", row[3])
 			}
 			if test.wantEpoch {
-				if _, err := strconv.Atoi(row[5]); err != nil {
-					t.Errorf("MEMBER-EPOCH = %q, want a number", row[5])
+				if _, err := strconv.Atoi(row[6]); err != nil {
+					t.Errorf("MEMBER-EPOCH = %q, want a number", row[6])
 				}
-			} else if row[5] != test.epoch {
-				t.Errorf("MEMBER-EPOCH = %q, want %q", row[5], test.epoch)
+			} else if row[6] != test.epoch {
+				t.Errorf("MEMBER-EPOCH = %q, want %q", row[6], test.epoch)
 			}
 		})
 	}

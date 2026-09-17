@@ -57,25 +57,14 @@ SEE ALSO:
 			}
 
 			if err := kerr.ErrorForCode(kresp.ErrorCode); err != nil {
-				msg := err.Error()
-				if kresp.ErrorMessage != nil {
-					msg += ": " + *kresp.ErrorMessage
-				}
-				return fmt.Errorf("%s", msg)
+				return out.BrokerErr(err, kresp.ErrorMessage)
 			}
 
 			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
 				"TOPIC", "ERROR", "MESSAGE").ResultColumns()
 			sort.Slice(kresp.Topics, func(i, j int) bool { return kresp.Topics[i].Topic < kresp.Topics[j].Topic })
 			for _, topic := range kresp.Topics {
-				errStr, message := "", ""
-				if err := kerr.ErrorForCode(topic.ErrorCode); err != nil {
-					errStr = err.Error()
-					if topic.ErrorMessage != nil {
-						message = *topic.ErrorMessage
-					}
-				}
-				table.Row(topic.Topic, errStr, message)
+				table.Row(topic.Topic, out.ErrName(topic.ErrorCode), out.BrokerMessage(topic.ErrorMessage))
 			}
 			return table.Flush()
 		},

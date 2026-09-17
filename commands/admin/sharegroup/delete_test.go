@@ -31,18 +31,18 @@ func TestDeleteGroupResult(t *testing.T) {
 		{
 			name:    "error, no message",
 			group:   kmsg.DeleteGroupsResponseGroup{Group: "g", ErrorCode: kerr.NonEmptyGroup.Code},
-			wantErr: "NON_EMPTY_GROUP: The group is not empty.",
+			wantErr: "NON_EMPTY_GROUP",
 		},
 		{
 			name:        "error with a message",
 			group:       kmsg.DeleteGroupsResponseGroup{Group: "g", ErrorCode: kerr.NonEmptyGroup.Code, ErrorMessage: &msg},
-			wantErr:     "NON_EMPTY_GROUP: The group is not empty.",
+			wantErr:     "NON_EMPTY_GROUP",
 			wantMessage: msg,
 		},
 		{
 			name:    "an empty message is not a message",
 			group:   kmsg.DeleteGroupsResponseGroup{Group: "g", ErrorCode: kerr.NonEmptyGroup.Code, ErrorMessage: &empty},
-			wantErr: "NON_EMPTY_GROUP: The group is not empty.",
+			wantErr: "NON_EMPTY_GROUP",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -102,7 +102,7 @@ func TestDeleteJSONShape(t *testing.T) {
 		t.Fatalf("doc = %+v\n%s", doc, b)
 	}
 	got := doc.Results[0]
-	if got.Group != "nosuchgroup" || got.Error != "GROUP_ID_NOT_FOUND: The group id does not exist." || got.Message != "" {
+	if got.Group != "nosuchgroup" || got.Error != "GROUP_ID_NOT_FOUND" || got.Message != "" {
 		t.Errorf("result = %+v", got)
 	}
 	var keys map[string]any

@@ -83,7 +83,7 @@ func TestListAndDescribe(t *testing.T) {
 			rows := awkRows(stdout)
 			switch section {
 			case "offsets":
-				want := [][]string{{"sg-a", "t", "0", "0", "0", "4", "-"}, {"sg-b", "t", "0", "0", "0", "4", "-"}}
+				want := [][]string{{"sg-a", "t", "0", "0", "0", "4", "-", "-"}, {"sg-b", "t", "0", "0", "0", "4", "-", "-"}}
 				if !slices.EqualFunc(rows, want, slices.Equal) {
 					t.Errorf("rows = %q, want %q", rows, want)
 				}

@@ -136,10 +136,10 @@ SEE ALSO:
 		RunE: func(_ *cobra.Command, _ []string) error {
 			normStates(states)
 			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "groups",
-				"BROKER", "GROUP", "PROTO-TYPE", "GROUP-TYPE", "STATE", "ERROR").ResultColumns()
+				"BROKER", "GROUP", "PROTO-TYPE", "GROUP-TYPE", "STATE", "ERROR").ErrorColumn()
 			for _, r := range listGroupRows(cl, states, types) {
 				if r.err != nil {
-					table.Row(r.broker, out.Unknown, out.Unknown, out.Unknown, out.Unknown, r.err.Error())
+					table.Row(r.broker, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.ErrCell(r.err))
 					continue
 				}
 				table.Row(r.broker, r.group, r.protoType, r.groupType, r.state, "")
@@ -162,13 +162,7 @@ SEE ALSO:
 // attaches a message to a failed delete (KIP-1331); an older broker sends
 // none and the message is empty.
 func deleteGroupResult(g kmsg.DeleteGroupsResponseGroup) (errStr, message string) {
-	if err := kerr.ErrorForCode(g.ErrorCode); err != nil {
-		errStr = err.Error()
-	}
-	if g.ErrorMessage != nil {
-		message = *g.ErrorMessage
-	}
-	return errStr, message
+	return out.ErrName(g.ErrorCode), out.BrokerMessage(g.ErrorMessage)
 }
 
 func deleteCommand(cl *client.Client) *cobra.Command {
@@ -369,7 +363,7 @@ SEE ALSO:
 			resp := kresp.(*kmsg.OffsetDeleteResponse)
 
 			if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
-				return fmt.Errorf("%s", err.Error())
+				return err
 			}
 
 			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
@@ -378,11 +372,7 @@ SEE ALSO:
 			for _, topic := range resp.Topics {
 				sort.Slice(topic.Partitions, func(i, j int) bool { return topic.Partitions[i].Partition < topic.Partitions[j].Partition })
 				for _, partition := range topic.Partitions {
-					errStr := ""
-					if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
-						errStr = err.Error()
-					}
-					table.Row(topic.Topic, partition.Partition, errStr, "")
+					table.Row(topic.Topic, partition.Partition, out.ErrName(partition.ErrorCode), "")
 				}
 			}
 			return table.Flush()
