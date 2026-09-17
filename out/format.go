@@ -42,7 +42,8 @@ type FormattedTable struct {
 	jsonKeys []string
 	rows     [][]any
 	dryRun   bool
-	errCol   int // the ERROR column under ResultColumns, else -1
+	errCol   int  // the ERROR column under ResultColumns or ErrorColumn, else -1
+	okText   bool // ResultColumns: text prints OK for a "" ERROR
 }
 
 // NewFormattedTable creates a table that outputs in the specified format.
@@ -105,6 +106,17 @@ func (t *FormattedTable) WithKeys(keys map[string]string) *FormattedTable {
 // after printing every result. A table that ends in ERROR alone may declare
 // this too. Any other shape is a programming error and panics.
 func (t *FormattedTable) ResultColumns() *FormattedTable {
+	t.ErrorColumn()
+	t.okText = true
+	return t
+}
+
+// ErrorColumn is ResultColumns for a table that describes rather than
+// changes: logdirs describe, txn list, user list. A row's ERROR is "" when
+// the broker answered it and the error name otherwise, and Flush returns
+// ErrSilent when any is set, but text prints nothing for the "" rather than
+// OK, since nothing was done. awk prints "-" and JSON keeps the "".
+func (t *FormattedTable) ErrorColumn() *FormattedTable {
 	n := len(t.headers)
 	switch {
 	case n >= 2 && t.headers[n-2] == "ERROR" && t.headers[n-1] == "MESSAGE":
@@ -112,7 +124,7 @@ func (t *FormattedTable) ResultColumns() *FormattedTable {
 	case n >= 1 && t.headers[n-1] == "ERROR":
 		t.errCol = n - 1
 	default:
-		panic(fmt.Sprintf("out: ResultColumns needs the headers to end in ERROR or ERROR, MESSAGE: %v", t.headers))
+		panic(fmt.Sprintf("out: ErrorColumn needs the headers to end in ERROR or ERROR, MESSAGE: %v", t.headers))
 	}
 	return t
 }
@@ -130,8 +142,9 @@ func (t *FormattedTable) Row(values ...any) {
 }
 
 // Flush writes the buffered data in the configured format to stdout. It
-// returns ErrSilent when the table declares ResultColumns and a row's ERROR is
-// set, and nil otherwise, so a command ends with "return table.Flush()".
+// returns ErrSilent when the table declares ResultColumns or ErrorColumn and
+// a row's ERROR is set, and nil otherwise, so a command ends with "return
+// table.Flush()".
 func (t *FormattedTable) Flush() error {
 	switch t.format {
 	case FormatJSON:
@@ -171,7 +184,7 @@ func (t *FormattedTable) flushText() {
 	for _, row := range t.rows {
 		strs := make([]string, len(row))
 		for i, v := range row {
-			if i == t.errCol && v == "" {
+			if i == t.errCol && v == "" && t.okText {
 				strs[i] = "OK"
 				continue
 			}

@@ -3,9 +3,12 @@ package out
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/twmb/franz-go/pkg/kerr"
 )
 
 func TestErrorDocAndExitCode(t *testing.T) {
@@ -96,5 +99,45 @@ func TestConfirm(t *testing.T) {
 	defer w.Close()
 	if isTerminal(r) {
 		t.Error("a pipe reports as a terminal")
+	}
+}
+
+// TestErrorCells pins the two cells of a result: ERROR is the bare kerr name
+// and MESSAGE the text the broker attached, each "" when there is none.
+func TestErrorCells(t *testing.T) {
+	msg := "the text"
+	empty := ""
+	for _, test := range []struct {
+		name string
+		code int16
+		err  error
+		msg  *string
+		want string
+		cell string
+		text string
+	}{
+		{"none", 0, nil, nil, "", "", ""},
+		{"kafka error", 3, kerr.UnknownTopicOrPartition, &msg, "UNKNOWN_TOPIC_OR_PARTITION", "UNKNOWN_TOPIC_OR_PARTITION", "the text"},
+		{"wrapped", 3, fmt.Errorf("describing: %w", kerr.UnknownTopicOrPartition), &empty, "UNKNOWN_TOPIC_OR_PARTITION", "UNKNOWN_TOPIC_OR_PARTITION", ""},
+		{"not a kafka error", 0, errors.New("dial tcp: refused"), nil, "", "dial tcp: refused", ""},
+		{"unknown code", 32000, nil, nil, "UNKNOWN_SERVER_ERROR", "", ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := ErrName(test.code); got != test.want {
+				t.Errorf("ErrName(%d) = %q, want %q", test.code, got, test.want)
+			}
+			if got := ErrCell(test.err); got != test.cell {
+				t.Errorf("ErrCell(%v) = %q, want %q", test.err, got, test.cell)
+			}
+			if got := BrokerMessage(test.msg); got != test.text {
+				t.Errorf("BrokerMessage = %q, want %q", got, test.text)
+			}
+		})
+	}
+	if got := BrokerErr(kerr.NotController, &msg); got.Error() != "NOT_CONTROLLER: This is not the correct controller for this cluster.: the text" || !errors.Is(got, kerr.NotController) {
+		t.Errorf("BrokerErr = %v", got)
+	}
+	if got := BrokerErr(kerr.NotController, nil); got != kerr.NotController {
+		t.Errorf("BrokerErr with no message = %v, want the error itself", got)
 	}
 }

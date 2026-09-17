@@ -523,6 +523,44 @@ func TestResultColumns(t *testing.T) {
 	NewFormattedTable("json", "x", 1, "rows", "ERROR", "TOPIC").ResultColumns()
 }
 
+// TestErrorColumn pins the read-only variant: a "" ERROR prints as nothing in
+// text rather than OK, "-" in awk, "" in JSON, and Flush still returns
+// ErrSilent when a row carries an error.
+func TestErrorColumn(t *testing.T) {
+	rows := [][]any{{"a", "", ""}, {"b", "NOT_LEADER_FOR_PARTITION", "moved"}}
+	for _, test := range []struct {
+		format string
+		want   string
+	}{
+		{"text", "TOPIC  ERROR                     MESSAGE\na                                \nb      NOT_LEADER_FOR_PARTITION  moved\n"},
+		{"awk", "a\t-\t-\nb\tNOT_LEADER_FOR_PARTITION\tmoved\n"},
+	} {
+		var err error
+		got := captureStdout(func() {
+			table := NewFormattedTable(test.format, "txn.list", 1, "rows", "TOPIC", "ERROR", "MESSAGE").ErrorColumn()
+			for _, row := range rows {
+				table.Row(row...)
+			}
+			err = table.Flush()
+		})
+		if err != ErrSilent {
+			t.Errorf("%s: Flush = %v, want ErrSilent", test.format, err)
+		}
+		if got != test.want {
+			t.Errorf("%s = %q, want %q", test.format, got, test.want)
+		}
+	}
+	var err error
+	got := captureStdout(func() {
+		table := NewFormattedTable("json", "txn.list", 1, "rows", "TOPIC", "ERROR").ErrorColumn()
+		table.Row("a", "")
+		err = table.Flush()
+	})
+	if err != nil || !strings.Contains(got, `"error":""`) {
+		t.Errorf("json: Flush = %v, out = %q", err, got)
+	}
+}
+
 // TestDryRun pins the one phrasing: "dry_run":true at the top level of a JSON
 // document, the text line first, and nothing at all in awk.
 func TestDryRun(t *testing.T) {

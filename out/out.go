@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 	"text/tabwriter"
+
+	"github.com/twmb/franz-go/pkg/kerr"
 )
 
 // BeginTabWrite returns a new tabwriter that prints to stdout.
@@ -148,6 +150,50 @@ func confirm(r io.Reader, w io.Writer, prompt string, terminal bool) Answer {
 func isTerminal(f *os.File) bool {
 	fi, err := f.Stat()
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// ErrName is the ERROR cell for a Kafka error code: the name kerr gives it,
+// UNKNOWN_TOPIC_OR_PARTITION, or "" for no error. A code kerr does not know
+// is UNKNOWN_SERVER_ERROR. The text a broker attached goes in MESSAGE; see
+// BrokerMessage.
+func ErrName(code int16) string {
+	if code == 0 {
+		return ""
+	}
+	return kerr.TypedErrorForCode(code).Message
+}
+
+// ErrCell is the ERROR cell for an error value: the kerr name when err is or
+// wraps a Kafka error, "" for nil, and otherwise the error's text, which is
+// what a request that never reached a broker carries.
+func ErrCell(err error) string {
+	if err == nil {
+		return ""
+	}
+	var ke *kerr.Error
+	if errors.As(err, &ke) {
+		return ke.Message
+	}
+	return err.Error()
+}
+
+// BrokerMessage is the MESSAGE cell of a result row: the text a broker
+// attached to an error, or "" when it attached none.
+func BrokerMessage(msg *string) string {
+	if msg == nil {
+		return ""
+	}
+	return *msg
+}
+
+// BrokerErr is err with the message a broker attached, for a failure of the
+// whole request rather than of a row: "NOT_CONTROLLER: the text". It is err
+// itself when the broker attached nothing.
+func BrokerErr(err error, msg *string) error {
+	if m := BrokerMessage(msg); m != "" {
+		return fmt.Errorf("%w: %s", err, m)
+	}
+	return err
 }
 
 // MaybeDie, if err is non-nil, prints the message and exits with 1.
