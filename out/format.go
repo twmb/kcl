@@ -41,6 +41,7 @@ type FormattedTable struct {
 	headers  []string
 	jsonKeys []string
 	rows     [][]any
+	dryRun   bool
 	errCol   int // the ERROR column under ResultColumns, else -1
 }
 
@@ -110,6 +111,13 @@ func (t *FormattedTable) ResultColumns() *FormattedTable {
 	return t
 }
 
+// SetDryRun marks the table as the output of a dry run: JSON carries
+// "dry_run":true at the top level and text opens with the line PrintDryRun
+// prints. awk is unchanged.
+func (t *FormattedTable) SetDryRun(dry bool) {
+	t.dryRun = dry
+}
+
 // Row adds a row of values to the table.
 func (t *FormattedTable) Row(values ...any) {
 	t.rows = append(t.rows, values)
@@ -149,6 +157,9 @@ func isError(v any) bool {
 }
 
 func (t *FormattedTable) flushText() {
+	if t.dryRun {
+		PrintDryRun()
+	}
 	tw := tabwriter.NewWriter(os.Stdout, 6, 4, 2, ' ', 0)
 	fmt.Fprint(tw, strings.Join(t.headers, "\t")+"\n")
 	for _, row := range t.rows {
@@ -182,6 +193,9 @@ func (t *FormattedTable) flushJSON() {
 	}
 	if t.command != "" {
 		doc["_command"] = t.command
+	}
+	if t.dryRun {
+		doc[dryRunKey] = true
 	}
 	writeJSON(doc)
 }
@@ -233,17 +247,45 @@ func textCell(v any) string {
 	return fmt.Sprint(v)
 }
 
+// dryRunKey is the top-level JSON key a dry run carries, from both a table
+// under SetDryRun and MarshalJSON with DryRun.
+const dryRunKey = "dry_run"
+
+// PrintDryRun prints the text line that says a dry run changed nothing. A
+// table prints it itself under SetDryRun; a command that prints text of its
+// own calls this once, before its output.
+func PrintDryRun() {
+	fmt.Println("Dry run: nothing was changed.")
+}
+
+// Opt shapes the document MarshalJSON prints.
+type Opt func(doc map[string]any)
+
+// DryRun marks the document as the output of a dry run, adding "dry_run":true
+// at the top level when dry is true. It is the key a table adds under
+// SetDryRun.
+func DryRun(dry bool) Opt {
+	return func(doc map[string]any) {
+		if dry {
+			doc[dryRunKey] = true
+		}
+	}
+}
+
 // MarshalJSON outputs structured JSON with _command and _version metadata
 // alongside arbitrary additional fields. Use this for commands with
 // non-tabular or mixed output. Like an error document, this leaves _command
 // out when we have no command to name, which is only the bare root.
-func MarshalJSON(command string, version int, fields map[string]any) {
-	output := make(map[string]any, len(fields)+2)
+func MarshalJSON(command string, version int, fields map[string]any, opts ...Opt) {
+	output := make(map[string]any, len(fields)+3)
 	if command != "" {
 		output["_command"] = command
 	}
 	output["_version"] = version
 	maps.Copy(output, fields)
+	for _, opt := range opts {
+		opt(output)
+	}
 	writeJSON(output)
 }
 

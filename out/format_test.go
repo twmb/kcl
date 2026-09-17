@@ -545,3 +545,50 @@ func TestResultColumns(t *testing.T) {
 	}()
 	NewFormattedTable("json", "x", 1, "rows", "ERROR", "TOPIC").ResultColumns()
 }
+
+// TestDryRun pins the one phrasing: "dry_run":true at the top level of a JSON
+// document, the text line first, and nothing at all in awk.
+func TestDryRun(t *testing.T) {
+	table := func(format string, dry bool) string {
+		return captureStdout(func() {
+			table := NewFormattedTable(format, "topic.delete", 1, "results", "TOPIC", "ERROR", "MESSAGE").ResultColumns()
+			table.SetDryRun(dry)
+			table.Row("a", "", "")
+			table.Flush()
+		})
+	}
+	if got := table("text", true); got != "Dry run: nothing was changed.\nTOPIC  ERROR  MESSAGE\na      OK     \n" {
+		t.Errorf("text = %q", got)
+	}
+	if got := table("text", false); strings.Contains(got, "Dry run") {
+		t.Errorf("text without dry run = %q", got)
+	}
+	if got := table("awk", true); got != "a\t-\t-\n" {
+		t.Errorf("awk = %q", got)
+	}
+	for _, test := range []struct {
+		name string
+		out  string
+		want any
+	}{
+		{"table dry", table("json", true), true},
+		{"table real", table("json", false), nil},
+		{"MarshalJSON dry", captureStdout(func() { MarshalJSON("group.seek", 1, map[string]any{"group": "g"}, DryRun(true)) }), true},
+		{"MarshalJSON real", captureStdout(func() { MarshalJSON("group.seek", 1, map[string]any{"group": "g"}, DryRun(false)) }), nil},
+		{"MarshalJSON no opt", captureStdout(func() { MarshalJSON("group.seek", 1, map[string]any{"group": "g"}) }), nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var doc map[string]any
+			if err := json.Unmarshal([]byte(test.out), &doc); err != nil {
+				t.Fatalf("json: %v: %s", err, test.out)
+			}
+			got, ok := doc["dry_run"]
+			if test.want == nil && ok {
+				t.Errorf("dry_run is %v, want absent", got)
+			}
+			if test.want != nil && got != test.want {
+				t.Errorf("dry_run = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
