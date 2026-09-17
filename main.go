@@ -217,7 +217,7 @@ func main() {
 	root, cl := buildRoot()
 
 	if wantsHelpJSON(os.Args[1:]) {
-		tree := buildCommandJSON(root, false)
+		tree := helpJSON{Version: 1, commandJSON: buildCommandJSON(root, false)}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		enc.Encode(tree)
@@ -308,6 +308,13 @@ func allCommands(root *cobra.Command, fn func(*cobra.Command)) {
 	fn(root)
 }
 
+// helpJSON is the --help-json document: the command tree, with _version so
+// that a consumer can tell this shape from the next one.
+type helpJSON struct {
+	Version int `json:"_version"`
+	commandJSON
+}
+
 type commandJSON struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
@@ -329,6 +336,10 @@ type flagJSON struct {
 	Type        string `json:"type"`
 	Default     string `json:"default,omitempty"`
 	Description string `json:"description"`
+	// Hidden and Deprecated mark the old name of a renamed flag, kept so a
+	// script keeps working, so that tooling can leave it out.
+	Hidden     bool   `json:"hidden,omitempty"`
+	Deprecated string `json:"deprecated,omitempty"`
 }
 
 func buildCommandJSON(cmd *cobra.Command, parentHidden bool) commandJSON {
@@ -363,6 +374,8 @@ func buildCommandJSON(cmd *cobra.Command, parentHidden bool) commandJSON {
 			Type:        f.Value.Type(),
 			Default:     f.DefValue,
 			Description: f.Usage,
+			Hidden:      f.Hidden,
+			Deprecated:  f.Deprecated,
 		}
 		if f.Shorthand != "" {
 			fj.Short = f.Shorthand

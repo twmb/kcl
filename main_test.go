@@ -265,6 +265,33 @@ func TestTreeShorthandsAndUsage(t *testing.T) {
 			t.Errorf("%s --%s should still exist, hidden", path, old)
 		}
 	}
+
+	// --help-json says so too, and carries the version of its own shape.
+	tree := helpJSON{Version: 1, commandJSON: buildCommandJSON(root, false)}
+	raw, err := json.Marshal(tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc["_version"] != float64(1) || doc["name"] != "kcl" {
+		t.Errorf("--help-json top level = %v", doc)
+	}
+	seek := tree.Commands["group"].Commands["seek"]
+	if f := seek.Flags["topics"]; !f.Hidden {
+		t.Errorf("group seek --topics in --help-json = %+v, want hidden", f)
+	}
+	if f := seek.Flags["topic"]; f.Hidden {
+		t.Errorf("group seek --topic in --help-json = %+v, want visible", f)
+	}
+	if f := tree.Flags["dump-json"]; f.Deprecated == "" {
+		t.Errorf("--dump-json in --help-json = %+v, want deprecated", f)
+	}
+	if _, ok := tree.Flags["help-json"]; ok {
+		t.Error("--help-json lists itself")
+	}
 	for path, use := range map[string]string{
 		"kcl topic create":              "create TOPICS...",
 		"kcl misc list-offsets":         "list-offsets TOPICS...",
