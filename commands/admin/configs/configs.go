@@ -2,11 +2,8 @@
 package configs
 
 import (
-	"bufio"
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"sort"
 	"strconv"
@@ -86,7 +83,7 @@ func (q *querier) parseEntity(args []string) error {
 	if q.entity == entityBroker && len(args) > 0 {
 		bid, err := strconv.Atoi(args[0])
 		if err != nil {
-			return fmt.Errorf("unable to parse broker ID: %v", err)
+			return out.Errf(out.ExitUsage, "unable to parse broker ID %q: %v", args[0], err)
 		}
 		q.requestor = q.cl.Client().Broker(bid)
 	}
@@ -131,20 +128,26 @@ Altering brokers allows for leaving off the broker being altered; this will
 update the dynamic configuration on all brokers. Updating an individual broker
 causes the broker to reload its password files and allows for setting password
 fields.
+
+The result prints one row per resource with ERROR and MESSAGE. --dry-run
+validates the request without applying it; the row then carries what the
+validation answered.
+
+EXAMPLES:
+  kcl config alter foo -s cleanup.policy=compact --delete preallocate
+  kcl config alter foo --dry-run --type topic --set preallocate=true --delete cleanup.policy
+  kcl config alter my-share-group -tg -s share.auto.offset.reset=earliest
+  kcl config alter my-subscription -tcm -s match=[client_software_name=kcl]
+
+SEE ALSO:
+  kcl config describe    describe configs
 `,
-
-		Example: `kcl config alter foo -s cleanup.policy=compact --delete preallocate
-
-kcl config alter foo --dry-run --type topic --set preallocate=true --delete cleanup.policy
-
-kcl config alter my-share-group -tg -s share.auto.offset.reset=earliest
-
-kcl config alter my-subscription -tcm -s match=[client_software_name=kcl]`,
 
 		RunE: func(_ *cobra.Command, args []string) error {
 			return cfger.alter(args)
 		},
 	}
+	out.Columns(cmd, alterHeaders...)
 
 	cmd.Flags().StringVarP(&cfger.rawEntity, "type", "t", "topic", "entity type (t, topic, b, broker, bl, broker logger, cm, client-metrics, g, group)")
 	cmd.Flags().BoolVarP(&cfger.incremental, "inc", "i", false, "perform an incremental alter (Kafka 2.3.0+)")
@@ -288,23 +291,21 @@ func (c *cfger) alterIncremental() error {
 	}
 	resp := kresp.(*kmsg.IncrementalAlterConfigsResponse)
 
-	table := out.NewFormattedTable(c.cl.Format(), c.cl.Command(), 1, "results",
-		"RESOURCE", "ERROR", "ERROR-MESSAGE")
-	anyErr := false
+	table := c.resultTable()
 	for _, resource := range resp.Resources {
 		errName, errMsg := alterError(resource.ErrorCode, resource.ErrorMessage)
-		if resource.ErrorCode != 0 {
-			anyErr = true
-		}
 		table.Row(resource.ResourceName, errName, errMsg)
 	}
-	if err := table.Flush(); err != nil {
-		return err
-	}
-	if anyErr {
-		return out.ErrSilent
-	}
-	return nil
+	return table.Flush()
+}
+
+// alterHeaders are the columns of an alter's result, one row per resource.
+var alterHeaders = []string{"RESOURCE", "ERROR", "MESSAGE"}
+
+func (c *cfger) resultTable() *out.FormattedTable {
+	table := out.NewFormattedTable(c.cl.Format(), c.cl.Command(), 1, "results", alterHeaders...).ResultColumns()
+	table.SetDryRun(c.dryRun)
+	return table
 }
 
 func (c *cfger) alterOld() error {
@@ -316,9 +317,27 @@ func (c *cfger) alterOld() error {
 		}},
 	}
 
-	if !c.noConfirm {
-		if err := c.confirmAlterLoss(); err != nil {
+	// A validation loses nothing, so only a real alter asks.
+	if !c.noConfirm && !c.dryRun {
+		losing, err := c.lostConfigs()
+		if err != nil {
 			return err
+		}
+		if len(losing) > 0 {
+			fmt.Fprintln(os.Stderr, "This alter will lose the following dynamic config keys:")
+			fmt.Fprintln(os.Stderr)
+			for _, kv := range losing {
+				fmt.Fprintf(os.Stderr, "  %s=%s\n", kv.k, kv.v)
+			}
+			fmt.Fprintln(os.Stderr)
+			if out.Confirm("Proceed and lose them?") != out.Yes {
+				// Declined: the result shape with no result, as
+				// a dry run.
+				table := c.resultTable()
+				table.SetDryRun(true)
+				table.Row(c.resourceName, out.Unknown, out.Unknown)
+				return table.Flush()
+			}
 		}
 	}
 
@@ -335,52 +354,51 @@ func (c *cfger) alterOld() error {
 	}
 	resp := kresp.(*kmsg.AlterConfigsResponse)
 
-	table := out.NewFormattedTable(c.cl.Format(), c.cl.Command(), 1, "results",
-		"RESOURCE", "ERROR", "ERROR-MESSAGE")
-	anyErr := false
+	table := c.resultTable()
 	for _, resource := range resp.Resources {
 		errName, errMsg := alterError(resource.ErrorCode, resource.ErrorMessage)
-		if resource.ErrorCode != 0 {
-			anyErr = true
-		}
 		table.Row(resource.ResourceName, errName, errMsg)
 	}
-	if err := table.Flush(); err != nil {
-		return err
-	}
-	if anyErr {
-		return out.ErrSilent
-	}
-	return nil
+	return table.Flush()
 }
 
-// alterError renders one alter response resource into the ERROR and
-// ERROR-MESSAGE columns. A clean resource is OK, matching topic create. A
-// failed one names the code rather than printing the number, and falls back
-// to the error description when the broker attaches no message of its own.
+// alterError renders one alter response resource into the ERROR and MESSAGE
+// columns: "" and "" on success, else the error name and whatever message
+// the broker attached.
 func alterError(code int16, brokerMsg *string) (string, string) {
 	if code == 0 {
-		return "OK", ""
+		return "", ""
 	}
-	e := kerr.TypedErrorForCode(code)
-	msg := e.Description
+	var msg string
 	if brokerMsg != nil {
 		msg = *brokerMsg
 	}
-	return e.Message, msg
+	return kerr.TypedErrorForCode(code).Message, msg
 }
 
-// confirmAlterLoss prompts for yes or no when issuing alter configs
-// for all config options that will be lost.
-func (c *cfger) confirmAlterLoss() error {
-	existing := make(map[string]string, 10)
+type lostKV struct {
+	k, v string
+}
+
+// lostConfigs describes the resource and returns the dynamic keys a
+// non-incremental alter drops: those set today that the alter does not name,
+// sorted by key.
+func (c *cfger) lostConfigs() ([]lostKV, error) {
 	_, describeResource, err := c.querier.issueDescribeConfig(false)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	keep := make(map[string]bool, len(c.parsedKVs))
+	for _, kv := range c.parsedKVs {
+		keep[kv.k] = true
+	}
+	var losing []lostKV
 	for _, entry := range describeResource.Configs {
 		switch entry.Source {
-		case 4, 5: // static, default
+		case kmsg.ConfigSourceStaticBrokerConfig, kmsg.ConfigSourceDefaultConfig:
+			continue
+		}
+		if keep[entry.Name] {
 			continue
 		}
 		val := "(null)"
@@ -390,65 +408,10 @@ func (c *cfger) confirmAlterLoss() error {
 		if entry.IsSensitive {
 			val = "(sensitive)"
 		}
-		existing[entry.Name] = val
+		losing = append(losing, lostKV{entry.Name, val})
 	}
-
-	for _, kv := range c.parsedKVs {
-		delete(existing, kv.k)
-	}
-
-	if len(existing) > 0 {
-		type kv struct {
-			k, v string
-		}
-		losing := make([]kv, 0, len(existing))
-		for k, v := range existing {
-			losing = append(losing, kv{k, v})
-		}
-		sort.Slice(losing, func(i, j int) bool {
-			return losing[i].k < losing[j].v
-		})
-		fmt.Fprintln(os.Stderr, "THIS ALTER WILL LOSE THE FOLLOWING CONFIG KEY/VALUES, IS THAT OK?")
-		fmt.Fprintln(os.Stderr)
-		for _, toLose := range losing {
-			fmt.Fprintf(os.Stderr, "%s=%s\n", toLose.k, toLose.v)
-		}
-		fmt.Fprintln(os.Stderr)
-
-		return promptAlterLoss(os.Stdin, os.Stderr)
-	}
-	return nil
-}
-
-// promptAlterLoss asks whether to proceed, rereading r until the answer is
-// recognized. EOF and a read error both abort: a non-interactive stdin cannot
-// answer, and looping on it spins forever.
-func promptAlterLoss(r io.Reader, w io.Writer) error {
-	br := bufio.NewReader(r)
-	for {
-		fmt.Fprint(w, "[y]es|[n]o > ")
-		line, err := br.ReadString('\n')
-		if err != nil && line == "" {
-			fmt.Fprintln(w, "Aborting.")
-			if errors.Is(err, io.EOF) {
-				return out.ErrSilent
-			}
-			return out.Errf(out.ExitError, "unable to read stdin: %v", err)
-		}
-		switch strings.ToLower(strings.TrimSpace(line)) {
-		case "y", "yes":
-			return nil
-		case "n", "no":
-			fmt.Fprintln(w, "Aborting.")
-			return out.ErrSilent
-		default:
-			fmt.Fprintf(w, "unrecognized input %q, valid options are y, yes, n, no\n", strings.TrimSpace(line))
-		}
-		if err != nil {
-			fmt.Fprintln(w, "Aborting.")
-			return out.ErrSilent
-		}
-	}
+	sort.Slice(losing, func(i, j int) bool { return losing[i].k < losing[j].k })
+	return losing, nil
 }
 
 // issues a describe config for a single resource and returns
@@ -513,16 +476,21 @@ Describing requires specifying the "entity type":
 When describing brokers, if no broker ID is used, only dynamic (manually set)
 key/value pairs are printed. If you wish to describe the full config for a
 specific broker, be sure to pass a broker ID.
+
+Rows lead with the resource described, then KEY, TYPE, VALUE, SOURCE, and in
+JSON and awk a READ-ONLY column. TYPE is filled with --with-types and is
+unknown (null in JSON, - in awk) without it; text hides the column then.
+
+EXAMPLES:
+  kcl config describe foo -tt
+  kcl config describe 1 -tb
+  kcl config describe --type broker   # every dynamic broker key/value pair
+  kcl config describe my-share-group -tg
+  kcl config describe my-subscription -tcm
+
+SEE ALSO:
+  kcl config alter    alter configs
 `,
-		Example: `kcl config describe foo -tt
-
-kcl config describe 1 -tb
-
-kcl config describe --type broker   # every dynamic broker key/value pair
-
-kcl config describe my-share-group -tg
-
-kcl config describe my-subscription -tcm`,
 
 		RunE: func(_ *cobra.Command, args []string) error {
 			if err := q.parseEntity(args); err != nil {
@@ -542,16 +510,18 @@ kcl config describe my-subscription -tcm`,
 			// Text marks a read only key by suffixing the key with a
 			// star, which is fine to read and awful to match on. JSON
 			// and awk get the key itself and a READ-ONLY column, so
-			// that a script grepping for broker.id finds it.
+			// that a script grepping for broker.id finds it. TYPE is
+			// always a column in JSON and awk and holds Unknown
+			// without --with-types; text shows it only when asked.
 			text := cl.Format() == out.FormatText
 			withTypes := withTypes && resp.Version >= 3
-			headers := []string{"KEY"}
-			if withTypes {
-				headers = append(headers, "TYPE")
-			}
-			headers = append(headers, "VALUE", "SOURCE")
-			if !text {
-				headers = append(headers, "READ-ONLY")
+			headers := describeHeaders
+			if text {
+				headers = []string{"RESOURCE", "KEY"}
+				if withTypes {
+					headers = append(headers, "TYPE")
+				}
+				headers = append(headers, "VALUE", "SOURCE")
 			}
 			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "configs", headers...)
 			for _, kv := range kvs {
@@ -566,10 +536,14 @@ kcl config describe my-subscription -tcm`,
 				if kv.IsSensitive {
 					val = "(sensitive)"
 				}
-
-				row := []any{key}
+				var typ any = out.Unknown
 				if withTypes {
-					row = append(row, kv.ConfigType)
+					typ = kv.ConfigType
+				}
+
+				row := []any{resource.ResourceName, key}
+				if !text || withTypes {
+					row = append(row, typ)
 				}
 				row = append(row, val, kv.Source)
 				if !text {
@@ -600,9 +574,14 @@ kcl config describe my-subscription -tcm`,
 		},
 	}
 
+	out.Columns(cmd, describeHeaders...)
 	cmd.Flags().StringVarP(&q.rawEntity, "type", "t", "topic", "entity type (t, topic, b, broker, bl, broker logger, cm, client-metrics, g, group)")
 	cmd.Flags().BoolVar(&withDocs, "with-docs", false, "include documentation for config values (Kafka 2.6.0+)")
 	cmd.Flags().BoolVar(&withTypes, "with-types", false, "include types of config values (Kafka 2.6.0+)")
 
 	return cmd
 }
+
+// describeHeaders are the columns of a describe in JSON and awk. Text drops
+// READ-ONLY for a star on the key, and TYPE unless asked for it.
+var describeHeaders = []string{"RESOURCE", "KEY", "TYPE", "VALUE", "SOURCE", "READ-ONLY"}
