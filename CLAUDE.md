@@ -99,8 +99,11 @@ known before the command runs, where an ACL filter or a group seek only
 learns what it matched after asking the cluster.
 
 Renames keep the old name working as a `Hidden`/`Deprecated` cobra command
-or flag, so no script breaks. `--help-json` (`main.go:203`) dumps the whole
-tree, and `main_test.go` pins that hidden commands stay marked.
+or flag, so no script breaks, and `out.AliasOf` marks the old command, or
+the top of an old subtree, with the path it forwards to, so `_command` is
+the new path. `--help-json` (`main.go:203`) dumps the whole tree,
+`main_test.go` pins that hidden commands stay marked, and the walkthrough
+runs every hidden leaf and flag and fails on one it cannot map.
 
 ## Errors and exit codes
 
