@@ -36,6 +36,7 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd.AddCommand(topicAddPartitionsCommand(cl))
 	cmd.AddCommand(topicDescribeCommand(cl))
 	cmd.AddCommand(topicTrimPrefixCommand(cl))
+	cmd.AddCommand(ListOffsetsCommand(cl))
 	return cmd
 }
 
