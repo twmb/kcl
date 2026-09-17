@@ -126,8 +126,7 @@ The information printed:
 					}
 				}
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 
@@ -172,8 +171,7 @@ transaction state or producer ID.
 					table.Row(kresp.Meta.NodeID, txn.TransactionalID, txn.ProducerID, txn.TransactionState, "")
 				}
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 
@@ -228,7 +226,9 @@ the producer ID, epoch, timeout, and the topics/partitions involved.
 					"",
 				)
 			}
-			table.Flush()
+			if err := table.Flush(); err != nil {
+				return err
+			}
 			if anyErr {
 				return out.ErrSilent
 			}

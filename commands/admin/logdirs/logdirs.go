@@ -269,8 +269,7 @@ kcl logdirs describe   # describes all`,
 				for _, e := range entries {
 					aggTable.Row(e.key, formatSize(e.size, humanReadable))
 				}
-				aggTable.Flush()
-				return nil
+				return aggTable.Flush()
 			}
 
 			// TOTAL, USABLE, and CORDONED are appended rather than slotted
@@ -287,8 +286,7 @@ kcl logdirs describe   # describes all`,
 					formatSize(r.size, humanReadable), r.offsetLag, r.isFuture,
 					formatSize(r.total, humanReadable), formatSize(r.usable, humanReadable), r.cordoned)
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 
@@ -379,8 +377,7 @@ which allows you to alter replicas.
 					table.Row(topic.Topic, partition.Partition, msg)
 				}
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 	cmd.Flags().Int32VarP(&broker, "broker", "b", -1, "a specific broker to direct the request to")

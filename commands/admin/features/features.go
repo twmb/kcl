@@ -59,7 +59,9 @@ version ranges and finalized feature version ranges.
 			for _, f := range resp.FinalizedFeatures {
 				table.Row("FINALIZED", f.Name, f.MinVersionLevel, f.MaxVersionLevel)
 			}
-			table.Flush()
+			if err := table.Flush(); err != nil {
+				return err
+			}
 
 			if len(resp.SupportedFeatures) == 0 && len(resp.FinalizedFeatures) == 0 {
 				fmt.Fprintln(os.Stderr, "No feature flags found.")
@@ -152,8 +154,7 @@ Use --dry-run to preview without applying.
 				}
 				table.Row(result.Feature, errStr, msg)
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 

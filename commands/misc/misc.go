@@ -223,7 +223,9 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 					}
 					table.Row(kind, k, ver)
 				})
-				table.Flush()
+				if err := table.Flush(); err != nil {
+					return err
+				}
 			} else {
 				table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "api_versions",
 					"NAME", "MAX")
@@ -234,7 +236,9 @@ func apiVersionsCommand(cl *client.Client) *cobra.Command {
 					}
 					table.Row(kind, ver)
 				})
-				table.Flush()
+				if err := table.Flush(); err != nil {
+					return err
+				}
 			}
 			return nil
 		},
@@ -660,8 +664,7 @@ offset.
 					table.Row(part.broker, topic.topic, part.part, start, part.stableOffset, end, noErr)
 				}
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 
@@ -739,8 +742,7 @@ it does, read the documentation for kmsg.OffsetForLeaderEpochRequest.
 					}
 				}
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 

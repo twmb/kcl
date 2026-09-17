@@ -51,8 +51,7 @@ func listCommand(cl *client.Client) *cobra.Command {
 			for _, n := range names {
 				table.Row(n)
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 }
@@ -128,7 +127,9 @@ func describeCommand(cl *client.Client) *cobra.Command {
 					}
 					table.Row(c.Name, val, c.Source)
 				}
-				table.Flush()
+				if err := table.Flush(); err != nil {
+					return err
+				}
 			}
 			return nil
 		},
@@ -201,8 +202,7 @@ EXAMPLES:
 				}
 				table.Row(r.ResourceName, "OK")
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 
@@ -263,8 +263,7 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 				}
 				table.Row(res.ResourceName, "deleted")
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 }

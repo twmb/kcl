@@ -111,8 +111,7 @@ SimpleAuthorizer.
 			table.Row("MAX AGE", millisToStr(resp.MaxTimestamp))
 			table.Row("TOKEN ID", resp.TokenID)
 			table.Row("base64(HMAC)", base64.StdEncoding.EncodeToString(resp.HMAC))
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 
@@ -152,8 +151,7 @@ func renewTokenCommand(cl *client.Client) *cobra.Command {
 			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
 				"FIELD", "VALUE")
 			table.Row("EXPIRY", millisToStr(resp.ExpiryTimestamp))
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 
@@ -192,8 +190,7 @@ func expireTokenCommand(cl *client.Client) *cobra.Command {
 			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
 				"FIELD", "VALUE")
 			table.Row("EXPIRY", millisToStr(resp.ExpiryTimestamp))
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 
@@ -256,8 +253,7 @@ kcl dtoken describe -o User:admin    # tokens the admin user owns`,
 					"["+strings.Join(renewers, ", ")+"]",
 				)
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 

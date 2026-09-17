@@ -96,8 +96,7 @@ reassignment for that partition.
 					table.Row(topic.Topic, partition.Partition, msg, detail)
 				}
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 }
@@ -177,8 +176,7 @@ once by default.
 					table.Row(topic.Topic, partition.Partition, msg, detail)
 				}
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 }
@@ -243,8 +241,7 @@ If no topics are specified, this lists all active reassignments.
 					table.Row(topic.Topic, p.Partition, fmt.Sprint(p.Replicas), fmt.Sprint(p.AddingReplicas), fmt.Sprint(p.RemovingReplicas))
 				}
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 }

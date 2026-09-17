@@ -209,8 +209,7 @@ SEE ALSO:
 					}
 				}
 			}
-			resultTable.Flush()
-			return nil
+			return resultTable.Flush()
 		},
 	}
 

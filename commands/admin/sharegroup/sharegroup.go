@@ -82,8 +82,7 @@ by issuing a ListGroups request with a type filter of "share".
 					table.Row(kresp.Meta.NodeID, group.Group, group.GroupState)
 				}
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 	cmd.Flags().StringArrayVarP(&statesFilter, "filter", "f", nil, "filter groups by state (Stable, Dead, Empty; repeatable)")
@@ -384,7 +383,9 @@ Defaults: text shows all sections, awk shows offsets.
 										lagTable.Row(topic.Topic, p.Partition, p.StartOffset, p.LeaderEpoch, lag, errMsg)
 									}
 								}
-								lagTable.Flush()
+								if err := lagTable.Flush(); err != nil {
+									return err
+								}
 							}
 						}
 						fmt.Println()
@@ -558,7 +559,9 @@ without actually deleting them.
 					table.Row(brokerResp.Meta.NodeID, g.Group, status, message)
 				}
 			}
-			table.Flush()
+			if err := table.Flush(); err != nil {
+				return err
+			}
 			if anyErr {
 				return out.ErrSilent
 			}

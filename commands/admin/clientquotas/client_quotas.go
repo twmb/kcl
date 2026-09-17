@@ -135,8 +135,7 @@ filter specified by flags is returned.
 					table.Row(entityStr, value.Key, value.Value)
 				}
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 
@@ -272,8 +271,7 @@ matches, this runs an alter on anything that matches.
 				}
 				table.Row(entityStr, code, msg)
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 

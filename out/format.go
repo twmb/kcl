@@ -41,6 +41,7 @@ type FormattedTable struct {
 	headers  []string
 	jsonKeys []string
 	rows     [][]any
+	errCol   int // the ERROR column under ResultColumns, else -1
 }
 
 // NewFormattedTable creates a table that outputs in the specified format.
@@ -62,6 +63,7 @@ func NewFormattedTable(format, command string, version int, jsonKey string, head
 		jsonKey:  jsonKey,
 		headers:  headers,
 		jsonKeys: keys,
+		errCol:   -1,
 	}
 }
 
@@ -88,13 +90,35 @@ func (t *FormattedTable) WithKeys(keys map[string]string) *FormattedTable {
 	return t
 }
 
+// ResultColumns declares that the table's last two columns are ERROR and then
+// MESSAGE, the per-item result of a mutating command, so that no command
+// checks its own results. A row's ERROR is "" on success and the error name
+// otherwise; text prints OK for the "", awk prints "-", and JSON keeps the "".
+// Flush returns ErrSilent when any row's ERROR is set, so the command exits 1
+// after printing every result. A table that ends in ERROR alone may declare
+// this too. Any other shape is a programming error and panics.
+func (t *FormattedTable) ResultColumns() *FormattedTable {
+	n := len(t.headers)
+	switch {
+	case n >= 2 && t.headers[n-2] == "ERROR" && t.headers[n-1] == "MESSAGE":
+		t.errCol = n - 2
+	case n >= 1 && t.headers[n-1] == "ERROR":
+		t.errCol = n - 1
+	default:
+		panic(fmt.Sprintf("out: ResultColumns needs the headers to end in ERROR or ERROR, MESSAGE: %v", t.headers))
+	}
+	return t
+}
+
 // Row adds a row of values to the table.
 func (t *FormattedTable) Row(values ...any) {
 	t.rows = append(t.rows, values)
 }
 
-// Flush writes the buffered data in the configured format to stdout.
-func (t *FormattedTable) Flush() {
+// Flush writes the buffered data in the configured format to stdout. It
+// returns ErrSilent when the table declares ResultColumns and a row's ERROR is
+// set, and nil otherwise, so a command ends with "return table.Flush()".
+func (t *FormattedTable) Flush() error {
 	switch t.format {
 	case FormatJSON:
 		t.flushJSON()
@@ -103,6 +127,25 @@ func (t *FormattedTable) Flush() {
 	default:
 		t.flushText()
 	}
+	if t.errCol >= 0 {
+		for _, row := range t.rows {
+			if t.errCol < len(row) && isError(row[t.errCol]) {
+				return ErrSilent
+			}
+		}
+	}
+	return nil
+}
+
+// isError reports whether an ERROR cell names an error. Unknown and "" do not.
+func isError(v any) bool {
+	switch v := v.(type) {
+	case nil, unknown:
+		return false
+	case string:
+		return v != ""
+	}
+	return fmt.Sprint(v) != ""
 }
 
 func (t *FormattedTable) flushText() {
@@ -111,6 +154,10 @@ func (t *FormattedTable) flushText() {
 	for _, row := range t.rows {
 		strs := make([]string, len(row))
 		for i, v := range row {
+			if i == t.errCol && v == "" {
+				strs[i] = "OK"
+				continue
+			}
 			strs[i] = textCell(v)
 		}
 		fmt.Fprint(tw, strings.Join(strs, "\t")+"\n")

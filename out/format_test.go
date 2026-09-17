@@ -444,3 +444,104 @@ func TestWithKeys(t *testing.T) {
 	}()
 	NewFormattedTable("json", "x", 1, "rows", "A").WithKeys(map[string]string{"B": "b"})
 }
+
+// TestResultColumns pins the result shape: text prints OK for a "" ERROR,
+// awk prints "-", JSON keeps "", and Flush returns ErrSilent only when a row
+// carries an error. An Unknown ERROR, a plan row not yet run, is no error.
+func TestResultColumns(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		headers []string
+		rows    [][]any
+		wantErr bool
+		text    string
+		awk     string
+	}{
+		{
+			name:    "all ok",
+			headers: []string{"TOPIC", "ERROR", "MESSAGE"},
+			rows:    [][]any{{"a", "", ""}, {"b", "", ""}},
+			text:    "TOPIC  ERROR  MESSAGE\na      OK     \nb      OK     \n",
+			awk:     "a\t-\t-\nb\t-\t-\n",
+		},
+		{
+			name:    "one error",
+			headers: []string{"TOPIC", "ERROR", "MESSAGE"},
+			rows:    [][]any{{"a", "", ""}, {"b", "UNKNOWN_TOPIC_OR_PARTITION", "no such topic"}},
+			wantErr: true,
+			text:    "TOPIC  ERROR                       MESSAGE\na      OK                          \nb      UNKNOWN_TOPIC_OR_PARTITION  no such topic\n",
+			awk:     "a\t-\t-\nb\tUNKNOWN_TOPIC_OR_PARTITION\tno such topic\n",
+		},
+		{
+			name:    "unknown is not an error",
+			headers: []string{"TOPIC", "ERROR", "MESSAGE"},
+			rows:    [][]any{{"a", Unknown, Unknown}},
+			text:    "TOPIC  ERROR  MESSAGE\na      -      -\n",
+			awk:     "a\t-\t-\n",
+		},
+		{
+			name:    "error alone",
+			headers: []string{"TOPIC", "ERROR"},
+			rows:    [][]any{{"a", ""}, {"b", "boom"}},
+			wantErr: true,
+			text:    "TOPIC  ERROR\na      OK\nb      boom\n",
+			awk:     "a\t-\nb\tboom\n",
+		},
+		{
+			name:    "no rows",
+			headers: []string{"TOPIC", "ERROR", "MESSAGE"},
+			text:    "TOPIC  ERROR  MESSAGE\n",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, format := range []string{"text", "awk", "json"} {
+				var err error
+				got := captureStdout(func() {
+					table := NewFormattedTable(format, "topic.delete", 1, "results", test.headers...).ResultColumns()
+					for _, row := range test.rows {
+						table.Row(row...)
+					}
+					err = table.Flush()
+				})
+				if (err == ErrSilent) != test.wantErr || (err != nil && err != ErrSilent) {
+					t.Errorf("%s: Flush = %v, want ErrSilent %v", format, err, test.wantErr)
+				}
+				switch format {
+				case "text":
+					if got != test.text {
+						t.Errorf("text = %q, want %q", got, test.text)
+					}
+				case "awk":
+					if got != test.awk {
+						t.Errorf("awk = %q, want %q", got, test.awk)
+					}
+				case "json":
+					var doc map[string]any
+					if err := json.Unmarshal([]byte(got), &doc); err != nil {
+						t.Fatalf("json: %v: %s", err, got)
+					}
+					for i, row := range doc["results"].([]any) {
+						cell := row.(map[string]any)["error"]
+						switch want := test.rows[i][1]; want {
+						case Unknown:
+							if cell != nil {
+								t.Errorf("row %d error = %v, want null", i, cell)
+							}
+						default:
+							if cell != want {
+								t.Errorf("row %d error = %v, want %v", i, cell, want)
+							}
+						}
+					}
+				}
+			}
+		})
+	}
+
+	defer func() {
+		if recover() == nil {
+			t.Error("ResultColumns on a table that does not end in ERROR did not panic")
+		}
+	}()
+	NewFormattedTable("json", "x", 1, "rows", "ERROR", "TOPIC").ResultColumns()
+}

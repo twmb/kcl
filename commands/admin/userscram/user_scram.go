@@ -107,8 +107,7 @@ Requires Kafka 2.7.0+.
 					table.Row(res.User, mech2str(info.Mechanism), info.Iterations, "")
 				}
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 
@@ -304,7 +303,9 @@ Both --set and --del can be specified many times.
 				}
 				table.Row(res.User, errStr, msg)
 			}
-			table.Flush()
+			if err := table.Flush(); err != nil {
+				return err
+			}
 			if failed {
 				return out.ErrSilent
 			}

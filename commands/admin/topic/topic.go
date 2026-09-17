@@ -164,7 +164,9 @@ replicas each. When using --replica-assignment, do not use --num-partitions or
 					table.Row(topic.Topic, msg)
 				}
 			}
-			table.Flush()
+			if err := table.Flush(); err != nil {
+				return err
+			}
 			if anyErr {
 				return out.ErrSilent
 			}
@@ -362,7 +364,9 @@ SEE ALSO:
 				}
 				table.Row(topic, msg)
 			}
-			table.Flush()
+			if err := table.Flush(); err != nil {
+				return err
+			}
 			if anyErr {
 				return out.ErrSilent
 			}
@@ -520,8 +524,7 @@ kcl topic add-partitions foo -a 1,2 -a 3,1 -a 2,3  # three more, on brokers 1+2,
 				}
 				table.Row(topic.Topic, errKind, errMsg)
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 

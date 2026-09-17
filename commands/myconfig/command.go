@@ -119,8 +119,7 @@ func listCommand(cl *client.Client) *cobra.Command {
 				for _, n := range profileNames(cfgFile) {
 					table.Row(n, n == cfgFile.CurrentProfile)
 				}
-				table.Flush()
-				return nil
+				return table.Flush()
 			}
 			if len(cfgFile.Profiles) == 0 {
 				if missing {

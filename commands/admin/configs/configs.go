@@ -298,7 +298,9 @@ func (c *cfger) alterIncremental() error {
 		}
 		table.Row(resource.ResourceName, errName, errMsg)
 	}
-	table.Flush()
+	if err := table.Flush(); err != nil {
+		return err
+	}
 	if anyErr {
 		return out.ErrSilent
 	}
@@ -343,7 +345,9 @@ func (c *cfger) alterOld() error {
 		}
 		table.Row(resource.ResourceName, errName, errMsg)
 	}
-	table.Flush()
+	if err := table.Flush(); err != nil {
+		return err
+	}
 	if anyErr {
 		return out.ErrSilent
 	}
@@ -573,7 +577,9 @@ kcl config describe my-subscription -tcm`,
 				}
 				table.Row(row...)
 			}
-			table.Flush()
+			if err := table.Flush(); err != nil {
+				return err
+			}
 
 			if !withDocs || resp.Version < 3 {
 				return nil

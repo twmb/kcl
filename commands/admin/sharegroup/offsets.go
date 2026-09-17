@@ -69,8 +69,7 @@ for the specified topics within the share group.
 				}
 				table.Row(topic.Topic, errMsg)
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 	cmd.Flags().StringArrayVarP(&topicFlags, "topic", "t", nil, "topic to delete offsets for; repeatable")

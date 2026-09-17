@@ -231,8 +231,7 @@ SEE ALSO:
 					)
 				}
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 
@@ -487,8 +486,7 @@ SEE ALSO:
 					errMsg,
 				)
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 
@@ -629,8 +627,7 @@ kcl acl delete --topic foo --dry-run           # show the matches, delete nothin
 						)
 					}
 				}
-				table.Flush()
-				return nil
+				return table.Flush()
 			}
 
 			if !noConfirm {
@@ -743,8 +740,7 @@ kcl acl delete --topic foo --dry-run           # show the matches, delete nothin
 					errMsg,
 				)
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 

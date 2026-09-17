@@ -89,8 +89,7 @@ the groups listed. This prints all of the information from a ListGroups request.
 					table.Row(kresp.Meta.NodeID, group.Group, group.ProtocolType, group.GroupType, group.GroupState, "")
 				}
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 	cmd.Flags().StringArrayVarP(&statesFilter, "filter", "f", nil, "filter groups listed by state (Preparing, PreparingRebalance, CompletingRebalance, Stable, Dead, Empty; Kafka 2.6.0+; repeatable)")
@@ -165,7 +164,9 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 					table.Row(brokerResp.Meta.NodeID, g.Group, status, message)
 				}
 			}
-			table.Flush()
+			if err := table.Flush(); err != nil {
+				return err
+			}
 			if anyErr {
 				return out.ErrSilent
 			}
@@ -263,8 +264,7 @@ with a JSON file:
 					table.Row(topic.Topic, partition.Partition, msg)
 				}
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 

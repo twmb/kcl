@@ -98,8 +98,7 @@ Use --dry-run to preview without applying.
 						table.Row(topic, p)
 					}
 				}
-				table.Flush()
-				return nil
+				return table.Flush()
 			}
 
 			req := &kmsg.ElectLeadersRequest{
@@ -148,8 +147,7 @@ Use --dry-run to preview without applying.
 					table.Row(topic.Topic, partition.Partition, errKind, msg)
 				}
 			}
-			table.Flush()
-			return nil
+			return table.Flush()
 		},
 	}
 
