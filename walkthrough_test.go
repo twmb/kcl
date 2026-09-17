@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode"
@@ -52,8 +54,11 @@ func TestMain(m *testing.M) {
 // Names the walkthrough seeds and then reads back.
 const (
 	walkTopic     = "walk-topic" // two partitions, three replicas
-	walkOther     = "walk-other" // one partition, one replica
-	walkGroup     = "walk-group"
+	walkOther     = "walk-other" // one partition, one replica, a retention.ms override
+	walkGroup     = "walk-group" // committed by an admin client, no member
+	walkMember    = "walk-member"
+	walkInstance  = "walk-instance" // the static member of walkMember, live for the run
+	walk848       = "walk-848"      // a consumer protocol group with a live member
 	walkShare     = "walk-share"
 	walkTxn       = "walk-txn" // a transaction left open on walkOther
 	walkSubject   = walkTopic + "-value"
@@ -105,11 +110,15 @@ var walkthroughLeaves = []struct {
 	{path: "group.describe", args: []string{walkGroup}},
 	{path: "group.describe", args: []string{walkGroup}, variant: []string{"--section", "summary"}},
 	{path: "group.describe", args: []string{walkGroup}, variant: []string{"--section", "lag"}},
-	{path: "group.describe", args: []string{walkGroup}, variant: []string{"--section", "members"}},
+	{path: "group.describe", args: []string{walkMember}, variant: []string{"--section", "members"}},
 	{path: "group.describe", args: []string{walkGroup}, variant: []string{"--by", "topic"}},
 	{path: "group.describe", args: []string{walkGroup}, variant: []string{"--by", "member"}},
 	{path: "group.describe", args: []string{walkGroup}, variant: []string{"--by", "group"}},
+	{path: "group.describe", args: []string{walk848}, variant: []string{"--consumer-protocol"}},
+	{path: "group.describe", args: []string{walkMember}, variant: []string{"--lag", ">0"}},
+	{path: "group.describe", args: []string{walkMember}, variant: []string{"--instance-ids"}},
 	{path: "group.list"},
+	{path: "group.list", variant: []string{"--state", "empty"}},
 	{path: "logdirs.describe"},
 	{path: "logdirs.describe", variant: []string{"--aggregate-into", "broker"}},
 	{path: "logdirs.describe", variant: []string{"--aggregate-into", "dir"}},
@@ -142,7 +151,11 @@ var walkthroughLeaves = []struct {
 	{path: "topic.describe", args: []string{walkTopic, walkOther}, variant: []string{"--section", "summary"}},
 	{path: "topic.describe", args: []string{walkTopic, walkOther}, variant: []string{"--section", "partitions"}},
 	{path: "topic.describe", args: []string{walkTopic, walkOther}, variant: []string{"--section", "configs"}},
+	{path: "topic.describe", args: []string{walkTopic, walkOther}, variant: []string{"--stable"}},
+	{path: "topic.describe", args: []string{walkTopic, walkOther}, variant: []string{"--under-replicated"}},
+	{path: "topic.describe", args: []string{walkTopic, walkOther}, variant: []string{"--with-overrides"}},
 	{path: "topic.list"},
+	{path: "topic.list", args: []string{"walk-.*"}, variant: []string{"-r"}},
 	{path: "topic.list-offsets", args: []string{walkTopic}},
 	{path: "txn.describe", args: []string{walkTxn}},
 	{path: "txn.describe-producers", args: []string{walkOther}},
@@ -253,14 +266,18 @@ var walkthroughHeaders = map[string]string{
 	"config.describe":                             "RESOURCE\tKEY\tTYPE\tVALUE\tSOURCE\tREAD-ONLY",
 	"dtoken.describe":                             "PRINCIPAL\tISSUED\tEXPIRY\tMAX-AGE\tTOKEN-ID\tHMAC\tRENEWERS",
 	"group.delete":                                "BROKER\tGROUP\tERROR\tMESSAGE",
-	"group.describe":                              "GROUP\tTOPIC\tPARTITION\tCURRENT-OFFSET\tLOG-START-OFFSET\tLOG-END-OFFSET\tLAG\tMEMBER-ID\tCLIENT-ID\tHOST\tRACK\tINSTANCE-ID",
+	"group.describe":                              "GROUP\tTOPIC\tPARTITION\tCURRENT-OFFSET\tLOG-START-OFFSET\tLOG-END-OFFSET\tLAG\tMEMBER-ID\tCLIENT-ID\tHOST\tRACK\tINSTANCE-ID\tERROR\tMESSAGE",
 	"group.describe --by group":                   "GROUP\tSTATE\tMEMBERS\tPARTITIONS\tLAG",
 	"group.describe --by member":                  "GROUP\tMEMBER-ID\tPARTITIONS\tLAG\tCLIENT-ID\tHOST\tRACK\tINSTANCE-ID",
 	"group.describe --by topic":                   "GROUP\tTOPIC\tPARTITIONS\tLAG",
-	"group.describe --section lag":                "GROUP\tTOPIC\tPARTITION\tCURRENT-OFFSET\tLOG-START-OFFSET\tLOG-END-OFFSET\tLAG\tMEMBER-ID\tCLIENT-ID\tHOST\tRACK\tINSTANCE-ID",
+	"group.describe --consumer-protocol":          "GROUP\tTOPIC\tPARTITION\tCURRENT-OFFSET\tLOG-START-OFFSET\tLOG-END-OFFSET\tLAG\tMEMBER-ID\tCLIENT-ID\tHOST\tRACK\tINSTANCE-ID\tERROR\tMESSAGE",
+	"group.describe --instance-ids":               "GROUP\tTOPIC\tPARTITION\tCURRENT-OFFSET\tLOG-START-OFFSET\tLOG-END-OFFSET\tLAG\tMEMBER-ID\tCLIENT-ID\tHOST\tRACK\tINSTANCE-ID\tERROR\tMESSAGE",
+	"group.describe --lag >0":                     "GROUP\tTOPIC\tPARTITION\tCURRENT-OFFSET\tLOG-START-OFFSET\tLOG-END-OFFSET\tLAG\tMEMBER-ID\tCLIENT-ID\tHOST\tRACK\tINSTANCE-ID\tERROR\tMESSAGE",
+	"group.describe --section lag":                "GROUP\tTOPIC\tPARTITION\tCURRENT-OFFSET\tLOG-START-OFFSET\tLOG-END-OFFSET\tLAG\tMEMBER-ID\tCLIENT-ID\tHOST\tRACK\tINSTANCE-ID\tERROR\tMESSAGE",
 	"group.describe --section members":            "GROUP\tMEMBER-ID\tCLIENT-ID\tHOST\tRACK\tINSTANCE-ID\tMEMBER-EPOCH\tSUBSCRIBED-TOPICS\tASSIGNMENT\tTARGET-ASSIGNMENT",
 	"group.describe --section summary":            "GROUP\tCOORDINATOR\tSTATE\tBALANCER\tMEMBERS\tTOTAL-LAG\tERROR\tMESSAGE",
 	"group.list":                                  "BROKER\tGROUP\tPROTO-TYPE\tGROUP-TYPE\tSTATE\tERROR",
+	"group.list --state empty":                    "BROKER\tGROUP\tPROTO-TYPE\tGROUP-TYPE\tSTATE\tERROR",
 	"group.seek":                                  "TOPIC\tPARTITION\tPRIOR-OFFSET\tNEW-OFFSET\tERROR\tMESSAGE",
 	"logdirs.describe":                            "BROKER\tDIR\tTOPIC\tPARTITION\tSIZE\tOFFSET-LAG\tIS-FUTURE\tTOTAL\tUSABLE\tCORDONED\tERROR",
 	"logdirs.describe --aggregate-into broker":    "BROKER\tSIZE",
@@ -304,7 +321,11 @@ var walkthroughHeaders = map[string]string{
 	"topic.describe --section configs":            "TOPIC\tKEY\tVALUE\tSOURCE\tSENSITIVE\tERROR",
 	"topic.describe --section partitions":         "TOPIC\tPARTITION\tLEADER\tLEADER-EPOCH\tREPLICAS\tISR\tOFFLINE-REPLICAS\tSTART-OFFSET\tEND-OFFSET\tSTABLE-OFFSET\tERROR",
 	"topic.describe --section summary":            "TOPIC\tTOPIC-ID\tPARTITIONS\tREPLICATION\tERROR",
+	"topic.describe --stable":                     "TOPIC\tPARTITION\tLEADER\tLEADER-EPOCH\tREPLICAS\tISR\tOFFLINE-REPLICAS\tSTART-OFFSET\tEND-OFFSET\tSTABLE-OFFSET\tERROR",
+	"topic.describe --under-replicated":           "TOPIC\tPARTITION\tLEADER\tLEADER-EPOCH\tREPLICAS\tISR\tOFFLINE-REPLICAS\tSTART-OFFSET\tEND-OFFSET\tSTABLE-OFFSET\tERROR",
+	"topic.describe --with-overrides":             "TOPIC\tPARTITION\tLEADER\tLEADER-EPOCH\tREPLICAS\tISR\tOFFLINE-REPLICAS\tSTART-OFFSET\tEND-OFFSET\tSTABLE-OFFSET\tERROR",
 	"topic.list":                                  "TOPIC\tTOPIC-ID\tPARTITIONS\tREPLICATION\tERROR",
+	"topic.list -r":                               "TOPIC\tTOPIC-ID\tPARTITIONS\tREPLICATION\tERROR",
 	"topic.list-offsets":                          "BROKER\tTOPIC\tPARTITION\tSTART\tSTABLE\tEND\tSTART-EPOCH\tSTABLE-EPOCH\tEND-EPOCH\tAT\tERROR",
 	"topic.trim-prefix":                           "TOPIC\tPARTITION\tPRIOR-OFFSET\tNEW-OFFSET\tERROR\tMESSAGE",
 	"txn.describe":                                "TRANSACTIONAL-ID\tSTATE\tPRODUCER-ID\tPRODUCER-EPOCH\tTIMEOUT-MS\tSTART-TIMESTAMP\tTOPICS\tERROR",
@@ -314,22 +335,118 @@ var walkthroughHeaders = map[string]string{
 	"version":                                     "KEY\tVALUE",
 }
 
+// walkthroughKeys is the JSON key set of every leaf the walkthrough runs, as
+// keySet renders the document: the sorted keys of the top level and of every
+// object below it, the first element standing for an array. It is the other
+// half of the scripting contract: a key renamed, added, or dropped fails
+// here, and a rename or removal is a BREAKING entry in the release notes.
+var walkthroughKeys = map[string]string{
+	"acl.create":                                  ".: _command _version dry_run results; results[]: error host message name operation pattern permission principal type",
+	"acl.delete":                                  ".: _command _version deleted dry_run; deleted[]: error host message name operation pattern permission principal type",
+	"acl.list":                                    ".: _command _version acls; acls[]: host name operation pattern permission principal type",
+	"client-metrics.describe":                     ".: _command _version code error",
+	"client-metrics.list":                         ".: _command _version subscriptions",
+	"cluster.describe --section brokers":          ".: _command _version authorized_operations brokers cluster_id controller_id; brokers[]: host id port rack",
+	"cluster.describe --section cluster":          ".: _command _version authorized_operations brokers cluster_id controller_id; brokers[]: host id port rack",
+	"cluster.describe":                            ".: _command _version authorized_operations brokers cluster_id controller_id; brokers[]: host id port rack",
+	"cluster.describe-quorum --section observers": ".: _command _version code error",
+	"cluster.describe-quorum --section voters":    ".: _command _version code error",
+	"cluster.describe-quorum":                     ".: _command _version code error",
+	"cluster.elect-leaders":                       ".: _command _version dry_run results; results[]: error message partition topic",
+	"cluster.features.describe":                   ".: _command _version features; features[]: kind max_version min_version name",
+	"cluster.metadata --section brokers":          ".: _command _version brokers; brokers[]: host id port rack",
+	"cluster.metadata --section cluster":          ".: _command _version cluster_id controller_id",
+	"cluster.metadata --section topics":           ".: _command _version topics; topics[]: error internal partition_count replication_factor topic topic_id",
+	"cluster.metadata":                            ".: _command _version brokers cluster_id controller_id topics; brokers[]: host id port rack; topics[]: error internal partition_count replication_factor topic topic_id",
+	"config.alter":                                ".: _command _version dry_run results; results[]: error message resource",
+	"config.describe":                             ".: _command _version configs; configs[]: key read_only resource source type value",
+	"dtoken.describe":                             ".: _command _version code error",
+	"group.delete":                                ".: _command _version dry_run results; results[]: broker error group message",
+	"group.describe --by group":                   ".: _command _version groups; groups[]: group member_count partition_count state total_lag",
+	"group.describe --by member":                  ".: _command _version groups; groups[]: balancer coordinator error group lag members message state total_lag; groups[].lag[]: client_id host instance_id lag member_id partitions rack",
+	"group.describe --by topic":                   ".: _command _version groups; groups[]: balancer coordinator error group lag members message state total_lag; groups[].lag[]: lag partitions topic",
+	"group.describe --consumer-protocol":          ".: _command _version groups; groups[]: balancer coordinator error group lag members message state total_lag; groups[].lag[]: client_id current_offset error host instance_id lag log_end_offset log_start_offset member_id message partition rack topic; groups[].members[]: assignment client_id host instance_id member_epoch member_id rack subscribed_topics target_assignment",
+	"group.describe --instance-ids":               ".: _command _version groups; groups[]: balancer coordinator error group lag members message state total_lag; groups[].lag[]: client_id current_offset error host instance_id lag log_end_offset log_start_offset member_id message partition rack topic; groups[].members[]: assignment client_id host instance_id member_epoch member_id rack subscribed_topics target_assignment",
+	"group.describe --lag >0":                     ".: _command _version groups; groups[]: balancer coordinator error group lag members message state total_lag; groups[].lag[]: client_id current_offset error host instance_id lag log_end_offset log_start_offset member_id message partition rack topic; groups[].members[]: assignment client_id host instance_id member_epoch member_id rack subscribed_topics target_assignment",
+	"group.describe --section lag":                ".: _command _version groups; groups[]: balancer coordinator error group lag members message state total_lag; groups[].lag[]: client_id current_offset error host instance_id lag log_end_offset log_start_offset member_id message partition rack topic",
+	"group.describe --section members":            ".: _command _version groups; groups[]: balancer coordinator error group lag members message state total_lag; groups[].lag[]: client_id current_offset error host instance_id lag log_end_offset log_start_offset member_id message partition rack topic; groups[].members[]: assignment client_id host instance_id member_epoch member_id rack subscribed_topics target_assignment",
+	"group.describe --section summary":            ".: _command _version groups; groups[]: balancer coordinator error group lag members message state total_lag; groups[].lag[]: client_id current_offset error host instance_id lag log_end_offset log_start_offset member_id message partition rack topic",
+	"group.describe":                              ".: _command _version groups; groups[]: balancer coordinator error group lag members message state total_lag; groups[].lag[]: client_id current_offset error host instance_id lag log_end_offset log_start_offset member_id message partition rack topic",
+	"group.list --state empty":                    ".: _command _version groups; groups[]: broker error group group_type proto_type state",
+	"group.list":                                  ".: _command _version groups; groups[]: broker error group group_type proto_type state",
+	"group.seek":                                  ".: _command _version dry_run group plan results; plan[]: error message new_offset partition prior_offset topic",
+	"logdirs.describe --aggregate-into broker":    ".: _command _version dirs; dirs[]: broker size",
+	"logdirs.describe --aggregate-into dir":       ".: _command _version dirs; dirs[]: dir size",
+	"logdirs.describe --aggregate-into topic":     ".: _command _version dirs; dirs[]: size topic",
+	"logdirs.describe":                            ".: _command _version dirs; dirs[]: broker cordoned dir error is_future offset_lag partition size topic total usable",
+	"misc.api-versions":                           ".: _command _version api_versions; api_versions[]: key max name",
+	"misc.errcode":                                ".: _command _version description error_code name",
+	"misc.errtext":                                ".: _command _version description error_code name",
+	"misc.offset-for-leader-epoch":                ".: _command _version epochs; epochs[]: broker end_offset error leader_epoch partition topic",
+	"misc.probe-version":                          ".: _command _version guess max min",
+	"misc.raw-req":                                ".: _command _version response; response: ApiKeys ErrorCode FinalizedFeatures FinalizedFeaturesEpoch SupportedFeatures ThrottleMillis UnknownTags Version ZkMigrationReady; response.ApiKeys[]: ApiKey MaxVersion MinVersion UnknownTags; response.ApiKeys[].UnknownTags: ; response.FinalizedFeatures[]: MaxVersionLevel MinVersionLevel Name UnknownTags; response.FinalizedFeatures[].UnknownTags: ; response.SupportedFeatures[]: MaxVersion MinVersion Name UnknownTags; response.SupportedFeatures[].UnknownTags: ; response.UnknownTags: ",
+	"profile.create":                              ".: _command _version current path profile",
+	"profile.current":                             ".: _command _version profile",
+	"profile.delete":                              ".: _command _version current path profile",
+	"profile.dump":                                ".: _command _version config; config: broker_timeout registry seed_brokers; config.registry: urls",
+	"profile.list":                                ".: _command _version profiles; profiles[]: current name",
+	"profile.rename":                              ".: _command _version current path profile",
+	"profile.set":                                 ".: _command _version current path profile",
+	"profile.use":                                 ".: _command _version current path profile",
+	"quota.alter":                                 ".: _command _version dry_run results; results[]: entity error message",
+	"quota.describe":                              ".: _command _version quotas; quotas[]: entity key value",
+	"reassign.list":                               ".: _command _version reassignments",
+	"registry.compatibility.get":                  ".: _command _version compatibility; compatibility[]: error level subject",
+	"registry.context.list":                       ".: _command _version contexts; contexts[]: context",
+	"registry.mode.get":                           ".: _command _version modes; modes[]: error mode subject",
+	"registry.schema.check-compatibility":         ".: _command _version compatible messages subject version",
+	"registry.schema.get":                         ".: _command _version id references schema subject type version",
+	"registry.schema.list":                        ".: _command _version schemas; schemas[]: id subject type version",
+	"registry.schema.references":                  ".: _command _version references; references[]: id subject version",
+	"registry.subject.list":                       ".: _command _version subjects; subjects[]: subject",
+	"share-group.delete":                          ".: _command _version dry_run results; results[]: broker error group message",
+	"share-group.describe --section members":      ".: _command _version groups; groups[]: assignment_epoch assignor coordinator epoch error group members message offsets state total_lag; groups[].members[]: assignment client_id host member_epoch member_id rack subscribed_topics; groups[].offsets[]: error lag leader_epoch message partition start_offset topic",
+	"share-group.describe --section offsets":      ".: _command _version groups; groups[]: assignment_epoch assignor coordinator epoch error group members message offsets state total_lag; groups[].members[]: assignment client_id host member_epoch member_id rack subscribed_topics; groups[].offsets[]: error lag leader_epoch message partition start_offset topic",
+	"share-group.describe --section summary":      ".: _command _version groups; groups[]: assignment_epoch assignor coordinator epoch error group members message offsets state total_lag; groups[].members[]: assignment client_id host member_epoch member_id rack subscribed_topics; groups[].offsets[]: error lag leader_epoch message partition start_offset topic",
+	"share-group.describe":                        ".: _command _version groups; groups[]: assignment_epoch assignor coordinator epoch error group members message offsets state total_lag; groups[].members[]: assignment client_id host member_epoch member_id rack subscribed_topics; groups[].offsets[]: error lag leader_epoch message partition start_offset topic",
+	"share-group.list":                            ".: _command _version groups; groups[]: broker error group state",
+	"share-group.seek":                            ".: _command _version dry_run group plan results; plan[]: error message new_offset partition prior_offset topic",
+	"topic.create":                                ".: _command _version dry_run topics; topics[]: error message topic topic_id",
+	"topic.delete":                                ".: _command _version dry_run topics; topics[]: error message topic",
+	"topic.describe --section configs":            ".: _command _version topics; topics[]: configs error internal partition_count replication_factor topic topic_id; topics[].configs[]: key sensitive source value",
+	"topic.describe --section partitions":         ".: _command _version topics; topics[]: error internal partition_count partitions replication_factor topic topic_id; topics[].partitions[]: end_offset error isr leader leader_epoch offline_replicas partition replicas stable_offset start_offset",
+	"topic.describe --section summary":            ".: _command _version topics; topics[]: error internal partition_count replication_factor topic topic_id",
+	"topic.describe --stable":                     ".: _command _version topics; topics[]: configs error internal partition_count partitions replication_factor topic topic_id; topics[].configs[]: key sensitive source value; topics[].partitions[]: end_offset error isr leader leader_epoch offline_replicas partition replicas stable_offset start_offset",
+	"topic.describe --under-replicated":           ".: _command _version topics; topics[]: configs error internal partition_count partitions replication_factor topic topic_id; topics[].configs[]: key sensitive source value",
+	"topic.describe --with-overrides":             ".: _command _version topics; topics[]: configs error internal partition_count partitions replication_factor topic topic_id; topics[].configs[]: key sensitive source value; topics[].partitions[]: end_offset error isr leader leader_epoch offline_replicas partition replicas stable_offset start_offset",
+	"topic.describe":                              ".: _command _version topics; topics[]: configs error internal partition_count partitions replication_factor topic topic_id; topics[].configs[]: key sensitive source value; topics[].partitions[]: end_offset error isr leader leader_epoch offline_replicas partition replicas stable_offset start_offset",
+	"topic.list -r":                               ".: _command _version topics; topics[]: error internal partition_count replication_factor topic topic_id",
+	"topic.list":                                  ".: _command _version topics; topics[]: error internal partition_count replication_factor topic topic_id",
+	"topic.list-offsets":                          ".: _command _version offsets; offsets[]: at broker end end_epoch error partition stable stable_epoch start start_epoch topic",
+	"topic.trim-prefix":                           ".: _command _version dry_run plan results; plan[]: error message new_offset partition prior_offset topic",
+	"txn.describe":                                ".: _command _version transactions; transactions[]: error producer_epoch producer_id start_timestamp state timeout_ms topics transactional_id; transactions[].topics[]: partitions topic",
+	"txn.describe-producers":                      ".: _command _version producers; producers[]: coordinator_epoch error last_sequence last_timestamp message partition producer_epoch producer_id topic txn_start_offset",
+	"txn.list":                                    ".: _command _version transactions; transactions[]: broker error producer_id state transactional_id",
+	"user.list":                                   ".: _command _version credentials; credentials[]: error iterations mechanism message user",
+	"version":                                     ".: _command _version build_date git_ref go_version os_arch version",
+}
+
 // walkthroughEmpty are the leaves that exit 0 with no awk row against the
 // seeded fake, and why no row can be seeded. Every other leaf that exits 0
 // must print a row, so that a check cannot pass on nothing: the fake is
 // seeded with an ACL, a quota, a SCRAM user, a group, and a share group for
 // the lists that would otherwise be empty.
 var walkthroughEmpty = map[string]string{
-	"client-metrics.list":                    "kfake answers INVALID_REQUEST to a client metrics alter, so no subscription can be created",
-	"group.describe --section members":       "the group's offsets were committed by an admin client, so it has no member",
-	"reassign.list":                          "kfake has no reassignment in flight, and cannot start one",
-	"share-group.describe --section members": "the share consumer that joined the group left it",
+	"client-metrics.list":               "kfake answers INVALID_REQUEST to a client metrics alter, so no subscription can be created",
+	"reassign.list":                     "kfake has no reassignment in flight, and cannot start one",
+	"topic.describe --under-replicated": "every replica of every seeded partition is in sync, and kfake cannot take one out",
 }
 
 func TestWalkthrough(t *testing.T) {
 	t.Run("every leaf is listed or skipped", testEveryLeafClassified)
 
 	w := newWalkthrough(t)
+	w.shareOffsets = w.readShareOffsets(t)
 
 	// Each group runs its leaves in parallel and returns when they are
 	// all done, so the state check below sees every mutation's effect.
@@ -348,7 +465,9 @@ func TestWalkthrough(t *testing.T) {
 
 				js := w.run(t, leaf.stdin, slices.Concat(args, []string{"--format", "json"}))
 				if w.check(t, key, "json", leaf.exit, leaf.why, js) {
-					w.checkJSON(t, key, leaf.path, js, false)
+					if doc, ok := w.checkJSON(t, key, leaf.path, js, false); ok {
+						w.checkKeys(t, key, js, doc)
+					}
 				}
 
 				awk := w.run(t, leaf.stdin, slices.Concat(args, []string{"--format", "awk"}))
@@ -376,7 +495,9 @@ func TestWalkthrough(t *testing.T) {
 
 				js := w.run(t, "", slices.Concat(args, []string{"--format", "json"}))
 				if w.check(t, m.path, "json", out.ExitOK, "", js) {
-					w.checkJSON(t, m.path, m.path, js, true)
+					if doc, ok := w.checkJSON(t, m.path, m.path, js, true); ok {
+						w.checkKeys(t, m.path, js, doc)
+					}
 				}
 
 				awk := w.run(t, "", slices.Concat(args, []string{"--format", "awk"}))
@@ -401,6 +522,10 @@ func TestWalkthrough(t *testing.T) {
 	})
 
 	t.Run("aliases", w.testAliases)
+
+	// The aliases ran the dry-run forms under their old flags; a hidden
+	// flag that skipped the dry run would show here.
+	t.Run("nothing changed after the aliases", w.testNothingChanged)
 }
 
 // leafKey names a leaf and its variant: "group.describe --section summary".
@@ -430,11 +555,7 @@ func (w *walkthrough) runProfileSteps(t *testing.T, format, alias, target string
 			if !ok {
 				return
 			}
-			for _, key := range []string{"profile", "path", "current"} {
-				if _, ok := doc[key]; !ok {
-					w.errf(t, path, format, r, "document has no %q", key)
-				}
-			}
+			w.checkKeys(t, step.path, r, doc)
 		case "awk":
 			header := w.checkHeader(t, step.path, args)
 			w.checkAWK(t, path, "", r, header)
@@ -480,9 +601,25 @@ func testEveryLeafClassified(t *testing.T) {
 			t.Errorf("walkthroughHeaders has %q, which no leaf runs", key)
 		}
 	}
+	for key := range walkthroughKeys {
+		if !keys[key] {
+			t.Errorf("walkthroughKeys has %q, which no leaf runs", key)
+		}
+	}
 	for key := range keys {
 		if _, ok := walkthroughHeaders[key]; !ok {
 			t.Errorf("%s has no entry in walkthroughHeaders; add its --format awk-header line", key)
+		}
+		if _, ok := walkthroughKeys[key]; !ok {
+			t.Errorf("%s has no entry in walkthroughKeys; add its JSON key set", key)
+		}
+	}
+	for key, columns := range walkthroughFreeText {
+		if !keys[key] {
+			t.Errorf("walkthroughFreeText has %q, which no leaf runs", key)
+		}
+		if len(columns) == 0 {
+			t.Errorf("walkthroughFreeText has %q with no column", key)
 		}
 	}
 	for key, why := range walkthroughEmpty {
@@ -524,14 +661,19 @@ type walkthrough struct {
 	exe        string
 	cfgPath    string
 	schemaFile string
+
+	// shareOffsets is the share group's offsets section as seeded, read
+	// back before anything ran, for the state check to compare against.
+	shareOffsets string
 }
 
 // newWalkthrough seeds one kfake cluster and one srfake registry with enough
 // to read back: topics carrying records, a group with committed offsets, a
-// share group that fetched them, a transaction left open, an ACL, a quota, a
-// SCRAM user, and a registered schema with one referencing it. It writes a
-// config file naming both, so that every command reaches them the way a
-// profile does.
+// group with a live static member and a consumer protocol group with a live
+// member, a share group that fetched the records with a member still in it,
+// a transaction left open, an ACL, a quota, a SCRAM user, and a registered
+// schema with one referencing it. It writes a config file naming both, so
+// that every command reaches them the way a profile does.
 func newWalkthrough(t *testing.T) *walkthrough {
 	t.Helper()
 
@@ -558,7 +700,10 @@ func newWalkthrough(t *testing.T) *walkthrough {
 	if _, err := adm.CreateTopics(ctx, 2, -1, nil, walkTopic); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := adm.CreateTopics(ctx, 1, 1, nil, walkOther); err != nil {
+	// walkOther carries a config override, so that topic describe
+	// --with-overrides has a topic to keep.
+	retention := "60000"
+	if _, err := adm.CreateTopics(ctx, 1, 1, map[string]*string{"retention.ms": &retention}, walkOther); err != nil {
 		t.Fatal(err)
 	}
 	partitions := map[string]int32{walkTopic: 2, walkOther: 1}
@@ -592,8 +737,18 @@ func newWalkthrough(t *testing.T) *walkthrough {
 		t.Fatal(err)
 	}
 
-	// The share group fetched every record of walkTopic and left. Share
-	// groups start at the end of the log unless told otherwise.
+	// walkMember has one static member, and walk848 one member on the
+	// consumer protocol; both stay for the run, commit nothing, and read
+	// from the end, so the lag rows are the whole log. The members
+	// section has a row to print, and seek --dry-run, which needs an
+	// Empty group, runs against walkGroup.
+	joinWalkGroup(t, c, walkMember, walkInstance, false)
+	joinWalkGroup(t, c, walk848, "", true)
+
+	// The share group fetched every record of walkTopic and left, so its
+	// start offsets are settled; a second member then joins and stays,
+	// so the members section has a row. Share groups start at the end of
+	// the log unless told otherwise.
 	c.SetGroupConfigs(walkShare, map[string]string{"share.auto.offset.reset": "earliest"})
 	share, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...), kgo.ShareGroup(walkShare), kgo.ConsumeTopics(walkTopic))
 	if err != nil {
@@ -609,6 +764,16 @@ func newWalkthrough(t *testing.T) *walkthrough {
 	}
 	cancel()
 	share.Close()
+	member, err := kgo.NewClient(kgo.SeedBrokers(c.ListenAddrs()...), kgo.ShareGroup(walkShare), kgo.ConsumeTopics(walkTopic))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(member.Close)
+	shareCtx, cancel = context.WithTimeout(ctx, 10*time.Second)
+	if fs := member.PollFetches(shareCtx); fs.Err() != nil && !errors.Is(fs.Err(), context.DeadlineExceeded) {
+		t.Fatalf("share group %s member: %v", walkShare, fs.Err())
+	}
+	cancel()
 
 	// A transaction stays open on walkOther for the run, so that the txn
 	// commands have a transaction and a producer to describe. walkTopic
@@ -696,6 +861,53 @@ urls = [%q]
 	return w
 }
 
+// joinWalkGroup joins group as a member of walkTopic and returns once the
+// member holds an assignment. The member stays until the test ends, commits
+// nothing, and reads from the end, so nothing is fetched. With instance set
+// it is a static member; with consumer set it speaks the KIP-848 protocol.
+func joinWalkGroup(t *testing.T, c *kfake.Cluster, group, instance string, consumer bool) {
+	t.Helper()
+	assigned := make(chan struct{})
+	var once sync.Once
+	opts := []kgo.Opt{
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeTopics(walkTopic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtEnd()),
+		kgo.DisableAutoCommit(),
+		kgo.OnPartitionsAssigned(func(context.Context, *kgo.Client, map[string][]int32) {
+			once.Do(func() { close(assigned) })
+		}),
+	}
+	if instance != "" {
+		opts = append(opts, kgo.InstanceID(instance))
+	}
+	if consumer {
+		opts = append(opts, kgo.WithContext(context.WithValue(context.Background(), "opt_in_kafka_next_gen_balancer_beta", true)))
+	}
+	m, err := kgo.NewClient(opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(m.Close)
+
+	// The first poll joins the group.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.PollFetches(ctx)
+	}()
+	select {
+	case <-assigned:
+	case <-ctx.Done():
+		t.Fatalf("group %s: no assignment within 10s", group)
+	}
+	cancel()
+	<-done
+}
+
 // fillArgs replaces the placeholders a table cannot know at run time.
 func (w *walkthrough) fillArgs(args []string) []string {
 	out := slices.Clone(args)
@@ -773,25 +985,45 @@ func awkRows(stdout string) [][]string {
 // checkHeader runs --format awk-header for the command args name and pins
 // it against walkthroughHeaders under key: the exact line, or nothing for a
 // leaf with no table. It runs in a child like everything else, so it is what
-// a script would see. It returns the header's fields, nil when there are
-// none.
+// a script would see, and with no config file, since the header depends on
+// no config and the developer's real one must not fail the test. It returns
+// the header's fields, nil when there are none.
 func (w *walkthrough) checkHeader(t *testing.T, key string, args []string) []string {
 	t.Helper()
-	r := w.runArgs(t, "", slices.Concat(args, []string{"--format", "awk-header"}))
-	if r.code != out.ExitOK || r.stderr != "" {
-		w.errf(t, key, "awk-header", r, "exit %d, want 0 and nothing on stderr", r.code)
+	got, ok := w.awkHeader(t, key, args)
+	if !ok {
 		return nil
 	}
-	got := strings.TrimSuffix(r.stdout, "\n")
 	if want, ok := walkthroughHeaders[key]; !ok {
-		w.errf(t, key, "awk-header", r, "has no entry in walkthroughHeaders")
+		w.errf(t, key, "awk-header", runResult{stdout: got}, "has no entry in walkthroughHeaders")
 	} else if got != want {
-		w.errf(t, key, "awk-header", r, "prints %q, want %q; a column change is BREAKING and updates walkthroughHeaders", got, want)
+		w.errf(t, key, "awk-header", runResult{stdout: got}, "prints %q, want %q; a column change is BREAKING and updates walkthroughHeaders", got, want)
 	}
 	if got == "" {
 		return nil
 	}
 	return strings.Split(got, "\t")
+}
+
+// awkHeader is what --format awk-header prints for args, without a trailing
+// newline, and false when the run failed or wrote anything to stderr but a
+// deprecation notice.
+func (w *walkthrough) awkHeader(t *testing.T, key string, args []string) (string, bool) {
+	t.Helper()
+	r := w.runArgs(t, "", slices.Concat([]string{"--no-config-file"}, args, []string{"--format", "awk-header"}))
+	// cobra notes a deprecated command or flag on stderr; an alias is
+	// expected to.
+	var stderr []string
+	for line := range strings.SplitSeq(strings.TrimSuffix(r.stderr, "\n"), "\n") {
+		if line != "" && !strings.Contains(line, " is deprecated, ") && !strings.Contains(line, " has been deprecated, ") {
+			stderr = append(stderr, line)
+		}
+	}
+	if r.code != out.ExitOK || len(stderr) > 0 {
+		w.errf(t, key, "awk-header", r, "exit %d, want 0 and nothing on stderr", r.code)
+		return "", false
+	}
+	return strings.TrimSuffix(r.stdout, "\n"), true
 }
 
 // checkNotEmpty pins that a leaf that exits 0 prints a row under awk, unless
@@ -858,6 +1090,10 @@ func (w *walkthrough) checkJSON(t *testing.T, key, command string, r runResult, 
 // as many as the header --format awk-header prints for the command, and the
 // header the text format prints is not one of them. A command that prints
 // rows must have registered its columns, so that a script can learn them.
+// No field is empty, since awk's default splitting would lose it, and none
+// holds a space, a bracket, or a "<nil>", which are a Go value printed raw:
+// a list is comma joined and an unknown is "-". A column that is free text
+// in walkthroughFreeText may hold spaces and brackets.
 func (w *walkthrough) checkAWK(t *testing.T, path, text string, r runResult, header []string) {
 	t.Helper()
 	body := strings.TrimSuffix(r.stdout, "\n")
@@ -878,13 +1114,86 @@ func (w *walkthrough) checkAWK(t *testing.T, path, text string, r runResult, hea
 	}
 	headers := headerLines(text)
 	for i, row := range rows {
-		if got := strings.Count(row, "\t") + 1; got != want {
-			w.errf(t, path, "awk", r, "row %d has %d fields, row 0 has %d: %q", i, got, want, row)
+		fields := strings.Split(row, "\t")
+		if len(fields) != want {
+			w.errf(t, path, "awk", r, "row %d has %d fields, row 0 has %d: %q", i, len(fields), want, row)
 		}
 		if slices.Contains(headers, strings.Join(strings.Fields(row), " ")) {
 			w.errf(t, path, "awk", r, "row %d is a header the text format prints: %q", i, row)
 		}
+		for j, field := range fields {
+			column := ""
+			if j < len(header) {
+				column = header[j]
+			}
+			freeText := slices.Contains(walkthroughFreeText[path], column)
+			switch {
+			case field == "":
+				w.errf(t, path, "awk", r, "row %d field %d (%s) is empty; an empty or unknown cell is \"-\": %q", i, j, column, row)
+			case strings.Contains(field, "<nil>"):
+				w.errf(t, path, "awk", r, "row %d field %d (%s) is a nil printed raw; an unknown cell is \"-\": %q", i, j, column, row)
+			case strings.ContainsAny(field, "[]") && !freeText:
+				w.errf(t, path, "awk", r, "row %d field %d (%s) holds a bracket; a list is comma joined: %q", i, j, column, row)
+			case strings.Contains(field, " ") && !freeText:
+				w.errf(t, path, "awk", r, "row %d field %d (%s) holds a space, which awk's default splitting breaks on; name the column in walkthroughFreeText if it is free text: %q", i, j, column, row)
+			}
+		}
 	}
+}
+
+// walkthroughFreeText names, per leaf, the awk columns that are free text
+// and may hold a space or a bracket: an error's description, a schema. Every
+// other field is one word with no bracket, so that a script splitting on
+// whitespace reads the columns it counted and a list is comma joined.
+var walkthroughFreeText = map[string][]string{
+	"misc.errcode":        {"DESCRIPTION"},
+	"misc.errtext":        {"DESCRIPTION"},
+	"registry.schema.get": {"SCHEMA"},
+}
+
+// checkKeys pins the JSON key set of a document against walkthroughKeys
+// under key: the keys of the top level and of every object below it, as
+// keySet renders them. A key renamed, added, or dropped fails here and is
+// listed in the release notes.
+func (w *walkthrough) checkKeys(t *testing.T, key string, r runResult, doc map[string]any) {
+	t.Helper()
+	got := keySet(doc)
+	if want, ok := walkthroughKeys[key]; !ok {
+		w.errf(t, key, "json", r, "has no entry in walkthroughKeys; add:\n\t%q: %q,", key, got)
+	} else if got != want {
+		w.errf(t, key, "json", r, "keys are\n\t%q\nwant\n\t%q\na key change is BREAKING and updates walkthroughKeys", got, want)
+	}
+}
+
+// keySet renders the keys of a document: the sorted keys of the top level,
+// then of every object below it, the first element standing for an array,
+// each object as "path: key key ...", the paths joined by "; ". An empty
+// array has no element to name, so its keys are not listed.
+func keySet(doc map[string]any) string {
+	var sets []string
+	var walk func(path string, m map[string]any)
+	walk = func(path string, m map[string]any) {
+		keys := slices.Sorted(maps.Keys(m))
+		sets = append(sets, path+": "+strings.Join(keys, " "))
+		for _, k := range keys {
+			sub := path + "." + k
+			if path == "." {
+				sub = k
+			}
+			switch v := m[k].(type) {
+			case map[string]any:
+				walk(sub, v)
+			case []any:
+				if len(v) > 0 {
+					if first, ok := v[0].(map[string]any); ok {
+						walk(sub+"[]", first)
+					}
+				}
+			}
+		}
+	}
+	walk(".", doc)
+	return strings.Join(sets, "; ")
 }
 
 // headerLines are the table headers the text format printed, as their words:
@@ -901,12 +1210,40 @@ func headerLines(text string) []string {
 	return headers
 }
 
+// readShareOffsets is the share group's offsets section as one line of
+// JSON, the document's _command and _version aside, so that two reads
+// compare as strings.
+func (w *walkthrough) readShareOffsets(t *testing.T) string {
+	t.Helper()
+	r := w.run(t, "", []string{"share-group", "describe", walkShare, "--section", "offsets", "--format", "json"})
+	if r.code != out.ExitOK {
+		t.Fatalf("share-group describe %s: exit %d\n  stderr: %s", walkShare, r.code, r.stderr)
+	}
+	var doc struct {
+		Groups []struct {
+			Offsets json.RawMessage `json:"offsets"`
+		} `json:"groups"`
+	}
+	if err := json.Unmarshal([]byte(r.stdout), &doc); err != nil {
+		t.Fatalf("share-group describe %s: stdout is not JSON: %v\n%s", walkShare, err, r.stdout)
+	}
+	if len(doc.Groups) != 1 || len(doc.Groups[0].Offsets) == 0 {
+		t.Fatalf("share-group describe %s: want one group with offsets: %s", walkShare, r.stdout)
+	}
+	return string(doc.Groups[0].Offsets)
+}
+
 // testNothingChanged reads the cluster back after the mutations ran as dry
 // runs and declined prompts: what they would have created is absent, what
 // they would have deleted or changed is as it was seeded. A mutation that
 // changed something fails here, next to its cause, rather than as another
 // leaf's flaky row.
 func (w *walkthrough) testNothingChanged(t *testing.T) {
+	// The share group's start offsets are where the seed left them.
+	if got := w.readShareOffsets(t); got != w.shareOffsets {
+		t.Errorf("share group %s offsets are %s, were %s; share-group seek --dry-run moved them", walkShare, got, w.shareOffsets)
+	}
+
 	rows := func(t *testing.T, args ...string) [][]string {
 		t.Helper()
 		r := w.run(t, "", append(args, "--format", "awk"))
@@ -1040,7 +1377,7 @@ var walkthroughAliasFlags = []struct {
 	{"group.list", []string{"--filter", "empty", "--type-filter", "classic"}, "group.list"},
 	{"group.seek", []string{walkGroup, "--to", "start", "--topics", walkTopic, "--dry-run"}, "group.seek"},
 	{"registry.schema.get", []string{"--subject", walkSubject}, "registry.schema.get"},
-	{"share-group.list", []string{"--filter", "empty"}, "share-group.list"},
+	{"share-group.list", []string{"--filter", "stable"}, "share-group.list"},
 	{"share-group.seek", []string{walkShare, "--to", "start", "--topics", walkTopic, "--dry-run"}, "share-group.seek"},
 	{"topic.create", []string{"walk-new", "--kv", "retention.ms=1000", "--dry-run"}, "topic.create"},
 	{"topic.list", []string{"--detailed"}, "topic.describe"},
@@ -1109,10 +1446,11 @@ func aliasTarget(path string, c commandJSON, visible map[string]bool) (string, b
 // testAliases runs every hidden or deprecated leaf of --help-json under
 // --format json with the arguments its target runs with, and pins that the
 // document parses, exits as the target does, and names the target in
-// _command, so that an old script keeps working and reads the new name.
-// Then it runs every hidden or deprecated flag the same way. A hidden leaf
-// or flag that no list here accounts for fails, so a rename cannot arrive
-// without its alias being walked.
+// _command, so that an old script keeps working and reads the new name; and
+// that --format awk-header prints the target's header, so that the alias
+// registered its columns. Then it runs every hidden or deprecated flag the
+// same way, under awk too. A hidden leaf or flag that no list here accounts
+// for fails, so a rename cannot arrive without its alias being walked.
 func (w *walkthrough) testAliases(t *testing.T) {
 	leaves := w.helpLeaves(t)
 	visible := make(map[string]bool)
@@ -1185,6 +1523,7 @@ func (w *walkthrough) testAliases(t *testing.T) {
 		}
 		t.Run(leaf.path, func(t *testing.T) {
 			t.Parallel()
+			w.checkAliasHeader(t, leaf.path, target, strings.Split(leaf.path, "."))
 			if steps[target] {
 				w.runProfileSteps(t, "json", leaf.path, target)
 				return
@@ -1235,12 +1574,43 @@ func (w *walkthrough) testAliases(t *testing.T) {
 		}
 		t.Run(f.path+" "+strings.Join(f.args, " "), func(t *testing.T) {
 			t.Parallel()
-			res := w.run(t, "", slices.Concat(strings.Split(f.path, "."), f.args, []string{"--format", "json"}))
+			args := slices.Concat(strings.Split(f.path, "."), f.args)
+			res := w.run(t, "", slices.Concat(args, []string{"--format", "json"}))
 			if w.check(t, f.path, "json", out.ExitOK, "", res) {
 				w.checkJSON(t, f.path, f.target, res, false)
 			}
+			header := w.checkAliasHeader(t, f.path, f.target, args)
+			awk := w.run(t, "", slices.Concat(args, []string{"--format", "awk"}))
+			if w.check(t, f.path, "awk", out.ExitOK, "", awk) {
+				w.checkAWK(t, f.target, "", awk, header)
+				w.checkNotEmpty(t, f.target, awk)
+			}
 		})
 	}
+}
+
+// checkAliasHeader pins that --format awk-header under an alias, a hidden
+// leaf or a leaf under a hidden flag, prints the header its target does, so
+// that an alias built without its registration cannot print rows a script
+// cannot learn the columns of. It returns the header's fields.
+func (w *walkthrough) checkAliasHeader(t *testing.T, path, target string, args []string) []string {
+	t.Helper()
+	got, ok := w.awkHeader(t, path, args)
+	if !ok {
+		return nil
+	}
+	want, ok := walkthroughHeaders[target]
+	if !ok {
+		t.Errorf("%s forwards to %s, which has no entry in walkthroughHeaders", path, target)
+		return nil
+	}
+	if got != want {
+		w.errf(t, path, "awk-header", runResult{stdout: got}, "prints %q, but its target %s prints %q", got, target, want)
+	}
+	if got == "" {
+		return nil
+	}
+	return strings.Split(got, "\t")
 }
 
 // errf reports one failure and keeps going, so that one run lists everything
