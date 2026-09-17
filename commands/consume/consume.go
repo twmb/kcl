@@ -551,7 +551,7 @@ func (c *consumption) run(topics []string) error {
 			return nil
 		case <-slow.C:
 			if isGroup || c.shareGroup != "" {
-				fmt.Fprintln(os.Stderr, "waiting on the offset commit and group leave; ctrl+c again to quit immediately...")
+				fmt.Fprintln(os.Stderr, "waiting on offsets to commit and the kcl member to leave the group; ctrl+c again to quit immediately...")
 			}
 		}
 	}
