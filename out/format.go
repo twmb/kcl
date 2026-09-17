@@ -295,16 +295,6 @@ func MarshalJSON(command string, version int, fields map[string]any, opts ...Opt
 	writeJSON(output)
 }
 
-// DieJSON outputs a JSON error to stdout and exits with code 1.
-func DieJSON(command string, errCode string, message string) {
-	writeJSON(map[string]any{
-		"_command": command,
-		"error":    errCode,
-		"message":  message,
-	})
-	os.Exit(1)
-}
-
 // writeJSON writes v as one line. JSON output is for machines: a single line
 // pipes into jq, greps, and captures into a shell variable, none of which a
 // pretty printed value does. Pipe to jq if you want it wide.

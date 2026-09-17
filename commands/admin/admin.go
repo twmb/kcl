@@ -198,18 +198,11 @@ partitions, use "kcl cluster metadata", which issues Metadata instead.
 
 			resp := kresp.(*kmsg.DescribeClusterResponse)
 			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-				if cl.Format() == "json" {
-					msg := err.Error()
-					if resp.ErrorMessage != nil {
-						msg += ": " + *resp.ErrorMessage
-					}
-					out.DieJSON(cl.Command(), err.Error(), msg)
-				}
 				additional := ""
 				if resp.ErrorMessage != nil {
 					additional = ": " + *resp.ErrorMessage
 				}
-				return fmt.Errorf("%s%s", err, additional)
+				return out.Errf(out.ExitError, "%s%s", err, additional)
 			}
 
 			switch cl.Format() {

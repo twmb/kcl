@@ -76,10 +76,7 @@ EXAMPLES:
 				if kresp.ErrorMessage != nil {
 					msg += ": " + *kresp.ErrorMessage
 				}
-				if cl.Format() == "json" {
-					out.DieJSON(cl.Command(), err.Error(), msg)
-				}
-				return fmt.Errorf("%s", msg)
+				return out.Errf(out.ExitError, "%s", msg)
 			}
 			switch cl.Format() {
 			case "json":
@@ -138,10 +135,7 @@ EXAMPLES:
 				if kresp.ErrorMessage != nil {
 					msg += ": " + *kresp.ErrorMessage
 				}
-				if cl.Format() == "json" {
-					out.DieJSON(cl.Command(), err.Error(), msg)
-				}
-				return fmt.Errorf("%s", msg)
+				return out.Errf(out.ExitError, "%s", msg)
 			}
 			switch cl.Format() {
 			case "json":

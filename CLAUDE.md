@@ -95,8 +95,10 @@ tree, and `main_test.go` pins that hidden commands stay marked.
 
 `out.ExitOK` 0, `out.ExitError` 1 for a Kafka-level failure, `out.ExitUsage`
 2 for bad flags, arguments, or parse failures. Return `out.Errf(code, ...)`
-rather than a bare `fmt.Errorf` when the exit code matters. `out.DieJSON`
-emits a structured error when the format is JSON.
+rather than a bare `fmt.Errorf` when the exit code matters. Every error a
+command returns reaches `out.HandleError`, which writes the
+`{_command,_version,code,error}` document when the format is JSON; there
+is no other JSON error path.
 
 ## Tests
 

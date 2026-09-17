@@ -286,29 +286,6 @@ func TestFormattedTableTextAlignment(t *testing.T) {
 	}
 }
 
-func TestDieJSON(t *testing.T) {
-	// DieJSON calls os.Exit, so we can't test it directly.
-	// But we can test the JSON output it would produce via writeJSON.
-	output := captureStdout(func() {
-		writeJSON(map[string]any{
-			"_command": "test.cmd",
-			"error":    "NOT_FOUND",
-			"message":  "resource not found",
-		})
-	})
-
-	var result map[string]any
-	if err := json.Unmarshal([]byte(output), &result); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	if result["error"] != "NOT_FOUND" {
-		t.Errorf("error = %v", result["error"])
-	}
-	if result["message"] != "resource not found" {
-		t.Errorf("message = %v", result["message"])
-	}
-}
-
 // TestEmptyCommandOmitted pins that a document with no command to name leaves
 // _command out rather than carrying an empty one, the rule ErrorDoc follows.
 // Only the bare root has no command.
