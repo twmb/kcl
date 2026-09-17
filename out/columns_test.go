@@ -61,21 +61,39 @@ func TestColumns(t *testing.T) {
 		NewFormattedTable("awk", "group.describe", 1, "members", "GROUP", "MEMBER-ID").Flush()
 	})
 
-	// An unregistered running command is not checked.
+	// An unregistered running command that prints an awk table is the
+	// same mistake as a mismatch: --format awk-header would print nothing
+	// for it. Text and JSON are not checked.
 	SetRunning(none)
-	captureStdout(func() { NewFormattedTable("awk", "consume", 1, "x", "A").Flush() })
-
-	SetRunning(byFlag)
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("a mismatched awk table did not panic under go test")
-		}
-		if msg := r.(string); !strings.Contains(msg, "[GROUP TOPIC]") || !strings.Contains(msg, "[GROUP MEMBER-ID]") {
-			t.Errorf("panic names neither side: %s", msg)
-		}
-	}()
-	NewFormattedTable("awk", "group.describe", 1, "lag", "GROUP", "TOPIC")
+	captureStdout(func() {
+		NewFormattedTable("text", "consume", 1, "x", "A").Flush()
+		NewFormattedTable("json", "consume", 1, "x", "A").Flush()
+	})
+	for _, test := range []struct {
+		name    string
+		running *cobra.Command
+		headers []string
+		want    []string
+	}{
+		{"mismatch", byFlag, []string{"GROUP", "TOPIC"}, []string{"[GROUP TOPIC]", "[GROUP MEMBER-ID]"}},
+		{"unregistered", none, []string{"A"}, []string{"[A]", "registered none"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			SetRunning(test.running)
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Fatal("the awk table did not panic under go test")
+				}
+				for _, want := range test.want {
+					if msg := r.(string); !strings.Contains(msg, want) {
+						t.Errorf("panic %q does not say %q", msg, want)
+					}
+				}
+			}()
+			NewFormattedTable("awk", "group.describe", 1, "lag", test.headers...)
+		})
+	}
 }
 
 // TestCommandOf pins how a hidden alias names the command it forwards to:

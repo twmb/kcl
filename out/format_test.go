@@ -8,8 +8,10 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 func captureStdout(fn func()) string {
@@ -349,8 +351,13 @@ func TestCellRules(t *testing.T) {
 		{"string pointer", ptr("x"), "x", "x", `"x"`},
 		{"int64 pointer", ptr(int64(7)), "7", "7", "7"},
 		{"empty string pointer", ptr(""), "", "-", `""`},
-		{"bytes", []byte("raw"), "raw", "raw", `"cmF3"`},
+		{"bytes", []byte("raw"), "cmF3", "cmF3", `"cmF3"`},
+		{"bytes with a tab", []byte("a\tb\n"), "YQliCg==", "YQliCg==", `"YQliCg=="`},
 		{"stringer", stringer("s"), "s", "s", `"s"`},
+		{"kmsg enum", kmsg.ConfigSourceDynamicTopicConfig, "DYNAMIC_TOPIC_CONFIG", "DYNAMIC_TOPIC_CONFIG", `"DYNAMIC_TOPIC_CONFIG"`},
+		{"duration", 90 * time.Second, "1m30s", "1m30s", `"1m30s"`},
+		{"marshaler wins over stringer", marshaler{}, "s", "s", `{"m":1}`},
+		{"nil stringer pointer", (*marshaler)(nil), "-", "-", "null"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if got := textCell(test.cell); got != test.text {
@@ -359,7 +366,7 @@ func TestCellRules(t *testing.T) {
 			if got := awkCell(test.cell); got != test.awk {
 				t.Errorf("awk = %q, want %q", got, test.awk)
 			}
-			raw, err := json.Marshal(test.cell)
+			raw, err := json.Marshal(jsonCell(test.cell))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -369,6 +376,13 @@ func TestCellRules(t *testing.T) {
 		})
 	}
 }
+
+// marshaler is both a Stringer and a json.Marshaler; JSON is what it
+// marshals, not its String.
+type marshaler struct{}
+
+func (marshaler) String() string               { return "s" }
+func (marshaler) MarshalJSON() ([]byte, error) { return []byte(`{"m":1}`), nil }
 
 func ptr[T any](v T) *T { return &v }
 
@@ -628,6 +642,8 @@ func TestErrorCellTypes(t *testing.T) {
 		{"stringer", stringer("boom"), "", true, "a\tboom\t-\n", `"error":"boom","message":""`},
 		{"unknown", Unknown, Unknown, false, "a\t-\t-\n", `"error":null,"message":null`},
 		{"nil", nil, nil, false, "a\t-\t-\n", `"error":null,"message":null`},
+		{"nil kerr pointer", (*kerr.Error)(nil), (*int64)(nil), false, "a\t-\t-\n", `"error":null,"message":null`},
+		{"enum ERROR", kmsg.ConfigSourceDefaultConfig, "", true, "a\tDEFAULT_CONFIG\t-\n", `"error":"DEFAULT_CONFIG","message":""`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var err error

@@ -1,6 +1,7 @@
 package out
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -165,9 +166,9 @@ func (t *FormattedTable) Row(values ...any) {
 	}
 	if t.errCol >= 0 && t.errCol < len(values) {
 		values = slices.Clone(values)
-		values[t.errCol] = errorCell(values[t.errCol])
+		values[t.errCol] = t.errorCell(values[t.errCol])
 		if t.msgCol >= 0 && t.msgCol < len(values) {
-			values[t.msgCol] = messageCell(values[t.msgCol])
+			values[t.msgCol] = t.messageCell(values[t.msgCol])
 		}
 	}
 	t.rows = append(t.rows, values)
@@ -175,38 +176,54 @@ func (t *FormattedTable) Row(values ...any) {
 
 // errorCell is the ERROR cell for v, as a string: an error is its kerr name
 // or else its text, as ErrCell has it, and a Stringer is its String. A
-// string, Unknown, and nil are themselves. Any other type is a programming
-// error: it panics under go test and prints as fmt.Sprint otherwise, so a
-// user sees the cell rather than a crash.
-func errorCell(v any) any {
+// string, Unknown, and nil are themselves, and a nil pointer of any type is
+// Unknown. Any other type is a programming error: it panics under go test,
+// and otherwise prints as fmt.Sprint with a warning on stderr, so a user
+// sees the cell rather than a crash.
+func (t *FormattedTable) errorCell(v any) any {
 	switch v := v.(type) {
 	case nil, unknown, string:
 		return v
+	}
+	if isNilPointer(v) {
+		return Unknown
+	}
+	switch v := v.(type) {
 	case error:
 		return ErrCell(v)
 	case fmt.Stringer:
 		return v.String()
 	}
-	return badCell("ERROR", v)
+	return t.badCell("ERROR", v)
 }
 
 // messageCell is the MESSAGE cell for v, as a string: a *string from a kmsg
-// response is what it points to, "" when nil, as BrokerMessage has it.
-func messageCell(v any) any {
+// response is what it points to, "" when nil, as BrokerMessage has it. A nil
+// pointer of any other type is Unknown.
+func (t *FormattedTable) messageCell(v any) any {
 	switch v := v.(type) {
 	case nil, unknown, string:
 		return v
 	case *string:
 		return BrokerMessage(v)
 	}
-	return badCell("MESSAGE", v)
+	if isNilPointer(v) {
+		return Unknown
+	}
+	return t.badCell("MESSAGE", v)
 }
 
-func badCell(column string, v any) string {
-	msg := fmt.Sprintf("out: a %s cell holds a %T, which is not a string; please report this", column, v)
+func isNilPointer(v any) bool {
+	rv := reflect.ValueOf(v)
+	return rv.Kind() == reflect.Pointer && rv.IsNil()
+}
+
+func (t *FormattedTable) badCell(column string, v any) string {
+	msg := fmt.Sprintf("kcl: %s prints a %s cell holding a %T, which is not a string; please report this", t.command, column, v)
 	if testing.Testing() {
 		panic(msg)
 	}
+	fmt.Fprintln(os.Stderr, msg)
 	return fmt.Sprint(v)
 }
 
@@ -324,9 +341,10 @@ func textCell(v any) string {
 // cellText is what v prints as in text and awk, and false when v is not a
 // value at all: Unknown, nil, or a nil pointer. A slice is its elements
 // joined by "," with no brackets, so that a replica list is one awk field,
-// and an empty slice is "". A pointer, the *string or *int64 a kmsg response
-// carries, is what it points to. A Stringer is its String, and anything else
-// prints as fmt.Sprint does.
+// and an empty slice is "". A []byte is base64, as JSON prints it, since raw
+// bytes may hold the tab or newline that ends an awk field or row. A
+// pointer, the *string or *int64 a kmsg response carries, is what it points
+// to. A Stringer is its String, and anything else prints as fmt.Sprint does.
 func cellText(v any) (string, bool) {
 	switch v := v.(type) {
 	case nil, unknown:
@@ -336,7 +354,7 @@ func cellText(v any) (string, bool) {
 	case []string:
 		return strings.Join(v, ","), true
 	case []byte:
-		return string(v), true
+		return base64.StdEncoding.EncodeToString(v), true
 	}
 	rv := reflect.ValueOf(v)
 	if rv.Kind() == reflect.Pointer && rv.IsNil() {
@@ -360,10 +378,15 @@ func cellText(v any) (string, bool) {
 
 // jsonCell is v as JSON prints it. A nil slice is [], since a list a row
 // carries is known and empty rather than unknown; a type that marshals
-// itself is left to do so.
+// itself is left to do so. A Stringer that does not is its String, the same
+// text awk prints: a kmsg enum is an int8 on the wire and would print as its
+// number, and a time.Duration as its nanoseconds.
 func jsonCell(v any) any {
 	if _, ok := v.(json.Marshaler); ok {
 		return v
+	}
+	if s, ok := v.(fmt.Stringer); ok && !isNilPointer(v) {
+		return s.String()
 	}
 	if rv := reflect.ValueOf(v); rv.Kind() == reflect.Slice && rv.IsNil() {
 		return []any{}

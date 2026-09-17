@@ -43,10 +43,11 @@ import (
 // command.
 //
 // The check runs in NewFormattedTable for the awk format only: text may print
-// several tables, and JSON prints them under keys of their own. A mismatch
-// panics under go test and warns on stderr otherwise. The rows a user sees are
-// right either way and only the header row could disagree, so we tell them
-// rather than fail the command.
+// several tables, and JSON prints them under keys of their own. A mismatch,
+// or a table under a command that registered nothing, panics under go test
+// and warns on stderr otherwise. The rows a user sees are right either way
+// and only the header row could disagree, so we tell them rather than fail
+// the command.
 func Columns(cmd *cobra.Command, headers ...string) {
 	ColumnsFunc(cmd, func() []string { return headers })
 }
@@ -114,19 +115,23 @@ func CommandOf(cmd *cobra.Command) string {
 	return CommandName(cmd.CommandPath())
 }
 
+// checkColumns compares an awk table's headers with what the running command
+// registered. A command that registered nothing and prints a table is the
+// same mistake as a mismatch, since --format awk-header prints nothing for
+// it: a hidden alias built without its registration would print rows a
+// script cannot learn the columns of.
 func checkColumns(command string, headers []string) {
 	if running == nil {
 		return
 	}
-	fn, ok := columns[running]
-	if !ok {
+	var msg string
+	if fn, ok := columns[running]; !ok {
+		msg = fmt.Sprintf("kcl: %s prints the awk columns %v but registered none; please report this", command, headers)
+	} else if want := fn(); !slices.Equal(want, headers) {
+		msg = fmt.Sprintf("kcl: %s prints the awk columns %v but registered %v; please report this", command, headers, want)
+	} else {
 		return
 	}
-	want := fn()
-	if slices.Equal(want, headers) {
-		return
-	}
-	msg := fmt.Sprintf("kcl: %s prints the awk columns %v but registered %v; please report this", command, headers, want)
 	if testing.Testing() {
 		panic(msg)
 	}
