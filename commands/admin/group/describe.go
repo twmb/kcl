@@ -923,6 +923,15 @@ func rackCell(rack *string) any {
 	return *rack
 }
 
+// rowRackCell is rackCell for a partition row. A partition nobody owns has
+// empty member columns, and its rack is empty with them rather than unknown.
+func rowRackCell(r describeRow) any {
+	if r.memberID == "" {
+		return ""
+	}
+	return rackCell(r.rack)
+}
+
 func (m describeMember) json(opts describeOpts) map[string]any {
 	subscribed := m.subscribed
 	if subscribed == nil {
@@ -971,9 +980,9 @@ func lagValues(opts describeOpts, r describeRow) []any {
 	case "topic":
 		return []any{r.topic, r.partitions, lagNum(r)}
 	case "member":
-		return []any{r.memberID, r.partitions, lagNum(r), r.clientID, r.host, rackCell(r.rack), instanceCell(opts, r.instanceID)}
+		return []any{r.memberID, r.partitions, lagNum(r), r.clientID, r.host, rowRackCell(r), instanceCell(opts, r.instanceID)}
 	default:
-		return []any{r.topic, r.partition, offsetNum(r.currentOffset), offsetNum(r.logStartOffset), offsetNum(r.logEndOffset), lagNum(r), r.memberID, r.clientID, r.host, rackCell(r.rack), instanceCell(opts, r.instanceID)}
+		return []any{r.topic, r.partition, offsetNum(r.currentOffset), offsetNum(r.logStartOffset), offsetNum(r.logEndOffset), lagNum(r), r.memberID, r.clientID, r.host, rowRackCell(r), instanceCell(opts, r.instanceID)}
 	}
 }
 
@@ -992,7 +1001,7 @@ func lagJSON(opts describeOpts, r describeRow) map[string]any {
 			"lag":         lagNum(r),
 			"client_id":   r.clientID,
 			"host":        r.host,
-			"rack":        rackCell(r.rack),
+			"rack":        rowRackCell(r),
 			"instance_id": instanceCell(opts, r.instanceID),
 		}
 	default:
@@ -1006,7 +1015,7 @@ func lagJSON(opts describeOpts, r describeRow) map[string]any {
 			"member_id":        r.memberID,
 			"client_id":        r.clientID,
 			"host":             r.host,
-			"rack":             rackCell(r.rack),
+			"rack":             rowRackCell(r),
 			"instance_id":      instanceCell(opts, r.instanceID),
 		}
 	}
