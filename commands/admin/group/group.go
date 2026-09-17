@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 
@@ -244,6 +245,39 @@ SEE ALSO:
 	return cmd
 }
 
+// fillPartitions replaces every nil partition list in tps, a topic named
+// with no partitions, with every partition the topic has, from metadata. A
+// topic the cluster does not know is an error.
+func fillPartitions(cl *client.Client, tps map[string][]int32) error {
+	var whole []string
+	for topic, partitions := range tps {
+		if partitions == nil {
+			whole = append(whole, topic)
+		}
+	}
+	if len(whole) == 0 {
+		return nil
+	}
+	sort.Strings(whole)
+	listed, err := kadm.NewClient(cl.Client()).ListTopics(context.Background(), whole...)
+	if err != nil {
+		return fmt.Errorf("unable to list partitions of %v: %v", whole, err)
+	}
+	for _, topic := range whole {
+		td, ok := listed[topic]
+		if !ok {
+			return fmt.Errorf("topic %q not in metadata", topic)
+		}
+		if td.Err != nil {
+			return fmt.Errorf("topic %q: %v", topic, td.Err)
+		}
+		partitions := td.Partitions.Numbers()
+		sort.Slice(partitions, func(i, j int) bool { return partitions[i] < partitions[j] })
+		tps[topic] = partitions
+	}
+	return nil
+}
+
 func offsetDeleteCommand(cl *client.Client) *cobra.Command {
 	var topicParts []string
 	var fromFile string
@@ -262,14 +296,24 @@ infrequently committing but not yet dead, but introduced a problem where
 commits can hang around in some edge cases. See the motivation in KIP-496 for
 more detals.
 
-The format for deleting offsets per topic partition is "foo:1,2,3", where foo
-is a topic and 1,2,3 are partition numbers. Alternatively, use --from-file
-with a JSON file:
+-t accepts plain names or topic:partitions pairs:
+  foo              every partition of foo
+  foo:1,2,3        only partitions 1, 2, and 3 of foo
+
+Alternatively, use --from-file with a JSON file:
 
   [{"topic": "foo", "partition": 1}, {"topic": "bar", "partition": 0}]
+
+EXAMPLES:
+  kcl group offset-delete mygroup -t foo                # every partition of foo
+  kcl group offset-delete mygroup -t foo:1,2,3 -t bar:9
+  kcl group offset-delete mygroup --from-file offsets.json
+
+SEE ALSO:
+  kcl group describe    describe groups with lag
+  kcl group seek        reset group offsets
 `,
-		Example: "kcl group offset-delete mygroup -t foo:1,2,3 -t bar:9",
-		Args:    cobra.ExactArgs(1),
+		Args: cobra.ExactArgs(1),
 
 		RunE: func(_ *cobra.Command, args []string) error {
 			tps, err := flagutil.ParseTopicPartitions(topicParts)
@@ -292,8 +336,17 @@ with a JSON file:
 					return fmt.Errorf("unable to parse --from-file JSON: %v", err)
 				}
 				for _, e := range entries {
+					if p, ok := tps[e.Topic]; ok && p == nil {
+						continue // -t named every partition already
+					}
 					tps[e.Topic] = append(tps[e.Topic], e.Partition)
 				}
+			}
+			if len(tps) == 0 {
+				return out.Errf(out.ExitUsage, "at least one topic is required (-t or --from-file)")
+			}
+			if err := fillPartitions(cl, tps); err != nil {
+				return err
 			}
 
 			req := &kmsg.OffsetDeleteRequest{
@@ -334,7 +387,7 @@ with a JSON file:
 		},
 	}
 
-	cmd.Flags().StringArrayVarP(&topicParts, "topic", "t", nil, "topic and partitions to delete offsets for; repeatable")
+	cmd.Flags().StringArrayVarP(&topicParts, "topic", "t", nil, "topic, or topic:partitions, to delete offsets for; a bare topic is every partition; repeatable")
 	cmd.Flags().StringVar(&fromFile, "from-file", "", "JSON file of [{topic, partition}, ...] to delete offsets for")
 	return cmd
 }
