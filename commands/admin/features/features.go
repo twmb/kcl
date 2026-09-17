@@ -202,14 +202,7 @@ func resultRows(req *kmsg.UpdateFeaturesRequest, resp *kmsg.UpdateFeaturesRespon
 		return rows
 	}
 	for _, r := range resp.Results {
-		var errName, msg string
-		if r.ErrorCode != 0 {
-			errName = kerr.TypedErrorForCode(r.ErrorCode).Message
-			if r.ErrorMessage != nil {
-				msg = *r.ErrorMessage
-			}
-		}
-		rows = append(rows, []any{r.Feature, errName, msg})
+		rows = append(rows, []any{r.Feature, out.ErrName(r.ErrorCode), out.BrokerMessage(r.ErrorMessage)})
 	}
 	return rows
 }

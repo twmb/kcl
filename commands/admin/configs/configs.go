@@ -369,11 +369,7 @@ func alterError(code int16, brokerMsg *string) (string, string) {
 	if code == 0 {
 		return "", ""
 	}
-	var msg string
-	if brokerMsg != nil {
-		msg = *brokerMsg
-	}
-	return kerr.TypedErrorForCode(code).Message, msg
+	return out.ErrName(code), out.BrokerMessage(brokerMsg)
 }
 
 type lostKV struct {
@@ -440,11 +436,7 @@ func (q querier) issueDescribeConfig(withDocs bool) (
 	}
 	resource := resp.Resources[0]
 	if err := kerr.ErrorForCode(resource.ErrorCode); err != nil {
-		additional := ""
-		if resource.ErrorMessage != nil {
-			additional = ": " + *resource.ErrorMessage
-		}
-		return nil, nil, fmt.Errorf("%s%s", err, additional)
+		return nil, nil, out.BrokerErr(err, resource.ErrorMessage)
 	}
 	return resp, &resource, nil
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/out"
 )
 
 // The configs Kafka's kafka-reassign-partitions.sh --throttle sets: a
@@ -182,7 +183,7 @@ func applyThrottle(cl *client.Client, proposed map[string]map[int32][]int32, byt
 		return nil, fmt.Errorf("unable to list partition reassignments: %v", err)
 	}
 	if err := kerr.ErrorForCode(listResp.ErrorCode); err != nil {
-		return nil, fmt.Errorf("unable to list partition reassignments: %s%s", err, brokerMessage(listResp.ErrorMessage))
+		return nil, fmt.Errorf("unable to list partition reassignments: %v", out.BrokerErr(err, listResp.ErrorMessage))
 	}
 	current := make(map[string]map[int32]reassignment)
 	for _, t := range listResp.Topics {
@@ -223,17 +224,8 @@ func applyThrottle(cl *client.Client, proposed map[string]map[int32][]int32, byt
 	}
 	for _, r := range resp.Resources {
 		if err := kerr.ErrorForCode(r.ErrorCode); err != nil {
-			return nil, fmt.Errorf("unable to set the replication throttle on %s %s: %s%s", strings.ToLower(r.ResourceType.String()), r.ResourceName, err, brokerMessage(r.ErrorMessage))
+			return nil, fmt.Errorf("unable to set the replication throttle on %s %s: %v", strings.ToLower(r.ResourceType.String()), r.ResourceName, out.BrokerErr(err, r.ErrorMessage))
 		}
 	}
 	return m, nil
-}
-
-// brokerMessage is ": " and the message a broker attached to an error, or
-// nothing.
-func brokerMessage(msg *string) string {
-	if msg == nil || *msg == "" {
-		return ""
-	}
-	return ": " + *msg
 }

@@ -36,19 +36,19 @@ func TestQuorumRows(t *testing.T) {
 		want    []string
 	}{
 		{"", []string{
-			"__cluster_metadata 0 2 7 100 voter 2 100 0 0 ",
-			"__cluster_metadata 0 2 7 100 voter 3 99 0 0 ",
-			"__cluster_metadata 0 2 7 100 observer 10 98 0 0 ",
-			"__cluster_metadata 1 - - - - - - - - NOT_LEADER_FOR_PARTITION: no leader",
+			"__cluster_metadata 0 2 7 100 voter 2 100 0 0  ",
+			"__cluster_metadata 0 2 7 100 voter 3 99 0 0  ",
+			"__cluster_metadata 0 2 7 100 observer 10 98 0 0  ",
+			"__cluster_metadata 1 - - - - - - - - NOT_LEADER_FOR_PARTITION no leader",
 		}},
 		{"voters", []string{
-			"__cluster_metadata 0 2 7 100 voter 2 100 0 0 ",
-			"__cluster_metadata 0 2 7 100 voter 3 99 0 0 ",
-			"__cluster_metadata 1 - - - - - - - - NOT_LEADER_FOR_PARTITION: no leader",
+			"__cluster_metadata 0 2 7 100 voter 2 100 0 0  ",
+			"__cluster_metadata 0 2 7 100 voter 3 99 0 0  ",
+			"__cluster_metadata 1 - - - - - - - - NOT_LEADER_FOR_PARTITION no leader",
 		}},
 		{"observers", []string{
-			"__cluster_metadata 0 2 7 100 observer 10 98 0 0 ",
-			"__cluster_metadata 1 - - - - - - - - NOT_LEADER_FOR_PARTITION: no leader",
+			"__cluster_metadata 0 2 7 100 observer 10 98 0 0  ",
+			"__cluster_metadata 1 - - - - - - - - NOT_LEADER_FOR_PARTITION no leader",
 		}},
 	} {
 		t.Run("section "+test.section, func(t *testing.T) {
@@ -86,10 +86,10 @@ func TestQuorumJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `[{"topic":"__cluster_metadata","partition":0,"leader":2,"leader_epoch":7,"high_watermark":100,"error":"",` +
+	want := `[{"topic":"__cluster_metadata","partition":0,"leader":2,"leader_epoch":7,"high_watermark":100,"error":"","message":"",` +
 		`"voters":[{"replica_id":2,"log_end_offset":100,"last_fetch_timestamp":0,"last_caught_up_timestamp":0},{"replica_id":3,"log_end_offset":99,"last_fetch_timestamp":0,"last_caught_up_timestamp":0}],` +
 		`"observers":[{"replica_id":10,"log_end_offset":98,"last_fetch_timestamp":0,"last_caught_up_timestamp":0}]},` +
-		`{"topic":"__cluster_metadata","partition":1,"leader":0,"leader_epoch":0,"high_watermark":0,"error":"NOT_LEADER_FOR_PARTITION: no leader","voters":[],"observers":[]}]`
+		`{"topic":"__cluster_metadata","partition":1,"leader":0,"leader_epoch":0,"high_watermark":0,"error":"NOT_LEADER_FOR_PARTITION","message":"no leader","voters":[],"observers":[]}]`
 	if string(raw) != want {
 		t.Errorf("JSON:\n%s\nwant:\n%s", raw, want)
 	}

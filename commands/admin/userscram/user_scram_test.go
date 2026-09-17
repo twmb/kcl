@@ -89,6 +89,7 @@ func TestAlterAndList(t *testing.T) {
 			Mechanism  string `json:"mechanism"`
 			Iterations *int32 `json:"iterations"`
 			Error      string `json:"error"`
+			Message    string `json:"message"`
 		} `json:"credentials"`
 	}
 	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
@@ -110,8 +111,11 @@ func TestAlterAndList(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
 		t.Fatalf("not JSON: %v\n%s", err, raw)
 	}
-	if len(doc.Credentials) != 1 || doc.Credentials[0].Error == "" || doc.Credentials[0].Iterations != nil {
-		t.Errorf("list nosuch = %s, want one error row with unknown iterations", raw)
+	if len(doc.Credentials) != 1 || doc.Credentials[0].Error != "RESOURCE_NOT_FOUND" || doc.Credentials[0].Iterations != nil {
+		t.Errorf("list nosuch = %s, want one RESOURCE_NOT_FOUND row with unknown iterations", raw)
+	}
+	if strings.Contains(doc.Credentials[0].Error, ":") {
+		t.Errorf("error = %q, want the bare name; the message is its own key", doc.Credentials[0].Error)
 	}
 
 	c.Fault(kfake.Fault{Keys: []kmsg.Key{kmsg.AlterUserSCRAMCredentials}, Resource: "zed", Err: kerr.InvalidRequest})

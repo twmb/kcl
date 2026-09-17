@@ -122,12 +122,8 @@ SEE ALSO:
 			}
 			resp := kresp.(*kmsg.DescribeClientQuotasResponse)
 
-			if resp.ErrorCode != 0 {
-				additional := ""
-				if resp.ErrorMessage != nil {
-					additional = ": " + *resp.ErrorMessage
-				}
-				return fmt.Errorf("%s%s", kerr.ErrorForCode(resp.ErrorCode), additional)
+			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+				return out.BrokerErr(err, resp.ErrorMessage)
 			}
 
 			type row struct {
@@ -310,14 +306,7 @@ SEE ALSO:
 				for _, e := range entry.Entity {
 					parts = append(parts, entityPart{e.Type, e.Name})
 				}
-				var errName, msg string
-				if entry.ErrorCode != 0 {
-					errName = kerr.TypedErrorForCode(entry.ErrorCode).Message
-					if entry.ErrorMessage != nil {
-						msg = *entry.ErrorMessage
-					}
-				}
-				table.Row(entityString(parts), errName, msg)
+				table.Row(entityString(parts), out.ErrName(entry.ErrorCode), out.BrokerMessage(entry.ErrorMessage))
 			}
 			return table.Flush()
 		},

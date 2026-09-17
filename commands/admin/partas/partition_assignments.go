@@ -154,7 +154,7 @@ SEE ALSO:
 			}
 			resp := kresp.(*kmsg.AlterPartitionAssignmentsResponse)
 			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-				return fmt.Errorf("%s%s", err, brokerMessage(resp.ErrorMessage))
+				return out.BrokerErr(err, resp.ErrorMessage)
 			}
 
 			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results", resultHeaders...).ResultColumns()
@@ -227,7 +227,7 @@ SEE ALSO:
 			}
 			resp := kresp.(*kmsg.AlterPartitionAssignmentsResponse)
 			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-				return fmt.Errorf("%s%s", err, brokerMessage(resp.ErrorMessage))
+				return out.BrokerErr(err, resp.ErrorMessage)
 			}
 
 			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results", resultHeaders...).ResultColumns()
@@ -306,7 +306,7 @@ SEE ALSO:
 			}
 			resp := kresp.(*kmsg.ListPartitionReassignmentsResponse)
 			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-				return fmt.Errorf("%s%s", err, brokerMessage(resp.ErrorMessage))
+				return out.BrokerErr(err, resp.ErrorMessage)
 			}
 
 			type row struct {

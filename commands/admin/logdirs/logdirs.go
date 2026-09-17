@@ -2,7 +2,6 @@ package logdirs
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -62,16 +61,6 @@ func formatSize(bytes int64, human bool) any {
 		return humanSize(bytes)
 	}
 	return bytes
-}
-
-// errorCell is the ERROR cell for err: a Kafka error's name, or the text of
-// any other error, such as a broker that could not be reached.
-func errorCell(err error) string {
-	var ke *kerr.Error
-	if errors.As(err, &ke) {
-		return ke.Message
-	}
-	return err.Error()
 }
 
 // The columns of a describe: one row per partition directory, and under
@@ -312,14 +301,14 @@ SEE ALSO:
 				return aggTable.Flush()
 			}
 
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "dirs", describeHeaders...).ResultColumns()
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "dirs", describeHeaders...).ErrorColumn()
 			for _, r := range rows {
 				if r.err != nil {
 					var dir any = out.Unknown
 					if r.dir != "" {
 						dir = r.dir
 					}
-					table.Row(r.broker, dir, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, errorCell(r.err))
+					table.Row(r.broker, dir, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.ErrCell(r.err))
 					continue
 				}
 				table.Row(r.broker, r.dir, r.topic, r.partition,
@@ -426,11 +415,7 @@ SEE ALSO:
 			var rows []row
 			for _, topic := range resp.Topics {
 				for _, partition := range topic.Partitions {
-					var errName string
-					if partition.ErrorCode != 0 {
-						errName = kerr.TypedErrorForCode(partition.ErrorCode).Message
-					}
-					rows = append(rows, row{topic.Topic, partition.Partition, errName})
+					rows = append(rows, row{topic.Topic, partition.Partition, out.ErrName(partition.ErrorCode)})
 				}
 			}
 			sort.Slice(rows, func(i, j int) bool {

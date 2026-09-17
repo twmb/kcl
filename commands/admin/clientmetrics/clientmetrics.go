@@ -141,7 +141,7 @@ SEE ALSO:
 			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "configs", "KEY", "VALUE", "SOURCE")
 			for _, r := range kresp.Resources {
 				if err := kerr.ErrorForCode(r.ErrorCode); err != nil {
-					return fmt.Errorf("%s%s", err, brokerMessage(r.ErrorMessage))
+					return out.BrokerErr(err, r.ErrorMessage)
 				}
 				for _, c := range r.Configs {
 					val := ""
@@ -158,15 +158,6 @@ SEE ALSO:
 	return cmd
 }
 
-// brokerMessage is ": " and the message a broker attached to an error, or
-// nothing.
-func brokerMessage(msg *string) string {
-	if msg == nil || *msg == "" {
-		return ""
-	}
-	return ": " + *msg
-}
-
 // resultHeaders are the columns of an alter or delete, one row per
 // subscription.
 var resultHeaders = []string{"NAME", "ERROR", "MESSAGE"}
@@ -174,14 +165,7 @@ var resultHeaders = []string{"NAME", "ERROR", "MESSAGE"}
 // resultRows adds one row per altered resource to a results table.
 func resultRows(table *out.FormattedTable, resources []kmsg.IncrementalAlterConfigsResponseResource) {
 	for _, r := range resources {
-		var errName, msg string
-		if r.ErrorCode != 0 {
-			errName = kerr.TypedErrorForCode(r.ErrorCode).Message
-			if r.ErrorMessage != nil {
-				msg = *r.ErrorMessage
-			}
-		}
-		table.Row(r.ResourceName, errName, msg)
+		table.Row(r.ResourceName, out.ErrName(r.ErrorCode), out.BrokerMessage(r.ErrorMessage))
 	}
 }
 
@@ -301,11 +285,7 @@ SEE ALSO:
 				// be deleted either; its row carries the describe
 				// error.
 				if res.ErrorCode != 0 {
-					var msg string
-					if res.ErrorMessage != nil {
-						msg = *res.ErrorMessage
-					}
-					table.Row(res.ResourceName, kerr.TypedErrorForCode(res.ErrorCode).Message, msg)
+					table.Row(res.ResourceName, out.ErrName(res.ErrorCode), out.BrokerMessage(res.ErrorMessage))
 					return table.Flush()
 				}
 				for _, c := range res.Configs {

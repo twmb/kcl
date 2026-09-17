@@ -131,11 +131,14 @@ type subjectResult struct {
 // value is under the subject "(global)". A registry error fills the row's
 // ERROR, so the command exits 1; any other error fails the command.
 func printSubjectResults(cl *client.Client, action, key, header string, set bool, results []subjectResult) error {
-	headers := []string{"SUBJECT", header, "ERROR"}
+	// A set is a mutation and prints OK; a get describes and prints
+	// nothing under ERROR.
+	var tw *out.FormattedTable
 	if set {
-		headers = append(headers, "MESSAGE")
+		tw = out.NewFormattedTable(cl.Format(), cl.Command(), 1, key, "SUBJECT", header, "ERROR", "MESSAGE").ResultColumns()
+	} else {
+		tw = out.NewFormattedTable(cl.Format(), cl.Command(), 1, key, "SUBJECT", header, "ERROR").ErrorColumn()
 	}
-	tw := out.NewFormattedTable(cl.Format(), cl.Command(), 1, key, headers...).ResultColumns()
 	for _, r := range results {
 		subject := r.subject
 		if subject == "" {

@@ -247,7 +247,7 @@ func (f aclFilter) describe(cl *client.Client) ([]aclRow, error) {
 	}
 	resp := kresp.(*kmsg.DescribeACLsResponse)
 	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-		return nil, fmt.Errorf("%s%s", err, brokerMessage(resp.ErrorMessage))
+		return nil, out.BrokerErr(err, resp.ErrorMessage)
 	}
 	rows := []aclRow{}
 	for _, resource := range resp.Resources {
@@ -267,26 +267,13 @@ func (f aclFilter) describe(cl *client.Client) ([]aclRow, error) {
 	return rows, nil
 }
 
-// brokerMessage is ": " and the message a broker attached to an error, or
-// nothing.
-func brokerMessage(msg *string) string {
-	if msg == nil || *msg == "" {
-		return ""
-	}
-	return ": " + *msg
-}
-
 // errorCells are the ERROR and MESSAGE cells for a per-ACL result: the
 // error name and the message the broker attached, or "" and "" on success.
 func errorCells(code int16, msg *string) (string, string) {
 	if code == 0 {
 		return "", ""
 	}
-	var m string
-	if msg != nil {
-		m = *msg
-	}
-	return kerr.TypedErrorForCode(code).Message, m
+	return out.ErrName(code), out.BrokerMessage(msg)
 }
 
 // filterFlags installs the filter flags list and delete share. The generic
@@ -727,7 +714,7 @@ SEE ALSO:
 			}
 			result := resp.Results[0]
 			if err := kerr.ErrorForCode(result.ErrorCode); err != nil {
-				return fmt.Errorf("%s%s", err, brokerMessage(result.ErrorMessage))
+				return out.BrokerErr(err, result.ErrorMessage)
 			}
 
 			rows := make([]aclRow, 0, len(result.MatchingACLs))

@@ -134,7 +134,7 @@ func describeRow(detail *kmsg.DescribeDelegationTokenResponseTokenDetail) []any 
 // error that kept it where it was. Neither response carries a message.
 func expiryRow(code int16, expiry int64) []any {
 	if code != 0 {
-		return []any{out.Unknown, kerr.TypedErrorForCode(code).Message, ""}
+		return []any{out.Unknown, out.ErrName(code), ""}
 	}
 	return []any{millisToStr(expiry), "", ""}
 }

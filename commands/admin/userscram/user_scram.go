@@ -37,7 +37,7 @@ func Command(cl *client.Client) *cobra.Command {
 }
 
 var (
-	listHeaders  = []string{"USER", "MECHANISM", "ITERATIONS", "ERROR"}
+	listHeaders  = []string{"USER", "MECHANISM", "ITERATIONS", "ERROR", "MESSAGE"}
 	alterHeaders = []string{"USER", "ERROR", "MESSAGE"}
 )
 
@@ -100,26 +100,18 @@ SEE ALSO:
 			}
 			resp := kresp.(*kmsg.DescribeUserSCRAMCredentialsResponse)
 
-			if resp.ErrorCode != 0 {
-				additional := ""
-				if resp.ErrorMessage != nil {
-					additional = ": " + *resp.ErrorMessage
-				}
-				return fmt.Errorf("%s%s", kerr.ErrorForCode(resp.ErrorCode), additional)
+			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+				return out.BrokerErr(err, resp.ErrorMessage)
 			}
 
 			results := slices.Clone(resp.Results)
 			slices.SortFunc(results, func(a, b kmsg.DescribeUserSCRAMCredentialsResponseResult) int {
 				return strings.Compare(a.User, b.User)
 			})
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "credentials", listHeaders...).ResultColumns()
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "credentials", listHeaders...).ErrorColumn()
 			for _, res := range results {
 				if res.ErrorCode != 0 {
-					msg := kerr.TypedErrorForCode(res.ErrorCode).Message
-					if res.ErrorMessage != nil && *res.ErrorMessage != "" {
-						msg += ": " + *res.ErrorMessage
-					}
-					table.Row(res.User, out.Unknown, out.Unknown, msg)
+					table.Row(res.User, out.Unknown, out.Unknown, out.ErrName(res.ErrorCode), out.BrokerMessage(res.ErrorMessage))
 					continue
 				}
 				infos := slices.Clone(res.CredentialInfos)
@@ -324,14 +316,7 @@ SEE ALSO:
 
 			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results", alterHeaders...).ResultColumns()
 			for _, res := range resp.Results {
-				var errName, msg string
-				if res.ErrorCode != 0 {
-					errName = kerr.TypedErrorForCode(res.ErrorCode).Message
-					if res.ErrorMessage != nil {
-						msg = *res.ErrorMessage
-					}
-				}
-				table.Row(res.User, errName, msg)
+				table.Row(res.User, out.ErrName(res.ErrorCode), out.BrokerMessage(res.ErrorMessage))
 			}
 			return table.Flush()
 		},

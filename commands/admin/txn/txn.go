@@ -11,7 +11,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 
 	"github.com/twmb/kcl/client"
@@ -31,7 +30,7 @@ func Command(cl *client.Client) *cobra.Command {
 }
 
 var (
-	producersHeaders = []string{"TOPIC", "PARTITION", "PRODUCER-ID", "PRODUCER-EPOCH", "LAST-SEQUENCE", "LAST-TIMESTAMP", "COORDINATOR-EPOCH", "TXN-START-OFFSET", "ERROR"}
+	producersHeaders = []string{"TOPIC", "PARTITION", "PRODUCER-ID", "PRODUCER-EPOCH", "LAST-SEQUENCE", "LAST-TIMESTAMP", "COORDINATOR-EPOCH", "TXN-START-OFFSET", "ERROR", "MESSAGE"}
 	listHeaders      = []string{"BROKER", "TRANSACTIONAL-ID", "PRODUCER-ID", "STATE", "ERROR"}
 	describeHeaders  = []string{"TRANSACTIONAL-ID", "STATE", "PRODUCER-ID", "PRODUCER-EPOCH", "TIMEOUT-MS", "START-TIMESTAMP", "TOPICS", "ERROR"}
 )
@@ -62,6 +61,7 @@ The information printed:
   COORDINATOR-EPOCH    The epoch of the transactional coordinator for this last produce
   TXN-START-OFFSET     The first offset of the transaction
   ERROR                Why a partition could not be described, else empty
+  MESSAGE              The text the broker attached to the error, else empty
 
 EXAMPLES:
   kcl txn describe-producers foo:1,2,3 bar:0
@@ -113,7 +113,7 @@ SEE ALSO:
 				return fmt.Errorf("unable to describe producers: %v", err)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "producers", producersHeaders...).ResultColumns()
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "producers", producersHeaders...).ErrorColumn()
 			for _, r := range producerRows(resp) {
 				table.Row(r...)
 			}
@@ -141,7 +141,7 @@ func producerRows(resp *kmsg.DescribeProducersResponse) [][]any {
 				rows = append(rows, row{topic.Topic, partition.Partition, -1, []any{
 					topic.Topic, partition.Partition,
 					out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown,
-					errorCell(partition.ErrorCode, partition.ErrorMessage),
+					out.ErrName(partition.ErrorCode), out.BrokerMessage(partition.ErrorMessage),
 				}})
 				continue
 			}
@@ -155,7 +155,7 @@ func producerRows(resp *kmsg.DescribeProducersResponse) [][]any {
 					millis(p.LastTimestamp),
 					p.CoordinatorEpoch,
 					p.CurrentTxnStartOffset,
-					"",
+					"", "",
 				}})
 			}
 		}
@@ -216,12 +216,12 @@ SEE ALSO:
 			for _, kresp := range kresps {
 				b := kresp.Meta.NodeID
 				if kresp.Err != nil {
-					rows = append(rows, row{b, "", []any{b, out.Unknown, out.Unknown, out.Unknown, kresp.Err.Error()}})
+					rows = append(rows, row{b, "", []any{b, out.Unknown, out.Unknown, out.Unknown, out.ErrCell(kresp.Err)}})
 					continue
 				}
 				resp := kresp.Resp.(*kmsg.ListTransactionsResponse)
 				if resp.ErrorCode != 0 {
-					rows = append(rows, row{b, "", []any{b, out.Unknown, out.Unknown, out.Unknown, errorCell(resp.ErrorCode, nil)}})
+					rows = append(rows, row{b, "", []any{b, out.Unknown, out.Unknown, out.Unknown, out.ErrName(resp.ErrorCode)}})
 					continue
 				}
 				for _, txn := range resp.TransactionStates {
@@ -235,7 +235,7 @@ SEE ALSO:
 				return int(a.broker - b.broker)
 			})
 
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "transactions", listHeaders...).ResultColumns()
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "transactions", listHeaders...).ErrorColumn()
 			for _, r := range rows {
 				table.Row(r.cells...)
 			}
@@ -285,10 +285,10 @@ SEE ALSO:
 			slices.SortFunc(states, func(a, b kmsg.DescribeTransactionsResponseTransactionState) int {
 				return strings.Compare(a.TransactionalID, b.TransactionalID)
 			})
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "transactions", describeHeaders...).ResultColumns()
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "transactions", describeHeaders...).ErrorColumn()
 			for _, txn := range states {
 				if txn.ErrorCode != 0 {
-					table.Row(txn.TransactionalID, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, errorCell(txn.ErrorCode, nil))
+					table.Row(txn.TransactionalID, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.ErrName(txn.ErrorCode))
 					continue
 				}
 				table.Row(
@@ -307,16 +307,6 @@ SEE ALSO:
 	}
 	out.Columns(cmd, describeHeaders...)
 	return cmd
-}
-
-// errorCell is the ERROR cell for a Kafka error code: the error name, and
-// the message the broker attached when there is one.
-func errorCell(code int16, msg *string) string {
-	s := kerr.TypedErrorForCode(code).Message
-	if msg != nil && *msg != "" {
-		s += ": " + *msg
-	}
-	return s
 }
 
 // txnTopic is one topic in a transaction.

@@ -65,18 +65,9 @@ var (
 	electHeaders    = []string{"TOPIC", "PARTITION", "ERROR", "MESSAGE"}
 	brokersHeaders  = []string{"ID", "HOST", "PORT", "RACK"}
 	clusterHeaders  = []string{"CLUSTER-ID", "CONTROLLER", "AUTHORIZED-OPERATIONS"}
-	quorumHeaders   = []string{"TOPIC", "PARTITION", "LEADER", "LEADER-EPOCH", "HIGH-WATERMARK", "ROLE", "REPLICA", "LOG-END-OFFSET", "LAST-FETCH-TIMESTAMP", "LAST-CAUGHT-UP-TIMESTAMP", "ERROR"}
+	quorumHeaders   = []string{"TOPIC", "PARTITION", "LEADER", "LEADER-EPOCH", "HIGH-WATERMARK", "ROLE", "REPLICA", "LOG-END-OFFSET", "LAST-FETCH-TIMESTAMP", "LAST-CAUGHT-UP-TIMESTAMP", "ERROR", "MESSAGE"}
 	replicasHeaders = quorumHeaders[5:10]
 )
-
-// brokerMessage is ": " and the message a broker attached to an error, or
-// nothing.
-func brokerMessage(msg *string) string {
-	if msg == nil || *msg == "" {
-		return ""
-	}
-	return ": " + *msg
-}
 
 func ElectLeadersCommand(cl *client.Client) *cobra.Command {
 	var allPartitions bool
@@ -196,14 +187,7 @@ SEE ALSO:
 			var rows []row
 			for _, topic := range resp.Topics {
 				for _, p := range topic.Partitions {
-					var errName, msg string
-					if p.ErrorCode != 0 {
-						errName = kerr.TypedErrorForCode(p.ErrorCode).Message
-						if p.ErrorMessage != nil {
-							msg = *p.ErrorMessage
-						}
-					}
-					rows = append(rows, row{topic.Topic, p.Partition, errName, msg})
+					rows = append(rows, row{topic.Topic, p.Partition, out.ErrName(p.ErrorCode), out.BrokerMessage(p.ErrorMessage)})
 				}
 			}
 			slices.SortFunc(rows, func(a, b row) int {
@@ -276,7 +260,7 @@ SEE ALSO:
 
 			resp := kresp.(*kmsg.DescribeClusterResponse)
 			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-				return out.Errf(out.ExitError, "%s%s", err, brokerMessage(resp.ErrorMessage))
+				return out.BrokerErr(err, resp.ErrorMessage)
 			}
 
 			brokers := slices.Clone(resp.Brokers)
@@ -406,7 +390,7 @@ SEE ALSO:
 
 			resp := kresp.(*kmsg.DescribeQuorumResponse)
 			if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
-				return fmt.Errorf("%s%s", err, brokerMessage(resp.ErrorMessage))
+				return out.BrokerErr(err, resp.ErrorMessage)
 			}
 
 			// A partition the broker could not describe is in the
@@ -423,7 +407,7 @@ SEE ALSO:
 				out.MarshalJSON(cl.Command(), 1, map[string]any{"partitions": quorumJSON(resp, section)})
 
 			case out.FormatAWK:
-				table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "replicas", quorumHeaders...).ResultColumns()
+				table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "replicas", quorumHeaders...).ErrorColumn()
 				for _, r := range quorumRows(resp, section) {
 					table.Row(r...)
 				}
@@ -436,7 +420,10 @@ SEE ALSO:
 						fmt.Fprintf(tw, "TOPIC\t%s\n", topic.Topic)
 						fmt.Fprintf(tw, "PARTITION\t%d\n", p.Partition)
 						if p.ErrorCode != 0 {
-							fmt.Fprintf(tw, "ERROR\t%s%s\n", kerr.TypedErrorForCode(p.ErrorCode).Message, brokerMessage(p.ErrorMessage))
+							fmt.Fprintf(tw, "ERROR\t%s\n", out.ErrName(p.ErrorCode))
+							if msg := out.BrokerMessage(p.ErrorMessage); msg != "" {
+								fmt.Fprintf(tw, "MESSAGE\t%s\n", msg)
+							}
 							tw.Flush()
 							continue
 						}
@@ -500,14 +487,14 @@ func quorumRows(resp *kmsg.DescribeQuorumResponse, section string) [][]any {
 				rows = append(rows, []any{
 					topic.Topic, p.Partition, out.Unknown, out.Unknown, out.Unknown,
 					out.Unknown, out.Unknown, out.Unknown, out.Unknown, out.Unknown,
-					kerr.TypedErrorForCode(p.ErrorCode).Message + brokerMessage(p.ErrorMessage),
+					out.ErrName(p.ErrorCode), out.BrokerMessage(p.ErrorMessage),
 				})
 				continue
 			}
 			for _, r := range replicaRows(p, section) {
 				row := []any{topic.Topic, p.Partition, p.LeaderID, p.LeaderEpoch, p.HighWatermark}
 				row = append(row, r...)
-				rows = append(rows, append(row, ""))
+				rows = append(rows, append(row, "", ""))
 			}
 		}
 	}
@@ -530,6 +517,7 @@ type quorumPartitionJSON struct {
 	LeaderEpoch   int32               `json:"leader_epoch"`
 	HighWatermark int64               `json:"high_watermark"`
 	Error         string              `json:"error"`
+	Message       string              `json:"message"`
 	Voters        []quorumReplicaJSON `json:"voters,omitzero"`
 	Observers     []quorumReplicaJSON `json:"observers,omitzero"`
 }
@@ -551,9 +539,8 @@ func quorumJSON(resp *kmsg.DescribeQuorumResponse, section string) []quorumParti
 				Leader: p.LeaderID, LeaderEpoch: p.LeaderEpoch,
 				HighWatermark: p.HighWatermark,
 			}
-			if p.ErrorCode != 0 {
-				pj.Error = kerr.TypedErrorForCode(p.ErrorCode).Message + brokerMessage(p.ErrorMessage)
-			}
+			pj.Error = out.ErrName(p.ErrorCode)
+			pj.Message = out.BrokerMessage(p.ErrorMessage)
 			if section != "observers" {
 				pj.Voters = replicas(p.CurrentVoters)
 			}
