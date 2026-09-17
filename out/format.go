@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"slices"
 	"strings"
 	"text/tabwriter"
 )
@@ -47,7 +48,8 @@ type FormattedTable struct {
 // takes from Client.Command rather than naming itself; see CommandName. The
 // jsonKey parameter names the top-level array in JSON output (e.g., "groups"
 // for group list). Headers are used for text column headers and are
-// lowercased with hyphens/spaces replaced by underscores for JSON keys.
+// lowercased with hyphens/spaces replaced by underscores for JSON keys; see
+// WithKeys for the tables where a key must differ from its header.
 func NewFormattedTable(format, command string, version int, jsonKey string, headers ...string) *FormattedTable {
 	keys := make([]string, len(headers))
 	for i, h := range headers {
@@ -68,6 +70,22 @@ func jsonKeyOf(header string) string {
 	k = strings.ReplaceAll(k, " ", "_")
 	k = strings.ReplaceAll(k, "-", "_")
 	return k
+}
+
+// WithKeys overrides the JSON key a header derives, for the tables where the
+// two must differ: group describe --by group prints MEMBERS, PARTITIONS, and
+// LAG under member_count, partition_count, and total_lag. The map is header
+// to key. A header the table does not have is a programming error and
+// panics.
+func (t *FormattedTable) WithKeys(keys map[string]string) *FormattedTable {
+	for header, key := range keys {
+		i := slices.Index(t.headers, header)
+		if i < 0 {
+			panic(fmt.Sprintf("out: WithKeys names header %q, which the table does not have: %v", header, t.headers))
+		}
+		t.jsonKeys[i] = key
+	}
+	return t
 }
 
 // Row adds a row of values to the table.

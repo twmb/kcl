@@ -413,3 +413,34 @@ func TestAwkRow(t *testing.T) {
 		t.Errorf("AwkRow = %q, want %q", got, want)
 	}
 }
+
+func TestWithKeys(t *testing.T) {
+	output := captureStdout(func() {
+		table := NewFormattedTable("json", "group.describe", 1, "groups", "GROUP", "STATE", "MEMBERS", "PARTITIONS", "LAG").
+			WithKeys(map[string]string{"MEMBERS": "member_count", "PARTITIONS": "partition_count", "LAG": "total_lag"})
+		table.Row("g", "Stable", 2, 4, 10)
+		table.Flush()
+	})
+	var result map[string]any
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("Unmarshal: %v: %s", err, output)
+	}
+	row := result["groups"].([]any)[0].(map[string]any)
+	for key, want := range map[string]any{"group": "g", "state": "Stable", "member_count": float64(2), "partition_count": float64(4), "total_lag": float64(10)} {
+		if row[key] != want {
+			t.Errorf("%s = %v, want %v", key, row[key], want)
+		}
+	}
+	for _, gone := range []string{"members", "partitions", "lag"} {
+		if _, ok := row[gone]; ok {
+			t.Errorf("derived key %q is still present: %v", gone, row)
+		}
+	}
+
+	defer func() {
+		if recover() == nil {
+			t.Error("WithKeys with a header the table lacks did not panic")
+		}
+	}()
+	NewFormattedTable("json", "x", 1, "rows", "A").WithKeys(map[string]string{"B": "b"})
+}
