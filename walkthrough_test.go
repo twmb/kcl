@@ -117,6 +117,7 @@ var walkthroughLeaves = []struct {
 	{path: "txn.describe-producers", args: []string{walkTopic}},
 	{path: "txn.list"},
 	{path: "user.list"},
+	{path: "version"},
 }
 
 // walkthroughSkips are the leaves the walkthrough does not run, and why. A

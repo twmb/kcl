@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -460,6 +461,85 @@ func TestEmptyBootstrapIsUsageError(t *testing.T) {
 			} else if !strings.Contains(stderr, "-B") {
 				t.Errorf("stderr = %q, want it to name -B", stderr)
 			}
+		})
+	}
+}
+
+// TestVersionCommand pins the version document: five keys in JSON, one
+// KEY<tab>value row each in awk, and aligned lines with no header in text,
+// with the details a build does not carry printed as unknown rather than
+// dropped. A test binary carries no VCS stamp, so git_ref and build_date are
+// the unknown case here.
+func TestVersionCommand(t *testing.T) {
+	keys := []string{"version", "git_ref", "build_date", "go_version", "os_arch"}
+	for _, test := range []struct {
+		format string
+		check  func(t *testing.T, stdout string)
+	}{
+		{"json", func(t *testing.T, stdout string) {
+			var doc map[string]any
+			if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+				t.Fatalf("not JSON: %v: %s", err, stdout)
+			}
+			if doc["_command"] != "version" || doc["_version"] != float64(1) || len(doc) != 2+len(keys) {
+				t.Errorf("doc = %v", doc)
+			}
+			for _, k := range keys {
+				if _, ok := doc[k]; !ok {
+					t.Errorf("doc lacks %q: %v", k, doc)
+				}
+			}
+			if v, _ := doc["version"].(string); v == "" {
+				t.Errorf("version = %v, want a string", doc["version"])
+			}
+			if v, _ := doc["go_version"].(string); !strings.HasPrefix(v, "go") {
+				t.Errorf("go_version = %v", doc["go_version"])
+			}
+			if v, _ := doc["os_arch"].(string); v != runtime.GOOS+"/"+runtime.GOARCH {
+				t.Errorf("os_arch = %v", doc["os_arch"])
+			}
+		}},
+		{"awk", func(t *testing.T, stdout string) {
+			rows := strings.Split(strings.TrimSuffix(stdout, "\n"), "\n")
+			if len(rows) != len(keys) {
+				t.Fatalf("got %d rows, want %d: %q", len(rows), len(keys), stdout)
+			}
+			for i, row := range rows {
+				fields := strings.Split(row, "\t")
+				if len(fields) != 2 || fields[0] != keys[i] || fields[1] == "" {
+					t.Errorf("row %d = %q, want %s<tab>value", i, row, keys[i])
+				}
+			}
+		}},
+		{"text", func(t *testing.T, stdout string) {
+			lines := strings.Split(strings.TrimSuffix(stdout, "\n"), "\n")
+			if len(lines) != len(keys) || !strings.HasPrefix(lines[0], "version ") || !strings.HasPrefix(lines[4], "os/arch ") {
+				t.Errorf("text = %q", stdout)
+			}
+			for _, line := range lines {
+				if strings.ToUpper(line) == line {
+					t.Errorf("line %q reads as a header", line)
+				}
+			}
+		}},
+	} {
+		t.Run(test.format, func(t *testing.T) {
+			root, _ := buildRoot()
+			root.SetArgs([]string{"--no-config-file", "version", "--format", test.format})
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			old := os.Stdout
+			os.Stdout = w
+			execErr := root.Execute()
+			w.Close()
+			os.Stdout = old
+			b, _ := io.ReadAll(r)
+			if execErr != nil {
+				t.Fatal(execErr)
+			}
+			test.check(t, string(b))
 		})
 	}
 }

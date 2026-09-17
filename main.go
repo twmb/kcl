@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"runtime"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -104,6 +106,85 @@ func isPseudoVersion(v string) bool {
 	return false
 }
 
+// versionCommand prints what this kcl is: the version main resolves, and the
+// build details the Go toolchain stamps into the binary. It touches no
+// network.
+func versionCommand(cl *client.Client) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "version",
+		Short: "Print the kcl version and build details.",
+		Long: `Print the kcl version and build details.
+
+The version is the release this binary was built as, or dev plus the commit
+for a build from source. The git ref and build date come from the VCS stamp
+the Go toolchain adds to a build, and are "-" when a build carries none,
+such as a go install from the module proxy.
+
+EXAMPLES:
+  kcl version                      # aligned key and value lines
+  kcl version --format json        # {version, git_ref, build_date, go_version, os_arch}
+  kcl version --format awk         # one KEY<tab>value row per line
+`,
+		Args: cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			details := buildDetails()
+			switch cl.Format() {
+			case out.FormatJSON:
+				fields := make(map[string]any, len(details))
+				for _, d := range details {
+					fields[d.key] = d.value
+				}
+				out.MarshalJSON(cl.Command(), 1, fields)
+			case out.FormatAWK:
+				for _, d := range details {
+					out.AwkRow(d.key, d.value)
+				}
+			default:
+				tw := out.BeginTabWrite()
+				for _, d := range details {
+					fmt.Fprintf(tw, "%s\t%v\n", d.label, d.value)
+				}
+				tw.Flush()
+			}
+			return nil
+		},
+	}
+	out.Columns(cmd, "KEY", "VALUE")
+	return cmd
+}
+
+// buildDetail is one line of kcl version: the label text prints, the key JSON
+// and awk print, and the value, which is out.Unknown for a detail the build
+// does not carry.
+type buildDetail struct {
+	label string
+	key   string
+	value any
+}
+
+func buildDetails() []buildDetail {
+	var ref, date any = out.Unknown, out.Unknown
+	goVersion := runtime.Version()
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		goVersion = bi.GoVersion
+		for _, s := range bi.Settings {
+			switch s.Key {
+			case "vcs.revision":
+				ref = s.Value
+			case "vcs.time":
+				date = s.Value
+			}
+		}
+	}
+	return []buildDetail{
+		{"version", "version", resolveVersion()},
+		{"git ref", "git_ref", ref},
+		{"build date", "build_date", date},
+		{"go version", "go_version", goVersion},
+		{"os/arch", "os_arch", runtime.GOOS + "/" + runtime.GOARCH},
+	}
+}
+
 // buildRoot builds the whole command tree with the client it shares.
 func buildRoot() (*cobra.Command, *client.Client) {
 	v := resolveVersion()
@@ -183,6 +264,7 @@ Command completion is available at:
 		userscram.Command(cl),
 		txn.Command(cl),
 		fake.Command(),
+		versionCommand(cl),
 	)
 
 	allCommands(root, func(cmd *cobra.Command) {
