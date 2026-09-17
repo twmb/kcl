@@ -318,7 +318,7 @@ SEE ALSO:
 		RunE: func(_ *cobra.Command, args []string) error {
 			tps, err := flagutil.ParseTopicPartitions(topicParts)
 			if err != nil {
-				return fmt.Errorf("unable to parse topic partitions: %v", err)
+				return out.Errf(out.ExitUsage, "unable to parse topic partitions: %v", err)
 			}
 
 			if fromFile != "" {
@@ -329,11 +329,11 @@ SEE ALSO:
 				var entries []fileEntry
 				raw, err := os.ReadFile(fromFile)
 				if err != nil {
-					return fmt.Errorf("unable to read --from-file: %v", err)
+					return out.Errf(out.ExitUsage, "unable to read --from-file: %v", err)
 				}
 				err = json.Unmarshal(raw, &entries)
 				if err != nil {
-					return fmt.Errorf("unable to parse --from-file JSON: %v", err)
+					return out.Errf(out.ExitUsage, "unable to parse --from-file JSON: %v", err)
 				}
 				for _, e := range entries {
 					if p, ok := tps[e.Topic]; ok && p == nil {
@@ -373,19 +373,22 @@ SEE ALSO:
 			}
 
 			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results",
-				"TOPIC", "PARTITION", "STATUS")
+				"TOPIC", "PARTITION", "ERROR", "MESSAGE").ResultColumns()
+			sort.Slice(resp.Topics, func(i, j int) bool { return resp.Topics[i].Topic < resp.Topics[j].Topic })
 			for _, topic := range resp.Topics {
+				sort.Slice(topic.Partitions, func(i, j int) bool { return topic.Partitions[i].Partition < topic.Partitions[j].Partition })
 				for _, partition := range topic.Partitions {
-					msg := "OK"
+					errStr := ""
 					if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
-						msg = err.Error()
+						errStr = err.Error()
 					}
-					table.Row(topic.Topic, partition.Partition, msg)
+					table.Row(topic.Topic, partition.Partition, errStr, "")
 				}
 			}
 			return table.Flush()
 		},
 	}
+	out.Columns(cmd, "TOPIC", "PARTITION", "ERROR", "MESSAGE")
 
 	cmd.Flags().StringArrayVarP(&topicParts, "topic", "t", nil, "topic, or topic:partitions, to delete offsets for; a bare topic is every partition; repeatable")
 	cmd.Flags().StringVar(&fromFile, "from-file", "", "JSON file of [{topic, partition}, ...] to delete offsets for")
