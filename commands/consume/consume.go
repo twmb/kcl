@@ -119,6 +119,20 @@ func (c *consumption) run(topics []string) error {
 		return out.Errf(out.ExitUsage, "--group and --share-group are mutually exclusive")
 	}
 
+	// The format is parsed before anything is dialed, so a bad one is a
+	// usage error at the prompt rather than after the cluster answered.
+	// The bare word "json" is reserved: it selects JSON record output
+	// rather than being read as a format string. Matched exactly, so
+	// -f 'json%v' remains an ordinary format.
+	var formatter *kgo.RecordFormatter
+	if !isConsumerOffsets && !isTransactionState && c.format != jsonFormatName {
+		var err error
+		formatter, err = kgo.NewRecordFormatter(c.format)
+		if err != nil {
+			return out.Errf(out.ExitUsage, "output format %q: %v", c.format, err)
+		}
+	}
+
 	var shareAck kgo.AckStatus
 	switch strings.ToLower(c.shareAckType) {
 	case "", "accept":
@@ -493,18 +507,11 @@ func (c *consumption) run(topics []string) error {
 	} else if isTransactionState {
 		co.buildTransactionStateFormatFn()
 	} else if c.format == jsonFormatName {
-		// The bare word "json" is reserved: it selects JSON record output
-		// rather than being read as a format string. Matched exactly, so
-		// -f 'json%v' remains an ordinary format.
 		co.buildJSONFormatFn(c.shareGroup != "")
 	} else {
-		f, err := kgo.NewRecordFormatter(c.format)
-		if err != nil {
-			return fmt.Errorf("%v", err)
-		}
 		var buf []byte
 		co.format = func(r *kgo.Record, p *kgo.FetchPartition) {
-			buf = f.AppendPartitionRecord(buf[:0], p, r)
+			buf = formatter.AppendPartitionRecord(buf[:0], p, r)
 			os.Stdout.Write(buf)
 		}
 	}
