@@ -1004,3 +1004,47 @@ func TestDumpNestsConfig(t *testing.T) {
 		t.Errorf("config = %v", cfg)
 	}
 }
+
+// TestProfileExitCodes pins the split: a name you typed that the file does
+// not have (or has, for create), and a file that does not parse, exit 2; a
+// file that is missing or has no profiles is exit 1.
+func TestProfileExitCodes(t *testing.T) {
+	const profiles = "current_profile = \"prod\"\n[profiles.prod]\nseed_brokers = [\"p:9092\"]\n"
+	for _, test := range []struct {
+		name    string
+		file    *string
+		args    []string
+		want    int
+		wantErr string
+	}{
+		{"use unknown", ptr(profiles), []string{"profile", "use", "nope"}, out.ExitUsage, "not found"},
+		{"current -C unknown", ptr(profiles), []string{"-C", "nope", "profile", "current"}, out.ExitUsage, "not found"},
+		{"set -C unknown", ptr(profiles), []string{"-C", "nope", "profile", "set", "-B", "a:1"}, out.ExitUsage, "not found"},
+		{"rename unknown", ptr(profiles), []string{"profile", "rename", "nope", "x"}, out.ExitUsage, "not found"},
+		{"rename onto existing", ptr(profiles), []string{"profile", "rename", "prod", "prod"}, out.ExitUsage, "already exists"},
+		{"delete unknown", ptr(profiles), []string{"profile", "delete", "nope"}, out.ExitUsage, "not found"},
+		{"create existing", ptr(profiles), []string{"profile", "create", "prod"}, out.ExitUsage, "already exists"},
+		{"file does not parse", ptr("current_profile = \n"), []string{"profile", "list"}, out.ExitUsage, "unable to read config"},
+		{"use with no file", nil, []string{"profile", "use", "prod"}, out.ExitError, "unable to read config"},
+		{"set with no file", nil, []string{"profile", "set", "-B", "a:1"}, out.ExitError, "no config file"},
+		{"use with no profiles", ptr(""), []string{"profile", "use", "prod"}, out.ExitError, "no profiles"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if test.file != nil {
+				if err := os.WriteFile(path, []byte(*test.file), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := runProfile(t, path, test.args...)
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("err = %v, want containing %q", err, test.wantErr)
+			}
+			if got := out.ExitCode(err); got != test.want {
+				t.Errorf("exit %d, want %d: %v", got, test.want, err)
+			}
+		})
+	}
+}
+
+func ptr(s string) *string { return &s }

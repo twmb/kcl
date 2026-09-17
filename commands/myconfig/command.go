@@ -79,14 +79,14 @@ func useCommand(cl *client.Client) *cobra.Command {
 
 			var cfgFile client.CfgFile
 			if _, err := client.DecodeCfgFile(cfgPath, &cfgFile); err != nil {
-				return fmt.Errorf("unable to read config: %v", err)
+				return readErr(err)
 			}
 
 			if len(cfgFile.Profiles) == 0 {
 				return fmt.Errorf("config file has no profiles; add [profiles.NAME] sections to your config first")
 			}
 			if _, ok := cfgFile.Profiles[name]; !ok {
-				return fmt.Errorf("profile %q not found; available: %v", name, profileNames(cfgFile))
+				return out.Errf(out.ExitUsage, "profile %q not found; available: %v", name, profileNames(cfgFile))
 			}
 
 			cfgFile.CurrentProfile = name
@@ -165,6 +165,16 @@ func listCommand(cl *client.Client) *cobra.Command {
 	return cmd
 }
 
+// readErr is the error for a config file that could not be read. A file that
+// does not parse is a usage error, exit 2, as it is when a connection loads
+// it; a file that cannot be opened is exit 1.
+func readErr(err error) error {
+	if os.IsNotExist(err) || errors.Is(err, os.ErrPermission) {
+		return fmt.Errorf("unable to read config: %v", err)
+	}
+	return out.Errf(out.ExitUsage, "unable to read config: %v", err)
+}
+
 // readCfgFile decodes the config file at path, reporting whether there is no
 // file there. A first run has no file, and the commands that only report what
 // is configured answer that with an empty config rather than an error.
@@ -173,7 +183,7 @@ func readCfgFile(path string, cfgFile *client.CfgFile) (missing bool, err error)
 		if os.IsNotExist(err) {
 			return true, nil
 		}
-		return false, fmt.Errorf("unable to read config: %v", err)
+		return false, readErr(err)
 	}
 	return false, nil
 }
@@ -194,7 +204,7 @@ func currentCommand(cl *client.Client) *cobra.Command {
 			name := cl.ProfileName()
 			if name != "" {
 				if _, ok := cfgFile.Profiles[name]; !ok {
-					return fmt.Errorf("profile %q not found; available: %v", name, profileNames(cfgFile))
+					return out.Errf(out.ExitUsage, "profile %q not found; available: %v", name, profileNames(cfgFile))
 				}
 			} else {
 				name = cfgFile.CurrentProfile
@@ -333,12 +343,12 @@ func setProfile(path, name string, apply func(*client.Cfg) error) (edited string
 		return "", false, fmt.Errorf("no config file at %s; create a profile first with kcl profile create", path)
 	}
 	if err != nil {
-		return "", false, fmt.Errorf("unable to read config: %v", err)
+		return "", false, readErr(err)
 	}
 
 	if len(cfgFile.Profiles) == 0 {
 		if name != "" {
-			return "", false, fmt.Errorf("profile %q not found; config file has no profiles", name)
+			return "", false, out.Errf(out.ExitUsage, "profile %q not found; config file has no profiles", name)
 		}
 		if !isFlat(md, cfgFile) {
 			return "", false, fmt.Errorf("config at %s has no profiles; create one first with kcl profile create", path)
@@ -360,7 +370,7 @@ func setProfile(path, name string, apply func(*client.Cfg) error) (edited string
 	}
 	p, ok := cfgFile.Profiles[name]
 	if !ok {
-		return "", false, fmt.Errorf("profile %q not found; available: %v", name, profileNames(cfgFile))
+		return "", false, out.Errf(out.ExitUsage, "profile %q not found; available: %v", name, profileNames(cfgFile))
 	}
 	if err := apply(&p); err != nil {
 		return "", false, out.Errf(out.ExitUsage, "%v", err)
@@ -472,7 +482,7 @@ func createProfile(path, name string, cfg client.Cfg) (bool, error) {
 	var cfgFile client.CfgFile
 	md, err := client.DecodeCfgFile(path, &cfgFile)
 	if err != nil && !os.IsNotExist(err) {
-		return false, fmt.Errorf("unable to read config: %v", err)
+		return false, readErr(err)
 	}
 
 	// Adding a profile to the flat layout would silently stop its keys being
@@ -481,7 +491,7 @@ func createProfile(path, name string, cfg client.Cfg) (bool, error) {
 		return false, fmt.Errorf("config at %s is a flat single-cluster config; move its keys under a [profiles.NAME] table and set current_profile, then retry", path)
 	}
 	if _, exists := cfgFile.Profiles[name]; exists {
-		return false, fmt.Errorf("profile %q already exists", name)
+		return false, out.Errf(out.ExitUsage, "profile %q already exists", name)
 	}
 
 	if cfgFile.Profiles == nil {
@@ -552,15 +562,15 @@ func renameCommand(cl *client.Client) *cobra.Command {
 
 			var cfgFile client.CfgFile
 			if _, err := client.DecodeCfgFile(cfgPath, &cfgFile); err != nil {
-				return fmt.Errorf("unable to read config: %v", err)
+				return readErr(err)
 			}
 
 			cfg, ok := cfgFile.Profiles[oldName]
 			if !ok {
-				return fmt.Errorf("profile %q not found", oldName)
+				return out.Errf(out.ExitUsage, "profile %q not found", oldName)
 			}
 			if _, exists := cfgFile.Profiles[newName]; exists {
-				return fmt.Errorf("profile %q already exists", newName)
+				return out.Errf(out.ExitUsage, "profile %q already exists", newName)
 			}
 
 			delete(cfgFile.Profiles, oldName)
@@ -590,11 +600,11 @@ func deleteCommand(cl *client.Client) *cobra.Command {
 
 			var cfgFile client.CfgFile
 			if _, err := client.DecodeCfgFile(cfgPath, &cfgFile); err != nil {
-				return fmt.Errorf("unable to read config: %v", err)
+				return readErr(err)
 			}
 
 			if _, ok := cfgFile.Profiles[name]; !ok {
-				return fmt.Errorf("profile %q not found", name)
+				return out.Errf(out.ExitUsage, "profile %q not found", name)
 			}
 
 			delete(cfgFile.Profiles, name)

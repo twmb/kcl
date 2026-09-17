@@ -1,10 +1,11 @@
 package client
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/twmb/franz-go/pkg/sr"
+
+	"github.com/twmb/kcl/out"
 )
 
 // DefaultRegistryURL is the conventional local Schema Registry address, used
@@ -41,7 +42,7 @@ func (c *Client) SchemaRegistryClient(opts ...sr.ClientOpt) (*sr.Client, error) 
 	switch {
 	case cfg.BearerToken != "":
 		if cfg.User != "" || cfg.Pass != "" {
-			return nil, errors.New("schema registry bearer token and basic auth (user/pass) are mutually exclusive")
+			return nil, out.Errf(out.ExitUsage, "schema registry bearer token and basic auth (user/pass) are mutually exclusive")
 		}
 		srOpts = append(srOpts, sr.BearerToken(cfg.BearerToken))
 	case cfg.User != "" || cfg.Pass != "":
