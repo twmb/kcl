@@ -11,6 +11,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/twmb/franz-go/pkg/kerr"
+	"golang.org/x/term"
 )
 
 // BeginTabWrite returns a new tabwriter that prints to stdout.
@@ -124,9 +125,11 @@ const (
 // Confirm asks prompt on stderr, with " [y/N] " appended, and reads one line
 // from stdin. It reads only when stdin is a terminal, and it prints no
 // document: on No and NotATerminal the caller prints the plan it would have
-// carried out and exits 0.
+// carried out and exits 0. A pipe, a file, and /dev/null are not terminals
+// and answer "no (stdin is not a terminal)"; a terminal that ends before a
+// line, ctrl-D, answers "no (end of input)".
 func Confirm(prompt string) Answer {
-	return confirm(os.Stdin, os.Stderr, prompt, isTerminal(os.Stdin))
+	return confirm(os.Stdin, os.Stderr, prompt, term.IsTerminal(int(os.Stdin.Fd())))
 }
 
 func confirm(r io.Reader, w io.Writer, prompt string, terminal bool) Answer {
@@ -145,11 +148,6 @@ func confirm(r io.Reader, w io.Writer, prompt string, terminal bool) Answer {
 		return Yes
 	}
 	return No
-}
-
-func isTerminal(f *os.File) bool {
-	fi, err := f.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
 // ErrName is the ERROR cell for a Kafka error code: the name kerr gives it,

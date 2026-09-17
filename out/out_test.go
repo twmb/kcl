@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/kerr"
+	"golang.org/x/term"
 )
 
 func TestErrorDocAndExitCode(t *testing.T) {
@@ -90,15 +91,24 @@ func TestConfirm(t *testing.T) {
 			}
 		})
 	}
-	// A pipe is what a script hands us, and it is not a terminal.
+	// A pipe is what a script hands us, and /dev/null is a character
+	// device; neither is a terminal.
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer r.Close()
 	defer w.Close()
-	if isTerminal(r) {
+	if term.IsTerminal(int(r.Fd())) {
 		t.Error("a pipe reports as a terminal")
+	}
+	null, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer null.Close()
+	if term.IsTerminal(int(null.Fd())) {
+		t.Error("/dev/null reports as a terminal")
 	}
 }
 
