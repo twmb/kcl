@@ -162,6 +162,54 @@ func TestProduceKey(t *testing.T) {
 	}
 }
 
+// TestProduceOutputJSON pins the -o json document: one object per record,
+// error "" on success, and on a failure the error text with a null offset,
+// every record still attempted, and exit 1.
+func TestProduceOutputJSON(t *testing.T) {
+	c, _ := newCluster(t, map[string]int32{"t": 1})
+	addrs := c.ListenAddrs()
+
+	got, err := runKCL(t, addrs, "a\nb\n", "produce", "t", "-o", "json")
+	if err != nil {
+		t.Fatalf("produce: %v\n%s", err, got)
+	}
+	objs := decodeObjects(t, got)
+	if len(objs) != 2 {
+		t.Fatalf("got %d objects, want 2: %s", len(objs), got)
+	}
+	for i, o := range objs {
+		for _, k := range []string{"topic", "partition", "offset", "timestamp", "error"} {
+			if _, ok := o[k]; !ok {
+				t.Errorf("object %d lacks %s: %v", i, k, o)
+			}
+		}
+		if o["topic"] != "t" || o["partition"] != float64(0) || o["offset"] != float64(i) || o["error"] != "" {
+			t.Errorf("object %d = %v", i, o)
+		}
+	}
+
+	// Partition 5 of a one-partition topic fails every record.
+	got, err = runKCL(t, addrs, "a\nb\n", "produce", "t", "-o", "json", "-p", "5")
+	if err == nil {
+		t.Fatalf("expected an error, got none:\n%s", got)
+	}
+	if code := out.ExitCode(err); code != out.ExitError {
+		t.Errorf("exit code = %d, want %d", code, out.ExitError)
+	}
+	if err != out.ErrSilent {
+		t.Errorf("error = %v, want ErrSilent (the objects already said what failed)", err)
+	}
+	objs = decodeObjects(t, got)
+	if len(objs) != 2 {
+		t.Fatalf("got %d objects, want 2 (every record is attempted): %s", len(objs), got)
+	}
+	for i, o := range objs {
+		if o["error"] == "" || o["offset"] != nil || o["timestamp"] != nil {
+			t.Errorf("failed object %d = %v", i, o)
+		}
+	}
+}
+
 // TestProduceNoTopicBeforeStdin pins that the missing topic is reported
 // before stdin is read: stdin here is a pipe nothing writes to, so a produce
 // that read it first would hang.

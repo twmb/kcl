@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -56,7 +57,8 @@ input format wins over -k; -k fills in where the input has no key at all.
 The output format (-o) controls what is printed after each record is produced
 (e.g., to confirm topic/partition/offset). The output format uses the same
 syntax as "kcl consume --format"; see "kcl consume --help" for full output
-format documentation.
+format documentation. The bare word "json" prints one JSON object per record;
+see JSON OUTPUT below.
 
 Slash escapes:
   \t    tab
@@ -142,6 +144,18 @@ JSON values are compacted after being read.
 As well, these text options can be parsed with regular expressions:
 
   %k{re[\d*]}%v{re[\s+]}
+
+
+JSON OUTPUT
+
+-o/--output-format set to exactly "json" prints one JSON object per record as
+it is produced:
+
+  {"topic":"orders","partition":3,"offset":1482,"timestamp":1755645291123,"error":""}
+
+"error" is "" on success and the error text on failure, where "offset" and
+"timestamp" are null. Every record is attempted; the exit code is 1 if any
+failed. Without -o json a failure stops producing at the first error.
 
 
 EXAMPLES:
@@ -232,9 +246,9 @@ Examples:
 				return out.Errf(out.ExitUsage, "input format %q: %v", informat, err)
 			}
 
+			outJSON := verboseFormat == jsonFormatName
 			var verboseFormatter *kgo.RecordFormatter
-			var verboseBuf []byte
-			if verboseFormat != "" {
+			if verboseFormat != "" && !outJSON {
 				verboseFormatter, err = kgo.NewRecordFormatter(verboseFormat)
 				if err != nil {
 					return out.Errf(out.ExitUsage, "output format %q: %v", verboseFormat, err)
@@ -343,6 +357,30 @@ Examples:
 				}
 			}
 
+			// Promises run on kgo's goroutines, one per broker, so the
+			// output buffer and the failure count are shared under a lock.
+			var (
+				outMu  sync.Mutex
+				outBuf []byte
+				failed int
+			)
+			promise := func(r *kgo.Record, err error) {
+				outMu.Lock()
+				defer outMu.Unlock()
+				switch {
+				case outJSON:
+					if err != nil {
+						failed++
+					}
+					os.Stdout.Write(marshalProduced(r, err))
+				case err != nil:
+					out.Die("unable to produce record: %v", err)
+				case verboseFormatter != nil:
+					outBuf = verboseFormatter.AppendRecord(outBuf[:0], r)
+					os.Stdout.Write(outBuf)
+				}
+			}
+
 			setKey := cmd.Flags().Changed("key")
 			for {
 				r, err := reader.ReadRecord()
@@ -390,23 +428,22 @@ Examples:
 					r.Headers = append(r.Headers, staticHeaders...)
 				}
 
-				cl.Client().Produce(context.Background(), r, func(r *kgo.Record, err error) {
-					out.MaybeDie(err, "unable to produce record: %v", err)
-					if verboseFormatter != nil {
-						verboseBuf = verboseFormatter.AppendRecord(verboseBuf[:0], r)
-						os.Stdout.Write(verboseBuf)
-					}
-				})
+				cl.Client().Produce(context.Background(), r, promise)
 			}
 
 			cl.Client().Flush(context.Background())
+			outMu.Lock()
+			defer outMu.Unlock()
+			if failed > 0 {
+				return out.ErrSilent
+			}
 			return nil
 		},
 	}
 
 	cmd.Flags().StringVarP(&topicFlag, "topic", "t", "", "topic to produce to (alternative to positional argument)")
 	cmd.Flags().StringVarP(&informat, "format", "f", "%v\n", "record input format")
-	cmd.Flags().StringVarP(&verboseFormat, "output-format", "o", "", "format string for produced record output (topic, partition, offset of each record)")
+	cmd.Flags().StringVarP(&verboseFormat, "output-format", "o", "", "format string for produced record output (topic, partition, offset of each record); the bare word 'json' prints one JSON object per record")
 	cmd.Flags().StringVarP(&key, "key", "k", "", "key for every record whose input carries none (a %k in -f wins)")
 	cmd.Flags().StringVarP(&compression, "compression", "z", "snappy", "compression to use for producing batches (none, gzip, snappy, lz4, zstd)")
 	cmd.Flags().IntVar(&acks, "acks", -1, "number of acks required, -1 is all in sync replicas, 1 is leader replica only, 0 is no acks required (0 disables idempotency)")
