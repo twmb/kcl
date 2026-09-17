@@ -124,6 +124,44 @@ func readAll(t *testing.T, addrs []string, topic string, n int) []*kgo.Record {
 	return recs
 }
 
+// TestProduceKey pins the precedence: -k fills in a key only where the input
+// set none, so a %k in the format wins.
+func TestProduceKey(t *testing.T) {
+	tests := []struct {
+		name  string
+		args  []string
+		stdin string
+		want  []byte // nil is a nil key
+	}{
+		{"flag on a plain line", []string{"-k", "fk"}, "v\n", []byte("fk")},
+		{"empty flag is an empty key", []string{"-k", ""}, "v\n", []byte{}},
+		{"%k wins over the flag", []string{"-k", "fk", "-f", "%k %v\n"}, "a v\n", []byte("a")},
+		{"no key at all", nil, "v\n", nil},
+	}
+	topics := map[string]int32{}
+	for i := range tests {
+		topics[strings.ReplaceAll(tests[i].name, " ", "-")] = 1
+	}
+	c, _ := newCluster(t, topics)
+	addrs := c.ListenAddrs()
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			topic := strings.ReplaceAll(tt.name, " ", "-")
+			if _, err := runKCL(t, addrs, tt.stdin, append([]string{"produce", topic}, tt.args...)...); err != nil {
+				t.Fatalf("produce: %v", err)
+			}
+			r := readAll(t, addrs, topic, 1)[0]
+			if (r.Key == nil) != (tt.want == nil) || !bytes.Equal(r.Key, tt.want) {
+				t.Errorf("key = %#v, want %#v", r.Key, tt.want)
+			}
+			if string(r.Value) != "v" {
+				t.Errorf("value = %q, want v", r.Value)
+			}
+		})
+	}
+}
+
 // TestProduceNoTopicBeforeStdin pins that the missing topic is reported
 // before stdin is read: stdin here is a pipe nothing writes to, so a produce
 // that read it first would hang.

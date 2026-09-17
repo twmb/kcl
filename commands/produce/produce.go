@@ -30,6 +30,7 @@ func Command(cl *client.Client) *cobra.Command {
 		maxMessageBytes      int32
 		allowAutoTopicCreate bool
 		headers              []string
+		key                  string
 
 		valueSchemaSpec string
 		keySchemaSpec   string
@@ -48,6 +49,9 @@ and the format can parse a topic, key, value, and header keys and values.
 
 The topic comes from the argument, -t/--topic, or a %t in the input format;
 with none of those, producing is an error before stdin is read.
+
+-k/--key gives a key to every record whose input carries none. A %k in the
+input format wins over -k; -k fills in where the input has no key at all.
 
 The output format (-o) controls what is printed after each record is produced
 (e.g., to confirm topic/partition/offset). The output format uses the same
@@ -209,7 +213,7 @@ Examples:
   kcl produce orders -f '%k %v\n' --key-schema id:7 --schema topic
 `,
 		Args: cobra.MaximumNArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			if topicFlag != "" {
 				if len(args) > 0 {
 					return out.Errf(out.ExitUsage, "topic specified both as -t flag and positional argument")
@@ -339,6 +343,7 @@ Examples:
 				}
 			}
 
+			setKey := cmd.Flags().Changed("key")
 			for {
 				r, err := reader.ReadRecord()
 				if err != nil {
@@ -349,6 +354,11 @@ Examples:
 				}
 				if tombstone && len(r.Value) == 0 {
 					r.Value = nil
+				}
+				// -k fills in a key the input did not set; %k sets one
+				// even when it read nothing.
+				if setKey && r.Key == nil {
+					r.Key = []byte(key)
 				}
 				if r.Topic == "" {
 					if len(args) == 0 {
@@ -397,6 +407,7 @@ Examples:
 	cmd.Flags().StringVarP(&topicFlag, "topic", "t", "", "topic to produce to (alternative to positional argument)")
 	cmd.Flags().StringVarP(&informat, "format", "f", "%v\n", "record input format")
 	cmd.Flags().StringVarP(&verboseFormat, "output-format", "o", "", "format string for produced record output (topic, partition, offset of each record)")
+	cmd.Flags().StringVarP(&key, "key", "k", "", "key for every record whose input carries none (a %k in -f wins)")
 	cmd.Flags().StringVarP(&compression, "compression", "z", "snappy", "compression to use for producing batches (none, gzip, snappy, lz4, zstd)")
 	cmd.Flags().IntVar(&acks, "acks", -1, "number of acks required, -1 is all in sync replicas, 1 is leader replica only, 0 is no acks required (0 disables idempotency)")
 	cmd.Flags().IntVar(&retries, "retries", -1, "number of times to retry producing if non-negative")
