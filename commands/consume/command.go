@@ -206,24 +206,6 @@ times. If the parser needs more data than available, or if more input remains
 after '$', an error message will be appended.
 
 
-EXAMPLES:
-
-Default (value only, newline-delimited):
-  -f '%v\n'
-
-Key and value, tab-separated:
-  -f '%k\t%v\n'
-
-Timestamped, with topic/partition/offset:
-  -f '%d{strftime[%F %T]} %t[%p]@%o %v\n'
-
-Inspect headers:
-  -f '%v headers=%H %h{%k=%v,}\n'
-
-Show share-group delivery count (with --share-group):
-  -f '%v delivery=%D\n'
-
-
 JSON OUTPUT
 
 As a special case, -f/--format set to exactly "json" prints one JSON object per
@@ -270,4 +252,25 @@ must be the only topic specified.
 For __consumer_offsets, to dump information about a specific group, use the -g
 flag. Doing so will also hide transaction markers. For __transaction_state, you
 can use -g to dump information about a specific transactional ID.
+
+
+EXAMPLES:
+  kcl consume foo                                    # values, one per line, from the start
+  kcl consume foo -f '%k\t%v\n'                      # key and value, tab separated
+  kcl consume foo -f '%v headers=%H %h{%k=%v,}\n'    # with the headers
+  kcl consume foo -f json                            # one JSON object per record
+  kcl consume foo -o @-1h                            # from an hour ago
+  kcl consume foo -o :end                            # to the end, then stop
+  kcl consume foo -n 10                              # ten records, then stop
+  kcl consume foo -g mygroup                         # in a group, committing what is printed
+  kcl consume foo --share-group sg -f '%v %D\n'       # share group, with the delivery count
+  kcl consume foo --decode=value                     # Schema Registry decode the values
+  kcl consume foo -f json | kcl produce bar -f json  # copy a topic
+
+  # Timestamped, with the topic, partition, and offset:
+  kcl consume foo -f '%d{strftime[%F %T]} %t[%p]@%o %v\n'
+
+SEE ALSO:
+  kcl produce          produce records; -f json reads what -f json here writes
+  kcl group describe   describe a group and its lag
 `

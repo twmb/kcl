@@ -196,40 +196,6 @@ it is produced:
 failed. Without -o json a failure stops producing at the first error.
 
 
-EXAMPLES:
-
-To read a newline delimited file, each line a record (no keys):
-  -f '%v\n'
-
-To read that same file, with each line alternating key/value:
-  -f '%k\n%v\n'
-
-To read a file where each line has a key and value beginning with "key: " and
-", value: ":
-  -f 'key: %k, value: %v\n'
-
-To read a binary file with keys and values having four byte big endian
-prefixes:
-  -f '%K{big32}%k%V{big32}%v'
-
-To read a similar file that also has a count of headers (big endian short) and
-then headers (also sized with big endian shorts) following the value:
-  -f '%K{big32}%k%V{big32}%v%H{big16}%h{%K{big16}%k%V{big16}%v}'
-
-To read a similar file that has the topic to produce to before the key, also
-sized with a big endian short:
-  -f '%T{big16}%t%K{big32}%k%V{big32}%v%H{big16}%h{%K{big16}%k%V{big16}%v}'
-
-To read a compact key, value, and single header, with each piece being 3 bytes:
-  -f '%K{3}%V{3}%H{1}%k%v%h{%K{3}%k%V{3}%v}'
-
-To read JSON-encoded values:
-  -f '%v{json}\n'
-
-To show partition and offset for each produced record:
-  -o 'produced to %t[%p]@%o\n'
-
-
 SCHEMA REGISTRY
 
 The value (--schema) and/or key (--key-schema) can be encoded into the Schema
@@ -251,18 +217,42 @@ VERSION is a number or "latest" (default). Any form may add a trailing
 strategy cannot be used when the topic is parsed per record (%t, or -f json
 with no topic given); use id: or subject: instead.
 
-Examples:
+
+EXAMPLES:
+  kcl produce foo < lines.txt                        # a record per line, no keys
+  kcl produce foo -k k1 < lines.txt                  # every record keyed k1
+  kcl produce foo -f '%k\n%v\n'                      # lines alternate key, value
+  kcl produce foo -f 'key: %k, value: %v\n'          # delimited key and value
+  kcl produce foo -f '%v{json}\n'                    # JSON values, compacted
+  kcl produce foo -f '%K{big32}%k%V{big32}%v'        # big endian sized key, value
+  kcl produce foo -o 'produced to %t[%p]@%o\n'       # confirm each record
+  kcl produce foo -o json                            # a JSON object per record
+  kcl consume foo -f json | kcl produce bar -f json  # copy a topic
+
+  # Sized key and value, then a big endian short count of headers, each sized
+  # the same way:
+  kcl produce foo -f '%K{big32}%k%V{big32}%v%H{big16}%h{%K{big16}%k%V{big16}%v}'
+
+  # The same, with the topic before the key, sized with a big endian short:
+  kcl produce -f '%T{big16}%t%K{big32}%k%V{big32}%v%H{big16}%h{%K{big16}%k%V{big16}%v}'
+
+  # A compact key, value, and one header, each piece three bytes:
+  kcl produce foo -f '%K{3}%V{3}%H{1}%k%v%h{%K{3}%k%V{3}%v}'
 
   # Encode values with the latest registered orders-value schema:
   echo '{"id":"a","age":3}' | kcl produce orders --schema topic
 
-  # By explicit subject/version, or by id:
+  # By explicit subject and version, or by id:
   kcl produce orders --schema orders-value@3
   kcl produce orders --schema id:8
 
   # Protobuf, selecting the message; and encoding the key too:
   kcl produce orders --schema topic#com.acme.Order
   kcl produce orders -f '%k %v\n' --key-schema id:7 --schema topic
+
+SEE ALSO:
+  kcl consume                  consume records; its -f json writes what -f json reads
+  kcl registry schema create   register a schema to produce against
 `,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
