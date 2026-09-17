@@ -347,7 +347,14 @@ func classicPrintGroup(group describedGroup, fetched, starts, ends map[string]ma
 			target:     out.Unknown,
 		})
 	}
+	sortMembers(pg.members)
 	return pg
+}
+
+// sortMembers orders the members section by member id; the broker answers
+// in join order, which changes from one run to the next.
+func sortMembers(members []describeMember) {
+	slices.SortFunc(members, func(a, b describeMember) int { return strings.Compare(a.memberID, b.memberID) })
 }
 
 func describeConsumerGroups(cl *client.Client, groups []string, readCommitted bool, opts describeOpts) error {
@@ -458,6 +465,7 @@ func describeConsumerGroups(cl *client.Client, groups []string, readCommitted bo
 				target:     formatAssignment(member.TargetAssignment),
 			})
 		}
+		sortMembers(pg.members)
 		printed = append(printed, pg)
 	}
 

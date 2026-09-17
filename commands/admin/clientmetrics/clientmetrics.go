@@ -4,6 +4,7 @@ package clientmetrics
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -143,6 +144,9 @@ SEE ALSO:
 				if err := kerr.ErrorForCode(r.ErrorCode); err != nil {
 					return out.BrokerErr(err, r.ErrorMessage)
 				}
+				slices.SortFunc(r.Configs, func(a, b kmsg.DescribeConfigsResponseResourceConfig) int {
+					return strings.Compare(a.Name, b.Name)
+				})
 				for _, c := range r.Configs {
 					val := ""
 					if c.Value != nil {

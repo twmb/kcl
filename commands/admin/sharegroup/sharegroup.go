@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -267,6 +268,12 @@ func describeShareGroups(cl *client.Client, groups []string) []shareGroup {
 				offsets:     []shareOffset{},
 			}
 			g.err, g.message = errorCells(group.ErrorCode, group.ErrorMessage)
+			// The broker answers members in join order, which changes
+			// from one run to the next.
+			g.group.Members = slices.Clone(g.group.Members)
+			slices.SortFunc(g.group.Members, func(a, b kmsg.ShareGroupDescribeResponseGroupMember) int {
+				return strings.Compare(a.MemberID, b.MemberID)
+			})
 			if offsets, ok := offsetsByGroup[group.GroupID]; ok {
 				for _, topic := range offsets.Topics {
 					for _, p := range topic.Partitions {
