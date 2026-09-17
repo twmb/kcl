@@ -16,13 +16,8 @@ func Command(cl *client.Client) *cobra.Command {
 		Short: "Cluster operations (info, quorum, elections, features).",
 	}
 
-	info := metadata.Command(cl)
-	info.Use = "metadata [TOPICS]"
-	info.Aliases = []string{"info"}
-	info.Short = "Show cluster metadata"
-
 	cmd.AddCommand(
-		info,
+		metadata.Command(cl),
 		admin.DescribeClusterCommand(cl),
 		admin.DescribeQuorumCommand(cl),
 		admin.ElectLeadersCommand(cl),

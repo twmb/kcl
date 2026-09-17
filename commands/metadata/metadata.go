@@ -1,60 +1,75 @@
-// Package metadata provides the metadata command.
+// Package metadata provides the cluster metadata command.
 package metadata
 
 import (
-	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
-	"os"
-	"sort"
+	"slices"
 
 	"github.com/spf13/cobra"
-	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
+
 	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/commands/admin/topic"
+	"github.com/twmb/kcl/flagutil"
 	"github.com/twmb/kcl/out"
 )
 
-func Command(cl *client.Client) *cobra.Command {
-	req := kmsg.MetadataRequest{}
+var (
+	clusterHeaders = []string{"CLUSTER-ID", "CONTROLLER"}
+	brokerHeaders  = []string{"ID", "HOST", "PORT", "RACK"}
+)
 
+// Command is "kcl cluster metadata". It is also mounted, hidden, at the root
+// as "kcl metadata", and names cluster.metadata from either path.
+func Command(cl *client.Client) *cobra.Command {
 	var pinternal, detailed bool
 	var ids bool
 	var section string
 
 	cmd := &cobra.Command{
-		Use:   "metadata [TOPICS]",
-		Short: "Issue a metadata command and dump the results.",
+		Use:     "metadata [TOPICS...]",
+		Aliases: []string{"info"},
+		Short:   "Show cluster metadata.",
 		Long: `Show cluster metadata.
 
-Request metadata (0.8.0+).
+Issues Metadata (Kafka 0.8.0+), the request every client starts with, and
+prints the cluster id and controller, the brokers, and the topics with their
+partition and replica counts. Name topics to list only those; by default
+every topic is listed, internal topics with -i. A topic the broker answers
+with an error keeps its row, with the error in ERROR, and the command exits 1.
 
-Kafka's metadata contains a good deal of information about brokers, topics,
-and the cluster as a whole. This is the command to use to get general info
-on the what of everything.
+--section picks one section: cluster, brokers, or topics. Text prints every
+section by default; awk prints the topics section by default, since the
+sections have different columns; json carries the sections asked for. The
+rows are CLUSTER-ID CONTROLLER, ID HOST PORT RACK, and TOPIC TOPIC-ID
+PARTITIONS REPLICATION INTERNAL ERROR. In text the controller broker is
+marked with *.
 
-Use --section to select which section to display (cluster, brokers, topics).
-By default in text mode all sections are shown; in awk mode only topics are
-shown. Use -d for detailed topic partitions. It is optional to specify which
-topics to list metadata for; by default, all topics are listed.
+For what Metadata does not answer, the authorized operations or the
+cluster's own view of its brokers, use "kcl cluster describe", which issues
+DescribeCluster instead.
 
-If the brokers section is printed, the controller broker is marked with *.
+EXAMPLES:
+  kcl cluster metadata                    # cluster, brokers, and topics
+  kcl cluster metadata foo bar            # two topics
+  kcl cluster metadata --section brokers  # the brokers alone
+  kcl cluster metadata --format awk       # topic rows as TSV
 
-This issues Metadata, which is the command for topics and partitions. For
-cluster-level questions -- cluster ID, controller, authorized operations --
-use "kcl cluster describe", which issues DescribeCluster instead.
+SEE ALSO:
+  kcl cluster describe   the DescribeCluster view of the cluster
+  kcl topic list         list topics
+  kcl topic describe     describe topic partitions
 `,
 
 		RunE: func(_ *cobra.Command, topics []string) error {
-			// Validate --section.
+			cl.SetCommand("cluster.metadata")
 			switch section {
 			case "", "cluster", "brokers", "topics":
 			default:
 				return out.Errf(out.ExitUsage, "invalid --section %q: must be cluster, brokers, or topics", section)
 			}
 
-			// Determine which sections to print.
 			pcluster := section == "" || section == "cluster"
 			pbrokers := section == "" || section == "brokers"
 			ptopics := section == "" || section == "topics"
@@ -62,306 +77,174 @@ use "kcl cluster describe", which issues DescribeCluster instead.
 				ptopics = true
 			}
 
-			sections := 0
-			for _, v := range []bool{pcluster, pbrokers, ptopics} {
-				if v {
-					sections++
-				}
-			}
-
-			includeHeader := sections > 1
-
+			req := kmsg.NewPtrMetadataRequest()
 			if !ptopics {
 				req.Topics = []kmsg.MetadataRequestTopic{} // nil is all, empty is none
-			} else {
-				for _, topic := range topics {
-					t := kmsg.NewMetadataRequestTopic()
-					if ids {
-						if len(topic) != 32 {
-							return out.Errf(out.ExitUsage, "topic id %s is not a 32 byte hex string", topic)
-						}
-						raw, err := hex.DecodeString(topic)
-						if err != nil {
-							return out.Errf(out.ExitUsage, "topic id %s is not a hex string", topic)
-						}
-						copy(t.TopicID[:], raw)
-					} else {
-						t.Topic = kmsg.StringPtr(topic)
+			}
+			for _, t := range topics {
+				rt := kmsg.NewMetadataRequestTopic()
+				if ids {
+					id, err := flagutil.ParseTopicID(t)
+					if err != nil {
+						return out.Errf(out.ExitUsage, "invalid topic id %q: %v", t, err)
 					}
-					req.Topics = append(req.Topics, t)
+					rt.TopicID = id
+				} else {
+					rt.Topic = kmsg.StringPtr(t)
 				}
+				req.Topics = append(req.Topics, rt)
 			}
 
-			kresp, err := cl.Client().Request(context.Background(), &req)
+			resp, err := req.RequestWith(context.Background(), cl.Client())
 			if err != nil {
 				return fmt.Errorf("unable to get metadata: %v", err)
 			}
-			resp := kresp.(*kmsg.MetadataResponse)
-			sortMetadata(resp)
+			sortBrokers(resp.Brokers)
+			// A topic you named is listed even if it is internal.
+			internal := pinternal || len(topics) > 0
+
+			if detailed {
+				topic.SortTopics(resp.Topics)
+				var names []string
+				for _, t := range resp.Topics {
+					if t.Topic != nil && (internal || !t.IsInternal) {
+						names = append(names, *t.Topic)
+					}
+				}
+				return topic.Describe(cl, topic.DescribeOpts{}, names)
+			}
+
+			var clusterID any = out.Unknown
+			if resp.ClusterID != nil {
+				clusterID = *resp.ClusterID
+			}
+			var controller any = out.Unknown
+			if resp.ControllerID >= 0 {
+				controller = resp.ControllerID
+			}
+			brokerRows := func(star bool) [][]any {
+				rows := make([][]any, 0, len(resp.Brokers))
+				for _, b := range resp.Brokers {
+					var id any = b.NodeID
+					if star && b.NodeID == resp.ControllerID {
+						id = fmt.Sprintf("%d*", b.NodeID)
+					}
+					var rack any = out.Unknown
+					if b.Rack != nil {
+						rack = *b.Rack
+					}
+					rows = append(rows, []any{id, b.Host, b.Port, rack})
+				}
+				return rows
+			}
+			topicRows, failed := topic.ListRows(resp.Version, resp.Topics, internal)
+			if !ptopics {
+				failed = false
+			}
 
 			switch cl.Format() {
-			case "json":
-				fields := map[string]any{}
-				if resp.ClusterID != nil {
-					fields["cluster_id"] = *resp.ClusterID
+			case out.FormatJSON:
+				fields := make(map[string]any)
+				if pcluster {
+					fields["cluster_id"] = clusterID
+					fields["controller"] = controller
 				}
-				type brokerJSON struct {
-					ID   int32  `json:"id"`
-					Host string `json:"host"`
-					Port int32  `json:"port"`
-					Rack string `json:"rack,omitempty"`
+				if pbrokers {
+					brokers := make([]map[string]any, 0, len(resp.Brokers))
+					for _, row := range brokerRows(false) {
+						brokers = append(brokers, map[string]any{"id": row[0], "host": row[1], "port": row[2], "rack": row[3]})
+					}
+					fields["brokers"] = brokers
 				}
-				brokers := make([]brokerJSON, len(resp.Brokers))
-				for i, b := range resp.Brokers {
-					brokers[i] = brokerJSON{ID: b.NodeID, Host: b.Host, Port: b.Port}
-					if b.Rack != nil {
-						brokers[i].Rack = *b.Rack
-					}
+				if ptopics {
+					fields["topics"] = topic.ListRowMaps(topicRows)
 				}
-				fields["brokers"] = brokers
-				type topicJSON struct {
-					Name       string `json:"name"`
-					ID         string `json:"id,omitempty"`
-					Internal   bool   `json:"internal,omitempty"`
-					Partitions int    `json:"partitions"`
-					Replicas   int    `json:"replicas"`
-				}
-				var topicsJSON []topicJSON
-				for _, t := range resp.Topics {
-					if !pinternal && t.IsInternal {
-						continue
-					}
-					tj := topicJSON{
-						Name:       topicOut(t.Topic),
-						Internal:   t.IsInternal,
-						Partitions: len(t.Partitions),
-					}
-					if resp.Version >= 10 {
-						tj.ID = fmt.Sprintf("%x", t.TopicID)
-					}
-					if len(t.Partitions) > 0 {
-						tj.Replicas = len(t.Partitions[0].Replicas)
-					}
-					topicsJSON = append(topicsJSON, tj)
-				}
-				fields["topics"] = topicsJSON
 				out.MarshalJSON(cl.Command(), 1, fields)
 
-			case "awk":
+			case out.FormatAWK:
 				awkSection := section
 				if awkSection == "" {
 					awkSection = "topics"
 				}
 				switch awkSection {
 				case "cluster":
-					if resp.ClusterID != nil {
-						fmt.Printf("%s\t%d\n", *resp.ClusterID, resp.ControllerID)
-					}
+					table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "cluster", clusterHeaders...)
+					table.Row(clusterID, controller)
+					table.Flush()
 				case "brokers":
-					for _, b := range resp.Brokers {
-						rack := ""
-						if b.Rack != nil {
-							rack = *b.Rack
-						}
-						fmt.Printf("%d\t%s\t%d\t%s\n", b.NodeID, b.Host, b.Port, rack)
+					table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "brokers", brokerHeaders...)
+					for _, row := range brokerRows(false) {
+						table.Row(row...)
 					}
+					table.Flush()
 				case "topics":
-					for _, t := range resp.Topics {
-						if !pinternal && t.IsInternal {
-							continue
-						}
-						parts := len(t.Partitions)
-						replicas := 0
-						if parts > 0 {
-							replicas = len(t.Partitions[0].Replicas)
-						}
-						if resp.Version >= 10 {
-							fmt.Printf("%s\t%x\t%d\t%d\n", topicOut(t.Topic), t.TopicID, parts, replicas)
-						} else {
-							fmt.Printf("%s\t%d\t%d\n", topicOut(t.Topic), parts, replicas)
-						}
+					table := topic.ListTable(cl.Format(), cl.Command())
+					for _, row := range topicRows {
+						table.Row(row...)
 					}
+					table.Flush()
 				}
 
 			default:
-				if pcluster && resp.ClusterID != nil {
-					if includeHeader {
-						fmt.Printf("CLUSTER\n=======\n")
-					}
-					fmt.Printf("%s\n", *resp.ClusterID)
-					if includeHeader {
+				var printed bool
+				sectionBreak := func() {
+					if printed {
 						fmt.Println()
 					}
+					printed = true
 				}
-
+				if pcluster {
+					sectionBreak()
+					tw := out.NewTabWriter()
+					fmt.Fprintf(tw, "CLUSTER-ID\t%v\n", clusterID)
+					fmt.Fprintf(tw, "CONTROLLER\t%v\n", controller)
+					tw.Flush()
+				}
 				if pbrokers {
-					if includeHeader {
-						fmt.Printf("BROKERS\n=======\n")
+					sectionBreak()
+					table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "brokers", brokerHeaders...)
+					for _, row := range brokerRows(true) {
+						table.Row(row...)
 					}
-					printBrokers(cl.Format(), cl.Command(), resp.ControllerID, resp.Brokers)
-					if includeHeader {
-						fmt.Println()
-					}
+					table.Flush()
 				}
-
-				if ptopics && len(resp.Topics) > 0 {
-					if includeHeader {
-						fmt.Printf("TOPICS\n======\n")
+				if ptopics {
+					sectionBreak()
+					table := topic.ListTable(cl.Format(), cl.Command())
+					for _, row := range topicRows {
+						table.Row(row...)
 					}
-					PrintTopics(cl.Format(), cl.Command(), resp.Version, resp.Topics, pinternal, detailed)
+					table.Flush()
 				}
+			}
+			if failed {
+				return out.ErrSilent
 			}
 			return nil
 		},
 	}
+	out.ColumnsFunc(cmd, func() []string {
+		switch {
+		case detailed:
+			return topic.DescribeHeaders("")
+		case section == "cluster":
+			return clusterHeaders
+		case section == "brokers":
+			return brokerHeaders
+		}
+		return topic.ListHeaders
+	})
 
 	cmd.Flags().StringVar(&section, "section", "", "output section (cluster, brokers, topics; default: all for text, topics for awk)")
 	cmd.Flags().BoolVar(&ids, "ids", false, "whether the input topics should be parsed as topic IDs")
 	cmd.Flags().BoolVarP(&pinternal, "internal", "i", false, "print internal topics if all topics are printed")
-	cmd.Flags().BoolVarP(&detailed, "detailed", "d", false, "include detailed information about all topic partitions")
+	cmd.Flags().BoolVar(&detailed, "detailed", false, "describe the listed topics, as kcl topic describe does")
+	cmd.Flags().MarkHidden("detailed")
 	return cmd
 }
 
-// sortMetadata orders a metadata response so that every format prints the
-// same rows in the same order: brokers by node ID, topics by name, and each
-// topic's partitions by partition number. Kafka answers in whatever order it
-// pleases, and two runs of the same command disagreed.
-func sortMetadata(resp *kmsg.MetadataResponse) {
-	sortBrokers(resp.Brokers)
-	sortTopics(resp.Topics)
-}
-
 func sortBrokers(brokers []kmsg.MetadataResponseBroker) {
-	sort.Slice(brokers, func(i, j int) bool {
-		return brokers[i].NodeID < brokers[j].NodeID
+	slices.SortFunc(brokers, func(l, r kmsg.MetadataResponseBroker) int {
+		return int(l.NodeID - r.NodeID)
 	})
-}
-
-// sortTopics sorts topics by name, a topic we have only an ID for last, and
-// every topic's partitions by partition number.
-func sortTopics(topics []kmsg.MetadataResponseTopic) {
-	sort.Slice(topics, func(i, j int) bool {
-		l := topics[i].Topic
-		r := topics[j].Topic
-		switch {
-		case l != nil && r != nil:
-			return *l < *r
-		case l != nil && r == nil:
-			return true
-		case r != nil:
-			return false
-		default:
-			return string(topics[i].TopicID[:]) < string(topics[j].TopicID[:])
-		}
-	})
-	for i := range topics {
-		parts := topics[i].Partitions
-		sort.Slice(parts, func(i, j int) bool {
-			return parts[i].Partition < parts[j].Partition
-		})
-	}
-}
-
-func printBrokers(format, command string, controllerID int32, brokers []kmsg.MetadataResponseBroker) {
-	sortBrokers(brokers)
-
-	table := out.NewFormattedTable(format, command, 1, "brokers",
-		"ID", "HOST", "PORT", "RACK")
-	for _, broker := range brokers {
-		var controllerStar string
-		if broker.NodeID == controllerID {
-			controllerStar = "*"
-		}
-
-		var rack string
-		if broker.Rack != nil {
-			rack = *broker.Rack
-		}
-
-		table.Row(fmt.Sprintf("%d%s", broker.NodeID, controllerStar), broker.Host, broker.Port, rack)
-	}
-	table.Flush()
-}
-
-func PrintTopics(format, command string, version int16, topics []kmsg.MetadataResponseTopic, pinternal, detailed bool) {
-	sortTopics(topics)
-
-	hasID := version >= 10
-
-	if !detailed {
-		var table *out.FormattedTable
-		if hasID {
-			table = out.NewFormattedTable(format, command, 1, "topics",
-				"NAME", "ID", "PARTITIONS", "REPLICAS")
-		} else {
-			table = out.NewFormattedTable(format, command, 1, "topics",
-				"NAME", "PARTITIONS", "REPLICAS")
-		}
-		for _, topic := range topics {
-			if !pinternal && topic.IsInternal {
-				continue
-			}
-			parts := len(topic.Partitions)
-			replicas := 0
-			if parts > 0 {
-				replicas = len(topic.Partitions[0].Replicas)
-			}
-			if hasID {
-				table.Row(topicOut(topic.Topic), fmt.Sprintf("%x", topic.TopicID), parts, replicas)
-			} else {
-				table.Row(topicOut(topic.Topic), parts, replicas)
-			}
-		}
-		table.Flush()
-		return
-	}
-
-	buf := new(bytes.Buffer)
-	buf.Grow(10 << 10)
-	defer func() { os.Stdout.Write(buf.Bytes()) }()
-
-	for _, topic := range topics {
-		fmt.Fprintf(buf, "%s", topicOut(topic.Topic))
-		if hasID {
-			fmt.Fprintf(buf, " [%x]", topic.TopicID)
-		}
-		if topic.IsInternal {
-			fmt.Fprint(buf, " (internal)")
-		}
-
-		parts := topic.Partitions
-		fmt.Fprintf(buf, ", %d partition", len(parts))
-		if len(parts) > 1 {
-			buf.WriteByte('s')
-		}
-		buf.WriteString("\n")
-		if topic.IsInternal && !pinternal {
-			continue
-		}
-
-		for _, part := range topic.Partitions {
-			fmt.Fprintf(buf, "  %4d  leader %d", part.Partition, part.Leader)
-			if version >= 7 {
-				fmt.Fprintf(buf, " epoch %d", part.LeaderEpoch)
-			}
-			fmt.Fprintf(buf, " replicas %v isr %v",
-				part.Replicas,
-				part.ISR,
-			)
-			if len(part.OfflineReplicas) > 0 {
-				fmt.Fprintf(buf, ", offline replicas %v", part.OfflineReplicas)
-			}
-			if err := kerr.ErrorForCode(part.ErrorCode); err != nil {
-				fmt.Fprintf(buf, " (%s)", err)
-			}
-			fmt.Fprintln(buf)
-		}
-	}
-}
-
-func topicOut(t *string) string {
-	if t == nil {
-		return "ERR-UNKNOWN"
-	}
-	return *t
 }
