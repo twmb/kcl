@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -85,9 +84,9 @@ func parsePrincipal(s string) (typ, name string) {
 func createRow(resp *kmsg.CreateDelegationTokenResponse) []any {
 	return []any{
 		principal(resp.PrincipalType, resp.PrincipalName),
-		millisToStr(resp.IssueTimestamp),
-		millisToStr(resp.ExpiryTimestamp),
-		millisToStr(resp.MaxTimestamp),
+		out.Millis(resp.IssueTimestamp),
+		out.Millis(resp.ExpiryTimestamp),
+		out.Millis(resp.MaxTimestamp),
 		resp.TokenID,
 		base64.StdEncoding.EncodeToString(resp.HMAC),
 	}
@@ -106,9 +105,9 @@ func describeRow(detail *kmsg.DescribeDelegationTokenResponseTokenDetail) []any 
 	}
 	return []any{
 		principal(detail.PrincipalType, detail.PrincipalName),
-		millisToStr(detail.IssueTimestamp),
-		millisToStr(detail.ExpiryTimestamp),
-		millisToStr(detail.MaxTimestamp),
+		out.Millis(detail.IssueTimestamp),
+		out.Millis(detail.ExpiryTimestamp),
+		out.Millis(detail.MaxTimestamp),
 		detail.TokenID,
 		base64.StdEncoding.EncodeToString(detail.HMAC),
 		rs,
@@ -121,7 +120,7 @@ func expiryRow(code int16, expiry int64) []any {
 	if code != 0 {
 		return []any{out.Unknown, out.ErrName(code), ""}
 	}
-	return []any{millisToStr(expiry), "", ""}
+	return []any{out.Millis(expiry), "", ""}
 }
 
 func createTokenCommand(cl *client.Client) *cobra.Command {
@@ -348,10 +347,4 @@ SEE ALSO:
 	cmd.Flags().StringArrayVarP(&owners, "owner", "o", nil, "optional list of tokens by created by these owners to filter for; repeatable")
 
 	return cmd
-}
-
-// millisToStr is a unix millisecond timestamp as the UTC time in RFC 3339,
-// one word, so that it is one awk field.
-func millisToStr(millis int64) string {
-	return time.UnixMilli(millis).UTC().Format("2006-01-02T15:04:05.000Z")
 }

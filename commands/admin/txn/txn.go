@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -152,7 +151,7 @@ func producerRows(resp *kmsg.DescribeProducersResponse) [][]any {
 					p.ProducerID,
 					p.ProducerEpoch,
 					p.LastSequence,
-					millis(p.LastTimestamp),
+					out.Millis(p.LastTimestamp),
 					p.CoordinatorEpoch,
 					p.CurrentTxnStartOffset,
 					"", "",
@@ -298,7 +297,7 @@ SEE ALSO:
 					txn.ProducerID,
 					txn.ProducerEpoch,
 					txn.TimeoutMillis,
-					millis(txn.StartTimestamp),
+					out.Millis(txn.StartTimestamp),
 					txnTopics(txn.Topics),
 					"",
 				)
@@ -348,17 +347,4 @@ func (ts txnTopics) String() string {
 
 func (ts txnTopics) MarshalJSON() ([]byte, error) {
 	return json.Marshal(ts.sorted())
-}
-
-// millis is a unix millisecond timestamp. Text and awk get the UTC time in
-// RFC 3339, one word, so that it is one awk field; JSON gets the
-// milliseconds themselves.
-type millis int64
-
-func (m millis) String() string {
-	return time.Unix(0, int64(m)*1e6).UTC().Format("2006-01-02T15:04:05.000Z")
-}
-
-func (m millis) MarshalJSON() ([]byte, error) {
-	return strconv.AppendInt(nil, int64(m), 10), nil
 }

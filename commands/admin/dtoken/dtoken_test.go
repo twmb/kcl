@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/kmsg"
+
+	"github.com/twmb/kcl/out"
 )
 
 // kfake does not answer delegation token requests, so the rows are checked
@@ -26,9 +28,9 @@ func TestCreateRow(t *testing.T) {
 	if row[0] != "User:alice" || row[4] != "tok1" || row[5] != "c2VjcmV0" {
 		t.Errorf("row = %v", row)
 	}
-	for _, i := range []int{1, 2, 3} {
-		if _, ok := row[i].(string); !ok || row[i] == "" {
-			t.Errorf("cell %d = %v, want a formatted time", i, row[i])
+	for i, want := range map[int]out.Millis{1: 1000, 2: 2000, 3: 3000} {
+		if row[i] != want {
+			t.Errorf("cell %d = %v, want %v", i, row[i], want)
 		}
 	}
 }

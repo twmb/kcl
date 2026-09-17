@@ -8,9 +8,11 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"text/tabwriter"
+	"time"
 )
 
 const (
@@ -445,4 +447,17 @@ func writeJSON(v any) {
 	if err := enc.Encode(v); err != nil {
 		Die("unable to marshal JSON: %v", err)
 	}
+}
+
+// Millis is a unix millisecond timestamp cell. Text and awk print the UTC
+// time in RFC 3339 as one word, so it is one awk field; JSON prints the
+// milliseconds themselves.
+type Millis int64
+
+func (m Millis) String() string {
+	return time.UnixMilli(int64(m)).UTC().Format("2006-01-02T15:04:05.000Z")
+}
+
+func (m Millis) MarshalJSON() ([]byte, error) {
+	return strconv.AppendInt(nil, int64(m), 10), nil
 }
