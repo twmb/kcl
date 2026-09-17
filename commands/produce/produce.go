@@ -46,6 +46,9 @@ By default, producing reads newline delimited, unkeyed records from stdin.
 The input format (-f) can be specified with delimiters or with sized numbers,
 and the format can parse a topic, key, value, and header keys and values.
 
+The topic comes from the argument, -t/--topic, or a %t in the input format;
+with none of those, producing is an error before stdin is read.
+
 The output format (-o) controls what is printed after each record is produced
 (e.g., to confirm topic/partition/offset). The output format uses the same
 syntax as "kcl consume --format"; see "kcl consume --help" for full output
@@ -214,9 +217,15 @@ Examples:
 				args = []string{topicFlag}
 			}
 
+			// Without %t in the format there is no topic at all, and we
+			// say so before reading stdin.
+			if len(args) == 0 && !layoutParses(informat, 't') {
+				return out.Errf(out.ExitUsage, "no topic: give one as an argument or with -t/--topic, or parse it from input with %%t in -f")
+			}
+
 			reader, err := kgo.NewRecordReader(os.Stdin, informat)
 			if err != nil {
-				return fmt.Errorf("unable to parse in format: %v", err)
+				return out.Errf(out.ExitUsage, "input format %q: %v", informat, err)
 			}
 
 			var verboseFormatter *kgo.RecordFormatter
@@ -224,7 +233,7 @@ Examples:
 			if verboseFormat != "" {
 				verboseFormatter, err = kgo.NewRecordFormatter(verboseFormat)
 				if err != nil {
-					return fmt.Errorf("unable to parse output-format: %v", err)
+					return out.Errf(out.ExitUsage, "output format %q: %v", verboseFormat, err)
 				}
 			}
 
@@ -296,7 +305,7 @@ Examples:
 				if len(args) > 0 {
 					topic = args[0]
 				}
-				hasTopicVerb := strings.Contains(informat, "%t")
+				hasTopicVerb := layoutParses(informat, 't')
 
 				build := func(flag, raw string, isKey bool) (*serde.Encoder, error) {
 					spec, err := parseSchemaSpec(raw)
@@ -334,7 +343,7 @@ Examples:
 				r, err := reader.ReadRecord()
 				if err != nil {
 					if err != io.EOF {
-						return fmt.Errorf("final error: %v", err)
+						return out.Errf(out.ExitUsage, "input format %q: %v", informat, err)
 					}
 					break
 				}
@@ -343,7 +352,7 @@ Examples:
 				}
 				if r.Topic == "" {
 					if len(args) == 0 {
-						return out.Errf(out.ExitUsage, "topic missing from both produce line and from parse format")
+						return out.Errf(out.ExitUsage, "no topic: the input record names none and none was given as an argument or with -t/--topic")
 					}
 					r.Topic = args[0]
 				}
@@ -402,4 +411,48 @@ Examples:
 	cmd.Flags().StringVar(&keySchemaSpec, "key-schema", "", "Schema Registry encode the key; same spec form as --schema")
 
 	return cmd
+}
+
+// layoutParses reports whether a -f format string reads verb. A slash
+// escape never starts a verb, %% %{ %} are literals, and the braces after a
+// verb hold its options or, for %h, the header format, whose %k and %v are
+// the header's own.
+func layoutParses(layout string, verb byte) bool {
+	for i := 0; i < len(layout); i++ {
+		switch layout[i] {
+		case '\\':
+			i++
+		case '%':
+			i++
+			if i >= len(layout) {
+				return false
+			}
+			switch layout[i] {
+			case '%', '{', '}':
+				continue
+			case verb:
+				return true
+			}
+			if i+1 < len(layout) && layout[i+1] == '{' {
+				// A brace after a percent is a literal, as kgo reads it.
+				depth := 0
+				for i++; i < len(layout); i++ {
+					switch layout[i] {
+					case '{':
+						if layout[i-1] != '%' {
+							depth++
+						}
+					case '}':
+						if layout[i-1] != '%' {
+							depth--
+						}
+					}
+					if depth == 0 {
+						break
+					}
+				}
+			}
+		}
+	}
+	return false
 }
