@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 
 	"github.com/spf13/cobra"
 
@@ -35,65 +36,123 @@ func Command(cl *client.Client) *cobra.Command {
 	return cmd
 }
 
+// normStates spells each group state the way ListGroups wants it, so that
+// --state stable and --state PreparingRebalance both match.
+func normStates(states []string) {
+	for i, s := range states {
+		switch client.Strnorm(s) {
+		case "preparing":
+			states[i] = "Preparing"
+		case "preparingrebalance":
+			states[i] = "PreparingRebalance"
+		case "completingrebalance":
+			states[i] = "CompletingRebalance"
+		case "stable":
+			states[i] = "Stable"
+		case "dead":
+			states[i] = "Dead"
+		case "empty":
+			states[i] = "Empty"
+		}
+	}
+}
+
+// listedGroup is one row of group list: a group a broker answered with, or
+// the error a broker answered instead, with no group.
+type listedGroup struct {
+	broker    int32
+	group     string
+	protoType string
+	groupType string
+	state     string
+	err       error
+}
+
+// listGroupRows asks every broker for its groups and returns one row per
+// group, sorted by group, with a broker that failed as a row of its own
+// first.
+func listGroupRows(cl *client.Client, states, types []string) []listedGroup {
+	kresps := cl.Client().RequestSharded(context.Background(), &kmsg.ListGroupsRequest{
+		StatesFilter: states,
+		TypesFilter:  types,
+	})
+	var rows []listedGroup
+	for _, kresp := range kresps {
+		err := kresp.Err
+		if err == nil {
+			err = kerr.ErrorForCode(kresp.Resp.(*kmsg.ListGroupsResponse).ErrorCode)
+		}
+		if err != nil {
+			rows = append(rows, listedGroup{broker: kresp.Meta.NodeID, err: err})
+			continue
+		}
+		for _, g := range kresp.Resp.(*kmsg.ListGroupsResponse).Groups {
+			rows = append(rows, listedGroup{
+				broker:    kresp.Meta.NodeID,
+				group:     g.Group,
+				protoType: g.ProtocolType,
+				groupType: g.GroupType,
+				state:     g.GroupState,
+			})
+		}
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].group != rows[j].group {
+			return rows[i].group < rows[j].group
+		}
+		return rows[i].broker < rows[j].broker
+	})
+	return rows
+}
+
 func listCommand(cl *client.Client) *cobra.Command {
-	var statesFilter []string
-	var typesFilter []string
+	var states []string
+	var types []string
 	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List all groups (Kafka 0.9.0+).",
 		Long: `List all groups (Kafka 0.9.0+).
 
-List all Kafka groups.
+List all Kafka groups, sorted by name.
 
 This command simply lists groups and their protocol types; it does not describe
 the groups listed. This prints all of the information from a ListGroups request.
+
+A broker that could not answer is one row with its error and no group, and
+the command exits 1.
+
+EXAMPLES:
+  kcl group list                          # every group
+  kcl group list --state empty            # groups with no members (Kafka 2.6+)
+  kcl group list --type consumer          # KIP-848 groups (Kafka 3.0+)
+
+SEE ALSO:
+  kcl group describe      describe groups with lag
+  kcl share-group list    list share groups
 `,
 		Args: cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
-			for i, f := range statesFilter {
-				switch client.Strnorm(f) {
-				case "preparing":
-					statesFilter[i] = "Preparing"
-				case "preparingrebalance":
-					statesFilter[i] = "PreparingRebalance"
-				case "completingrebalance":
-					statesFilter[i] = "CompletingRebalance"
-				case "stable":
-					statesFilter[i] = "Stable"
-				case "dead":
-					statesFilter[i] = "Dead"
-				case "empty":
-					statesFilter[i] = "Empty"
-				}
-			}
-			kresps := cl.Client().RequestSharded(context.Background(), &kmsg.ListGroupsRequest{
-				StatesFilter: statesFilter,
-				TypesFilter:  typesFilter,
-			})
-
+			normStates(states)
 			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "groups",
-				"BROKER", "GROUP-ID", "PROTO-TYPE", "GROUP-TYPE", "STATE", "ERROR")
-			for _, kresp := range kresps {
-				err := kresp.Err
-				if err == nil {
-					err = kerr.ErrorForCode(kresp.Resp.(*kmsg.ListGroupsResponse).ErrorCode)
-				}
-				if err != nil {
-					table.Row(kresp.Meta.NodeID, "", "", "", "", err)
+				"BROKER", "GROUP", "PROTO-TYPE", "GROUP-TYPE", "STATE", "ERROR").ResultColumns()
+			for _, r := range listGroupRows(cl, states, types) {
+				if r.err != nil {
+					table.Row(r.broker, out.Unknown, out.Unknown, out.Unknown, out.Unknown, r.err.Error())
 					continue
 				}
-
-				resp := kresp.Resp.(*kmsg.ListGroupsResponse)
-				for _, group := range resp.Groups {
-					table.Row(kresp.Meta.NodeID, group.Group, group.ProtocolType, group.GroupType, group.GroupState, "")
-				}
+				table.Row(r.broker, r.group, r.protoType, r.groupType, r.state, "")
 			}
 			return table.Flush()
 		},
 	}
-	cmd.Flags().StringArrayVarP(&statesFilter, "filter", "f", nil, "filter groups listed by state (Preparing, PreparingRebalance, CompletingRebalance, Stable, Dead, Empty; Kafka 2.6.0+; repeatable)")
-	cmd.Flags().StringArrayVar(&typesFilter, "type-filter", nil, "filter groups listed by type (Classic, Consumer, Share; Kafka 3.0+; repeatable)")
+	out.Columns(cmd, "BROKER", "GROUP", "PROTO-TYPE", "GROUP-TYPE", "STATE", "ERROR")
+	cmd.Flags().StringArrayVar(&states, "state", nil, "keep only groups in this state (Preparing, PreparingRebalance, CompletingRebalance, Stable, Dead, Empty; Kafka 2.6.0+; repeatable)")
+	cmd.Flags().StringArrayVar(&types, "type", nil, "keep only groups of this type (Classic, Consumer, Share; Kafka 3.0+; repeatable)")
+	cmd.Flags().StringArrayVarP(&states, "filter", "f", nil, "old name of --state")
+	cmd.Flags().MarkHidden("filter")
+	cmd.Flags().StringArrayVar(&types, "type-filter", nil, "old name of --type")
+	cmd.Flags().MarkHidden("type-filter")
 	return cmd
 }
 

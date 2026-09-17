@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -36,56 +37,89 @@ func Command(cl *client.Client) *cobra.Command {
 }
 
 func listCommand(cl *client.Client) *cobra.Command {
-	var statesFilter []string
+	var states []string
 	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List all share groups (Kafka 4.0+).",
 		Long: `List all share groups (Kafka 4.0+).
 
-List all share groups (KIP-932, Kafka 4.0+).
+List all share groups (KIP-932, Kafka 4.0+), sorted by name.
 
-This is equivalent to "group list --type-filter share". It lists share groups
-by issuing a ListGroups request with a type filter of "share".
+This is equivalent to "group list --type share". It lists share groups by
+issuing a ListGroups request with a type filter of "share".
+
+A broker that could not answer is one row with its error and no group, and
+the command exits 1.
+
+EXAMPLES:
+  kcl share-group list                    # every share group
+  kcl share-group list --state empty      # share groups with no members
+
+SEE ALSO:
+  kcl share-group describe    describe share groups with lag
+  kcl group list              list every group, of every type
 `,
 		Args: cobra.ExactArgs(0),
 		RunE: func(_ *cobra.Command, _ []string) error {
-			for i, f := range statesFilter {
+			for i, f := range states {
 				switch client.Strnorm(f) {
 				case "stable":
-					statesFilter[i] = "Stable"
+					states[i] = "Stable"
 				case "dead":
-					statesFilter[i] = "Dead"
+					states[i] = "Dead"
 				case "empty":
-					statesFilter[i] = "Empty"
+					states[i] = "Empty"
 				}
 			}
 			kresps := cl.Client().RequestSharded(context.Background(), &kmsg.ListGroupsRequest{
-				StatesFilter: statesFilter,
+				StatesFilter: states,
 				TypesFilter:  []string{"share"},
 			})
 
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "groups",
-				"BROKER", "GROUP-ID", "STATE")
+			type row struct {
+				broker int32
+				group  string
+				state  string
+				err    error
+			}
+			var rows []row
 			for _, kresp := range kresps {
 				err := kresp.Err
 				if err == nil {
 					err = kerr.ErrorForCode(kresp.Resp.(*kmsg.ListGroupsResponse).ErrorCode)
 				}
 				if err != nil {
-					table.Row(kresp.Meta.NodeID, "", err)
+					rows = append(rows, row{broker: kresp.Meta.NodeID, err: err})
 					continue
 				}
-
-				resp := kresp.Resp.(*kmsg.ListGroupsResponse)
-				for _, group := range resp.Groups {
-					table.Row(kresp.Meta.NodeID, group.Group, group.GroupState)
+				for _, g := range kresp.Resp.(*kmsg.ListGroupsResponse).Groups {
+					rows = append(rows, row{broker: kresp.Meta.NodeID, group: g.Group, state: g.GroupState})
 				}
+			}
+			sort.SliceStable(rows, func(i, j int) bool {
+				if rows[i].group != rows[j].group {
+					return rows[i].group < rows[j].group
+				}
+				return rows[i].broker < rows[j].broker
+			})
+
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "groups",
+				"BROKER", "GROUP", "STATE", "ERROR").ResultColumns()
+			for _, r := range rows {
+				if r.err != nil {
+					table.Row(r.broker, out.Unknown, out.Unknown, r.err.Error())
+					continue
+				}
+				table.Row(r.broker, r.group, r.state, "")
 			}
 			return table.Flush()
 		},
 	}
-	cmd.Flags().StringArrayVarP(&statesFilter, "filter", "f", nil, "filter groups by state (Stable, Dead, Empty; repeatable)")
+	out.Columns(cmd, "BROKER", "GROUP", "STATE", "ERROR")
+	cmd.Flags().StringArrayVar(&states, "state", nil, "keep only groups in this state (Stable, Dead, Empty; repeatable)")
+	cmd.Flags().StringArrayVarP(&states, "filter", "f", nil, "old name of --state")
+	cmd.Flags().MarkHidden("filter")
 	return cmd
 }
 
