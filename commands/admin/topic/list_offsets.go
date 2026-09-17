@@ -69,8 +69,6 @@ SEE ALSO:
   kcl consume            read records from an offset or timestamp
 `,
 		RunE: func(_ *cobra.Command, args []string) error {
-			cl.SetCommand("topic.list-offsets")
-
 			var atMillis int64
 			if at != "" {
 				spec, err := offsetparse.Parse("@"+at, time.Now())

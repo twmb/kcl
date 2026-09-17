@@ -71,7 +71,6 @@ SEE ALSO:
 `,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			cl.SetCommand("topic.trim-prefix")
 			if fromFile != "" && offsetFlag != "" {
 				return out.Errf(out.ExitUsage, "--offset and --from-file are mutually exclusive")
 			}

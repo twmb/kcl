@@ -229,15 +229,18 @@ Command completion is available at:
 	metadataCmd := metadata.Command(cl)
 	metadataCmd.Deprecated = "use 'kcl cluster metadata' instead"
 	metadataCmd.Hidden = true
+	out.AliasOf(metadataCmd, "cluster.metadata")
 
 	// Add hidden consume/produce aliases under topic.
 	topicCmd := topic.Command(cl)
 	topicConsume := consume.Command(cl)
 	topicConsume.Deprecated = "use 'kcl consume' instead"
 	topicConsume.Hidden = true
+	out.AliasOf(topicConsume, "consume")
 	topicProduce := produce.Command(cl)
 	topicProduce.Deprecated = "use 'kcl produce' instead"
 	topicProduce.Hidden = true
+	out.AliasOf(topicProduce, "produce")
 	topicCmd.AddCommand(topicConsume, topicProduce)
 
 	root.AddCommand(
@@ -322,7 +325,7 @@ func errCommand(cmd *cobra.Command, cl *client.Client) string {
 		return name
 	}
 	if cmd != nil {
-		return out.CommandName(cmd.CommandPath())
+		return out.CommandOf(cmd)
 	}
 	return ""
 }

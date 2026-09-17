@@ -40,7 +40,7 @@ SEE ALSO:
 	cmd.AddCommand(
 		compatGetCommand(cl),
 		compatSetCommand(cl),
-		oldName(cl, schemaCheckCompatibilityCommand(cl), "test SUBJECT", "registry schema check-compatibility"),
+		oldName(schemaCheckCompatibilityCommand(cl), "test SUBJECT", "registry schema check-compatibility"),
 	)
 	return cmd
 }

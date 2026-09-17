@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/twmb/kcl/client"
+	"github.com/twmb/kcl/out"
 )
 
 var listOffsetsKeysSorted = []string{"at", "broker", "end", "end_epoch", "error", "partition", "stable", "stable_epoch", "start", "start_epoch", "topic"}
@@ -94,8 +95,8 @@ func TestListOffsets(t *testing.T) {
 	}
 }
 
-// TestListOffsetsAlias pins that the old "kcl misc list-offsets" still runs
-// and names topic.list-offsets.
+// TestListOffsetsAlias pins that the old "kcl misc list-offsets", built the
+// way the misc package builds it, still runs and names topic.list-offsets.
 func TestListOffsetsAlias(t *testing.T) {
 	_, addr := newCluster(t, 1, 1, "alias")
 	root := &cobra.Command{Use: "kcl", SilenceUsage: true, SilenceErrors: true}
@@ -103,6 +104,7 @@ func TestListOffsetsAlias(t *testing.T) {
 	misc := &cobra.Command{Use: "misc"}
 	alias := ListOffsetsCommand(cl)
 	alias.Hidden = true
+	out.AliasOf(alias, "topic.list-offsets")
 	misc.AddCommand(alias)
 	root.AddCommand(misc)
 	root.SetArgs([]string{"--no-config-file", "-B", addr, "misc", "list-offsets", "alias", "--format", "json"})

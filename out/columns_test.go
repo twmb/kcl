@@ -77,3 +77,48 @@ func TestColumns(t *testing.T) {
 	}()
 	NewFormattedTable("awk", "group.describe", 1, "lag", "GROUP", "TOPIC")
 }
+
+// TestCommandOf pins how a hidden alias names the command it forwards to:
+// a marked subtree renames its prefix, "" dropping it, a marked leaf names
+// its own target even under a marked subtree, and an unmarked command is
+// its cobra path.
+func TestCommandOf(t *testing.T) {
+	root := &cobra.Command{Use: "kcl"}
+	admin := &cobra.Command{Use: "admin"}
+	AliasOf(admin, "")
+	adminTopic := &cobra.Command{Use: "topic"}
+	adminTopicList := &cobra.Command{Use: "list"}
+	adminTopic.AddCommand(adminTopicList)
+	electLeaders := &cobra.Command{Use: "elect-leaders TOPIC:P..."}
+	AliasOf(electLeaders, "cluster.elect-leaders")
+	admin.AddCommand(adminTopic, electLeaders)
+	myconfig := &cobra.Command{Use: "myconfig"}
+	AliasOf(myconfig, "profile")
+	use := &cobra.Command{Use: "use NAME"}
+	setup := &cobra.Command{Use: "setup NAME"}
+	AliasOf(setup, "profile.create")
+	myconfig.AddCommand(use, setup)
+	topic := &cobra.Command{Use: "topic"}
+	topicList := &cobra.Command{Use: "list"}
+	topic.AddCommand(topicList)
+	root.AddCommand(admin, myconfig, topic)
+
+	for _, test := range []struct {
+		cmd  *cobra.Command
+		want string
+	}{
+		{root, ""},
+		{topicList, "topic.list"},
+		{admin, ""},
+		{adminTopic, "topic"},
+		{adminTopicList, "topic.list"},
+		{electLeaders, "cluster.elect-leaders"},
+		{myconfig, "profile"},
+		{use, "profile.use"},
+		{setup, "profile.create"},
+	} {
+		if got := CommandOf(test.cmd); got != test.want {
+			t.Errorf("CommandOf(%s) = %q, want %q", test.cmd.CommandPath(), got, test.want)
+		}
+	}
+}

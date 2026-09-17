@@ -401,7 +401,7 @@ func New(root *cobra.Command) *Client {
 	// the root's, answer it too.
 	cobra.EnableTraverseRunHooks = true
 	root.PersistentPreRun = func(cmd *cobra.Command, _ []string) {
-		c.SetCommand(out.CommandName(cmd.CommandPath()))
+		c.SetCommand(out.CommandOf(cmd))
 		if format, _ := cmd.Flags().GetString("format"); format == out.FormatAwkHeader {
 			fmt.Print(out.AwkHeader(cmd))
 			os.Exit(0)

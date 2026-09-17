@@ -111,7 +111,6 @@ SEE ALSO:
 `,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			cl.SetCommand("topic.create")
 			kvs, err := kv.Parse(configKVs)
 			if err != nil {
 				return out.Errf(out.ExitUsage, "unable to parse --config: %v", err)
@@ -275,7 +274,6 @@ SEE ALSO:
   kcl cluster metadata   brokers and topics from the Metadata request
 `,
 		RunE: func(_ *cobra.Command, args []string) error {
-			cl.SetCommand("topic.list")
 			var patterns []*regexp.Regexp
 			if useRegex {
 				for _, pat := range args {
@@ -395,7 +393,6 @@ SEE ALSO:
 `,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, topics []string) error {
-			cl.SetCommand("topic.delete")
 			if useRegex && ids {
 				return out.Errf(out.ExitUsage, "--regex and --ids cannot be used together")
 			}
@@ -521,7 +518,6 @@ SEE ALSO:
 
 		Args: cobra.ArbitraryArgs,
 		RunE: func(_ *cobra.Command, args []string) error {
-			cl.SetCommand("topic.add-partitions")
 			// With -t this is the old form: the positionals are the
 			// assignments, "1,2 : 3,1". Without it the one positional is
 			// the topic and -n or -a says what to add.

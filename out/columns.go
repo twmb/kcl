@@ -79,6 +79,41 @@ func AwkHeader(cmd *cobra.Command) string {
 	return strings.Join(fn(), "\t") + "\n"
 }
 
+// aliasKey is the cobra annotation AliasOf sets.
+const aliasKey = "kcl.alias"
+
+// AliasOf marks cmd as a hidden alias of the command named path, a dotted
+// _command name such as "profile.create", so that what cmd prints names the
+// command a script should call rather than the old name it was called by. A
+// hidden subtree is marked once at its top with the prefix its commands
+// forward to, "" for the top level: AliasOf(admin, "") names "admin topic
+// list" topic.list, and AliasOf(myconfig, "profile") names "myconfig use"
+// profile.use. A command under a marked subtree may be marked itself when
+// it forwards somewhere else.
+func AliasOf(cmd *cobra.Command, path string) {
+	if cmd.Annotations == nil {
+		cmd.Annotations = make(map[string]string)
+	}
+	cmd.Annotations[aliasKey] = path
+}
+
+// CommandOf is the _command for cmd: CommandName of its cobra path, unless
+// cmd or a command above it is an alias, and then the path that alias
+// names with the rest of the way down to cmd appended.
+func CommandOf(cmd *cobra.Command) string {
+	var below []string
+	for c := cmd; c != nil; c = c.Parent() {
+		if path, ok := c.Annotations[aliasKey]; ok {
+			if path != "" {
+				below = append([]string{path}, below...)
+			}
+			return strings.Join(below, ".")
+		}
+		below = append([]string{c.Name()}, below...)
+	}
+	return CommandName(cmd.CommandPath())
+}
+
 func checkColumns(command string, headers []string) {
 	if running == nil {
 		return

@@ -38,17 +38,28 @@ func Command(cl *client.Client) *cobra.Command {
 		Deprecated: "use top-level commands instead (e.g., 'kcl group list' instead of 'kcl admin group list')",
 		Hidden:     true,
 	}
+	// Everything under admin forwards to the top level, except the four
+	// that moved under cluster.
+	out.AliasOf(cmd, "")
+	electLeaders := ElectLeadersCommand(cl)
+	out.AliasOf(electLeaders, "cluster.elect-leaders")
+	describeCluster := DescribeClusterCommand(cl)
+	out.AliasOf(describeCluster, "cluster.describe")
+	describeQuorum := DescribeQuorumCommand(cl)
+	out.AliasOf(describeQuorum, "cluster.describe-quorum")
+	featuresCmd := features.Command(cl)
+	out.AliasOf(featuresCmd, "cluster.features")
 
 	cmd.AddCommand(
-		ElectLeadersCommand(cl),
-		DescribeClusterCommand(cl),
-		DescribeQuorumCommand(cl),
+		electLeaders,
+		describeCluster,
+		describeQuorum,
 
 		acl.Command(cl),
 		clientquotas.Command(cl),
 		configs.Command(cl),
 		dtoken.Command(cl),
-		features.Command(cl),
+		featuresCmd,
 		group.Command(cl),
 		topic.Command(cl),
 		logdirs.Command(cl),

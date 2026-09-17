@@ -63,7 +63,6 @@ SEE ALSO:
 `,
 
 		RunE: func(_ *cobra.Command, topics []string) error {
-			cl.SetCommand("cluster.metadata")
 			switch section {
 			case "", "cluster", "brokers", "topics":
 			default:

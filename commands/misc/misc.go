@@ -499,6 +499,7 @@ func listOffsetsCommand(cl *client.Client) *cobra.Command {
 	cmd := topic.ListOffsetsCommand(cl)
 	cmd.Hidden = true
 	cmd.Deprecated = "use 'kcl topic list-offsets' instead"
+	out.AliasOf(cmd, "topic.list-offsets")
 	return cmd
 }
 

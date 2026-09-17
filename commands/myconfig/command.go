@@ -50,6 +50,7 @@ func DeprecatedCommand(cl *client.Client) *cobra.Command {
 		Deprecated: "use 'kcl profile' instead",
 		Hidden:     true,
 	}
+	out.AliasOf(cmd, "profile")
 
 	cmd.AddCommand(
 		useCommand(cl),
@@ -280,6 +281,7 @@ func setupCommand(cl *client.Client) *cobra.Command {
 	cmd := createCommand(cl)
 	cmd.Use = "setup NAME"
 	cmd.Hidden = true
+	out.AliasOf(cmd, "profile.create")
 	return cmd
 }
 

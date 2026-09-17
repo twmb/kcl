@@ -74,9 +74,9 @@ SEE ALSO:
 		contextCommand(cl),
 
 		// The old names, kept so that a script keeps working.
-		oldName(cl, subjectListCommand(cl), "subjects", "registry subject list"),
-		oldName(cl, versionsCommand(cl), "versions SUBJECT", "registry schema list"),
-		oldName(cl, schemaReferencesCommand(cl), "references SUBJECT", "registry schema references"),
+		oldName(subjectListCommand(cl), "subjects", "registry subject list"),
+		oldName(versionsCommand(cl), "versions SUBJECT", "registry schema list"),
+		oldName(schemaReferencesCommand(cl), "references SUBJECT", "registry schema references"),
 		oldDeleteCommand(cl),
 	)
 
@@ -86,13 +86,11 @@ SEE ALSO:
 // oldName makes cmd the old name of the command at path, kept so that an old
 // script keeps working. It is out of the help, cobra notes the new name on
 // stderr, and what it prints names the new path.
-func oldName(cl *client.Client, cmd *cobra.Command, use, path string) *cobra.Command {
+func oldName(cmd *cobra.Command, use, path string) *cobra.Command {
 	cmd.Use = use
 	cmd.Hidden = true
 	cmd.Deprecated = "use 'kcl " + path + "' instead"
-	cmd.PreRun = func(*cobra.Command, []string) {
-		cl.SetCommand(out.CommandName("kcl " + path))
-	}
+	out.AliasOf(cmd, out.CommandName("kcl "+path))
 	return cmd
 }
 
