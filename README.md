@@ -444,6 +444,7 @@ kcl cluster describe                              # the DescribeCluster view
 kcl topic list-offsets foo --at -1h               # the offset an hour ago
 kcl cluster features describe                     # feature flags (KIP-584)
 kcl cluster features update share.version=1 --upgrade-type safe-downgrade
+kcl cluster features update --release-version 4.4 --dry-run   # every feature to its 4.4 level
 kcl group list                                    # classic + KIP-848 + share groups
 kcl group describe mygroup
 kcl group seek mygroup --to end --yes
