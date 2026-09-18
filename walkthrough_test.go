@@ -21,6 +21,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/twmb/franz-go/pkg/sr"
 	"github.com/twmb/franz-go/pkg/sr/srfake"
 
@@ -92,7 +93,7 @@ var walkthroughLeaves = []struct {
 	why     string
 }{
 	{path: "acl.list"},
-	{path: "client-metrics.describe", args: []string{"walk-metrics"}, exit: 1, why: "kfake answers INVALID_REQUEST for a client metrics config resource"},
+	{path: "client-metrics.describe", args: []string{"walk-metrics"}},
 	{path: "client-metrics.list"},
 	{path: "cluster.describe"},
 	{path: "cluster.describe", variant: []string{"--section", "cluster"}},
@@ -344,8 +345,8 @@ var walkthroughKeys = map[string]string{
 	"acl.create":                                  ".: _command _version dry_run results; results[]: error host message name operation pattern permission principal type",
 	"acl.delete":                                  ".: _command _version deleted dry_run; deleted[]: error host message name operation pattern permission principal type",
 	"acl.list":                                    ".: _command _version acls; acls[]: host name operation pattern permission principal type",
-	"client-metrics.describe":                     ".: _command _version code error",
-	"client-metrics.list":                         ".: _command _version subscriptions",
+	"client-metrics.describe":                     ".: _command _version configs; configs[]: key source value",
+	"client-metrics.list":                         ".: _command _version subscriptions; subscriptions[]: name",
 	"cluster.describe --section brokers":          ".: _command _version authorized_operations brokers cluster_id controller_id; brokers[]: host id port rack",
 	"cluster.describe --section cluster":          ".: _command _version authorized_operations brokers cluster_id controller_id; brokers[]: host id port rack",
 	"cluster.describe":                            ".: _command _version authorized_operations brokers cluster_id controller_id; brokers[]: host id port rack",
@@ -437,7 +438,6 @@ var walkthroughKeys = map[string]string{
 // seeded with an ACL, a quota, a SCRAM user, a group, and a share group for
 // the lists that would otherwise be empty.
 var walkthroughEmpty = map[string]string{
-	"client-metrics.list":               "kfake answers INVALID_REQUEST to a client metrics alter, so no subscription can be created",
 	"reassign.list":                     "kfake has no reassignment in flight, and cannot start one",
 	"topic.describe --under-replicated": "every replica of every seeded partition is in sync, and kfake cannot take one out",
 }
@@ -812,6 +812,25 @@ func newWalkthrough(t *testing.T) *walkthrough {
 			t.Fatal(quota.Err)
 		}
 	}
+	// kadm has no client metrics helper; one IncrementalAlterConfigs on the
+	// CLIENT_METRICS resource creates the subscription.
+	metricsReq := kmsg.NewPtrIncrementalAlterConfigsRequest()
+	metricsRes := kmsg.NewIncrementalAlterConfigsRequestResource()
+	metricsRes.ResourceType = kmsg.ConfigResourceTypeClientMetrics
+	metricsRes.ResourceName = "walk-metrics"
+	metricsCfg := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
+	metricsCfg.Name = "interval.ms"
+	metricsCfg.Op = kmsg.IncrementalAlterConfigOpSet
+	metricsCfg.Value = kmsg.StringPtr("30000")
+	metricsRes.Configs = append(metricsRes.Configs, metricsCfg)
+	metricsReq.Resources = append(metricsReq.Resources, metricsRes)
+	metricsResp, err := metricsReq.RequestWith(ctx, kcl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ec := metricsResp.Resources[0].ErrorCode; ec != 0 {
+		t.Fatalf("client metrics seed: error code %d", ec)
+	}
 	scrams, err := adm.AlterUserSCRAMs(ctx, nil, []kadm.UpsertSCRAM{{User: walkUser, Mechanism: kadm.ScramSha256, Iterations: 4096, Password: "secret"}})
 	if err != nil {
 		t.Fatal(err)
@@ -1146,9 +1165,9 @@ func (w *walkthrough) checkAWK(t *testing.T, path, text string, r runResult, hea
 // other field is one word with no bracket, so that a script splitting on
 // whitespace reads the columns it counted and a list is comma joined.
 var walkthroughFreeText = map[string][]string{
-	"misc.errcode":        {"DESCRIPTION"},
-	"misc.errtext":        {"DESCRIPTION"},
-	"registry.schema.get": {"SCHEMA"},
+	"misc.errcode":              {"DESCRIPTION"},
+	"misc.errtext":              {"DESCRIPTION"},
+	"registry.schema.get":       {"SCHEMA"},
 }
 
 // checkKeys pins the JSON key set of a document against walkthroughKeys
