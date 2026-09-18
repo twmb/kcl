@@ -144,7 +144,7 @@ func TestErrorCells(t *testing.T) {
 			}
 		})
 	}
-	if got := BrokerErr(kerr.NotController, &msg); got.Error() != "NOT_CONTROLLER: This is not the correct controller for this cluster.: the text" || !errors.Is(got, kerr.NotController) {
+	if got := BrokerErr(kerr.NotController, &msg); got.Error() != "NOT_CONTROLLER: This is not the correct controller for this cluster. (the text)" || !errors.Is(got, kerr.NotController) {
 		t.Errorf("BrokerErr = %v", got)
 	}
 	if got := BrokerErr(kerr.NotController, nil); got != kerr.NotController {

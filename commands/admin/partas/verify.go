@@ -205,11 +205,18 @@ SEE ALSO:
 				cleared, clearErr = clearThrottle(cl, brokers, topics)
 			}
 
-			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results", verifyHeaders...).ErrorColumn()
-			table.SetField("throttles_cleared", map[string]any{
+			// A failed clear rides in the document rather than as a second
+			// error document after it: one JSON object per command.
+			throttles := map[string]any{
 				"brokers": nonNil(cleared.brokers),
 				"topics":  nonNil(cleared.topics),
-			})
+				"error":   "",
+			}
+			if clearErr != nil {
+				throttles["error"] = clearErr.Error()
+			}
+			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "results", verifyHeaders...).ErrorColumn()
+			table.SetField("throttles_cleared", throttles)
 			for _, r := range rows {
 				table.Row(r.topic, r.partition, r.current, r.target, r.status, r.err, r.msg)
 			}
@@ -223,7 +230,10 @@ SEE ALSO:
 				fmt.Fprintf(os.Stderr, "cleared replication throttles on brokers %s and topics %s\n", strings.Join(ids, ","), strings.Join(cleared.topics, ","))
 			}
 			if clearErr != nil {
-				return clearErr
+				if cl.Format() == out.FormatText {
+					fmt.Fprintf(os.Stderr, "unable to clear replication throttles: %v\n", clearErr)
+				}
+				return out.ErrSilent
 			}
 			if flushErr != nil {
 				return flushErr

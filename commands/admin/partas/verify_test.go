@@ -31,6 +31,7 @@ type verifyDoc struct {
 	Cleared struct {
 		Brokers []int32  `json:"brokers"`
 		Topics  []string `json:"topics"`
+		Error   string   `json:"error"`
 	} `json:"throttles_cleared"`
 }
 
@@ -158,12 +159,16 @@ func TestVerify(t *testing.T) {
 		}
 	}
 
-	// A delete that fails is the command's error after the table prints,
-	// and the other resources are cleared.
+	// A delete that fails rides in the document as throttles_cleared.error
+	// (one JSON object per command, never a second error object), exits 1,
+	// and the other resources are still cleared.
 	c.Fault(kfake.Fault{Keys: []kmsg.Key{kmsg.IncrementalAlterConfigs}, Resource: "foo", Err: kerr.TopicAuthorizationFailed})
 	doc, err = runVerify(t, addr, "foo:0->0")
-	if code := out.ExitCode(err); err == nil || err == out.ErrSilent || code != out.ExitError || !strings.Contains(err.Error(), "topic foo: TOPIC_AUTHORIZATION_FAILED") {
-		t.Fatalf("failed clear: err = %v (exit %d), want an error naming topic foo", err, code)
+	if code := out.ExitCode(err); err != out.ErrSilent || code != out.ExitError {
+		t.Fatalf("failed clear: err = %v (exit %d), want a silent exit 1", err, code)
+	}
+	if !strings.Contains(doc.Cleared.Error, "topic foo: TOPIC_AUTHORIZATION_FAILED") {
+		t.Errorf("failed clear error = %q, want it to name topic foo", doc.Cleared.Error)
 	}
 	if !slices.Equal(doc.Cleared.Brokers, []int32{0}) || len(doc.Cleared.Topics) != 0 {
 		t.Errorf("failed clear cleared %+v, want broker 0 only", doc.Cleared)

@@ -185,11 +185,13 @@ func BrokerMessage(msg *string) string {
 }
 
 // BrokerErr is err with the message a broker attached, for a failure of the
-// whole request rather than of a row: "NOT_CONTROLLER: the text". It is err
+// whole request rather than of a row: "NOT_CONTROLLER: ... (the text)". It is err
 // itself when the broker attached nothing.
 func BrokerErr(err error, msg *string) error {
 	if m := BrokerMessage(msg); m != "" {
-		return fmt.Errorf("%w: %s", err, m)
+		// A kerr description ends in a period, so the broker's words go in
+		// parentheses rather than after a second colon.
+		return fmt.Errorf("%w (%s)", err, m)
 	}
 	return err
 }
