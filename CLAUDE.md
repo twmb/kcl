@@ -9,9 +9,8 @@ calling a change done, and say which items do not apply and why.
 - [ ] Does the command honor `--format text|json|awk`?
 - [ ] Do its errors respect the format, and use the right exit code?
 - [ ] Does its help follow the `EXAMPLES:` / `SEE ALSO:` shape?
-- [ ] Does it change output? MIGRATION.md gets an entry, with before and
-      after and how to get the old shape back.
-- [ ] Does CHANGELOG.md need a bullet under the unreleased heading?
+- [ ] Does it change an awk or JSON shape? The PR description says so
+      under CHANGED, naming the columns or keys, so the changelog can.
 - [ ] Are there sibling commands that should have gotten the same change?
 - [ ] Do the tests cover the paths you only exercised by hand?
 - [ ] Did you build it and use it?
@@ -52,7 +51,7 @@ you have broken something.
 
 `out.MarshalJSON` covers non-tabular JSON, and both it and the table put
 `_command` and `_version` at the top level. All JSON output is one line;
-see MIGRATION.md. Pipe to jq when you want it wide.
+pipe to jq when you want it wide.
 
 `text` is for people and may change between releases. `awk` is the stable
 scripting contract: TSV, no headers, stable column order, and `-` for an
@@ -138,12 +137,14 @@ since an unknown code answers `UNKNOWN_SERVER_ERROR` rather than nil.
 
 ## CHANGELOG
 
-Entries go under a `vX.Y.Z (unreleased)` heading, dropped at release, under
-`CHANGED`, `BREAKING`, `NEW`, `FIXES`, `UPSTREAM`. `BREAKING` is for a change
-that stops a correct script working; output a correct consumer still parses
-is `CHANGED`. Bullets run about 20 words. Say what
-changed, not why: the why lives in the commit message it came from, and a
-past release was rewritten for running 34 words a bullet explaining itself.
+The maintainer writes each release's section at release time from the PR
+descriptions; a PR does not edit CHANGELOG.md. Sections are `BREAKING`,
+`NEW`, `CHANGED`, `FIXES`, `UPSTREAM`. `BREAKING` is an invocation that no
+longer runs: a removed command or flag, or an argument now rejected. A
+changed column, key, type, or exit code is `CHANGED`. Bullets run
+about 20 words and say what changed, not why: the why lives in the commit
+message, and a past release was rewritten for running 34 words a bullet
+explaining itself. PR descriptions follow the same rule.
 
 ## rpk and Redpanda
 

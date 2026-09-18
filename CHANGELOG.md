@@ -1,21 +1,80 @@
-v0.20.0 (unreleased)
+v0.20.0
 ===
 
-### CHANGED
+The output contract release: one JSON object per command, awk with `-`
+for an empty cell and `--format awk-header` to print the columns, exit 1
+on any failure and 2 on usage. Columns, keys, commands, and flags were
+renamed to line up. Every old name still works, hidden, and `_command`
+is always the new path.
 
-* `--format json` prints one line rather than an indented document. The
-  structure is unchanged; pipe to jq for the old shape. See MIGRATION.md.
+### BREAKING
+
+* `topic list -d` and `cluster metadata -d` are gone (`--detailed` stays,
+  hidden); `topic list --regex=PATTERN` is rejected, `-r` is a bool.
+* `produce` with no topic and `-B ''` are rejected; both ran and did
+  nothing.
 
 ### NEW
 
-* `kcl fake --control` serves an endpoint for driving a running fake
-  cluster; `kcl fake control` drives it.
-* `kcl fake control fault add|list|rm|wait` installs kfake faults, which
-  fail matching requests with an error before the cluster acts on them.
-* `kcl fake control call METHOD [ARGS...]` calls a kfake `Cluster` method;
-  `kcl fake control methods` lists what it can call.
-* Topic ID flags accept the dashed, uppercase, `urn:uuid:`, and braced
-  forms alongside bare hex.
+* `--format awk-header` prints a command's awk columns and exits.
+* `kcl version`, `KCL_PROFILE`.
+* `produce -k KEY`, `-o json`, and `-f json`, which reads what
+  `consume -f json` writes.
+* `group describe --lag EXPR`, `--by topic|member|group`, `--instance-ids`;
+  `group list --state`, `--type`.
+* `topic list-offsets --at TIMESTAMP` (was `misc list-offsets`);
+  `topic describe` rows carry START-OFFSET and END-OFFSET.
+* `reassign alter --throttle BYTES`; `reassign verify PLAN`, which reports
+  each partition and clears the throttle once all are complete.
+* `cluster features describe` says what each level means;
+  `cluster features update --release-version X`.
+* `registry subject list|delete`, `registry schema
+  delete|references|check-compatibility`.
+* `kcl fake --control` and `fake control fault|call|group|methods`; the
+  fake stores client metrics subscriptions.
+* Every `--dry-run` prints the rows a real run prints, `dry_run` in JSON.
+
+### CHANGED
+
+* Every mutating row ends ERROR MESSAGE, ERROR the bare Kafka error name;
+  a failed row exits 1, as does any table with an errored row.
+* awk: `-` for an empty or unknown cell, slices comma joined, columns
+  moved on most describe commands; `--format awk-header` shows them.
+* JSON: `""` for a known-empty string, `null` for unknown, `[]` not null,
+  keys aligned (`topic`, `topic_id`, `partition_count`, `group`, `error`,
+  `message`, `error_code`), timestamps in milliseconds, `profile dump`
+  under `config`.
+* Renamed, old names hidden: `misc list-offsets` -> `topic list-offsets`;
+  `registry subjects|versions|references|delete|compatibility test` ->
+  `subject list|delete`, `schema
+  list|references|delete|check-compatibility`;
+  `topic create --kv` -> `--config`; `group list --filter|--type-filter`
+  -> `--state|--type`; `sasl.method` -> `sasl.mechanism`;
+  `[schema_registry]` -> `[registry]`.
+* `group offset-delete -t TOPIC` with no partitions deletes every
+  partition; it deleted nothing.
+* `group describe` counts an uncommitted partition's lag from the log
+  start; it exits 1 on a partition or group the broker refused.
+* Lists are sorted; text hides a flag's column when the flag is off; a
+  declined prompt or a non-terminal stdin prints the plan and exits 0.
+* `consume --share-group` defaults `--fetch-max-wait` to 500ms; an
+  interrupted `consume` says what it waits on, a second ctrl+c quits.
+* `user alter --set` takes everything after `password=` as the password.
+* Topic ID flags accept dashed, uppercase, `urn:uuid:`, and braced forms.
+
+### FIXES
+
+* `group describe` showed every group the last group's offsets when they
+  shared a partition; `--consumer-protocol` printed hex topic IDs.
+* `txn describe-producers` sent no partitions, `logdirs describe --broker`
+  was ignored, `cluster elect-leaders TOPIC:P` never worked,
+  `topic delete --ids` failed, `--under-min-isr` matched everything.
+* `--format json` escaped `<`, `>`, `&`; `produce -f '%p'` discarded the
+  partition; `user alter` exited 0 on failure.
+
+### UPSTREAM
+
+* franz-go v1.22.0, kadm v1.19.0, kfake at master.
 
 v0.19.0
 ===
