@@ -498,7 +498,7 @@ func TestResultColumns(t *testing.T) {
 			name:    "all ok",
 			headers: []string{"TOPIC", "ERROR", "MESSAGE"},
 			rows:    [][]any{{"a", "", ""}, {"b", "", ""}},
-			text:    "TOPIC  ERROR  MESSAGE\na      OK     \nb      OK     \n",
+			text:    "TOPIC  ERROR  MESSAGE\na      OK\nb      OK\n",
 			awk:     "a\t-\t-\nb\t-\t-\n",
 		},
 		{
@@ -506,7 +506,7 @@ func TestResultColumns(t *testing.T) {
 			headers: []string{"TOPIC", "ERROR", "MESSAGE"},
 			rows:    [][]any{{"a", "", ""}, {"b", "UNKNOWN_TOPIC_OR_PARTITION", "no such topic"}},
 			wantErr: true,
-			text:    "TOPIC  ERROR                       MESSAGE\na      OK                          \nb      UNKNOWN_TOPIC_OR_PARTITION  no such topic\n",
+			text:    "TOPIC  ERROR                       MESSAGE\na      OK\nb      UNKNOWN_TOPIC_OR_PARTITION  no such topic\n",
 			awk:     "a\t-\t-\nb\tUNKNOWN_TOPIC_OR_PARTITION\tno such topic\n",
 		},
 		{
@@ -592,7 +592,7 @@ func TestErrorColumn(t *testing.T) {
 		format string
 		want   string
 	}{
-		{"text", "TOPIC  ERROR                     MESSAGE\na                                \nb      NOT_LEADER_FOR_PARTITION  moved\n"},
+		{"text", "TOPIC  ERROR                     MESSAGE\na\nb      NOT_LEADER_FOR_PARTITION  moved\n"},
 		{"awk", "a\t-\t-\nb\tNOT_LEADER_FOR_PARTITION\tmoved\n"},
 	} {
 		var err error
@@ -716,7 +716,7 @@ func TestDryRun(t *testing.T) {
 			table.Flush()
 		})
 	}
-	if got := table("text", true); got != "Dry run: nothing was changed.\nTOPIC  ERROR  MESSAGE\na      OK     \n" {
+	if got := table("text", true); got != "Dry run: nothing was changed.\nTOPIC  ERROR  MESSAGE\na      OK\n" {
 		t.Errorf("text = %q", got)
 	}
 	if got := table("text", false); strings.Contains(got, "Dry run") {

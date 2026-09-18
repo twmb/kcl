@@ -280,7 +280,10 @@ func (t *FormattedTable) flushText() {
 	if t.dryRun {
 		PrintDryRun()
 	}
-	tw := tabwriter.NewWriter(os.Stdout, 6, 4, 2, ' ', 0)
+	// tabwriter pads every cell to its column, so a row whose last cells
+	// are empty ends in spaces; we trim each line before it is written.
+	var buf strings.Builder
+	tw := tabwriter.NewWriter(&buf, 6, 4, 2, ' ', 0)
 	fmt.Fprint(tw, strings.Join(t.headers, "\t")+"\n")
 	for _, row := range t.rows {
 		strs := make([]string, len(row))
@@ -294,6 +297,9 @@ func (t *FormattedTable) flushText() {
 		fmt.Fprint(tw, strings.Join(strs, "\t")+"\n")
 	}
 	tw.Flush()
+	for line := range strings.Lines(buf.String()) {
+		os.Stdout.WriteString(strings.TrimRight(line, " \n") + "\n")
+	}
 }
 
 func (t *FormattedTable) flushJSON() {

@@ -3,7 +3,6 @@ package features
 import (
 	"context"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 
@@ -65,14 +64,7 @@ SEE ALSO:
 			for _, row := range describeRows(resp) {
 				table.Row(row...)
 			}
-			if err := table.Flush(); err != nil {
-				return err
-			}
-
-			if len(resp.SupportedFeatures) == 0 && cl.Format() == out.FormatText {
-				fmt.Fprintln(os.Stderr, "No feature flags found.")
-			}
-			return nil
+			return table.Flush()
 		},
 	}
 	out.Columns(cmd, describeHeaders...)
