@@ -10,9 +10,9 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/twmb/avro v1.9.0
-	github.com/twmb/franz-go v1.21.8-0.20260918031913-37248044ed5c
-	github.com/twmb/franz-go/pkg/kadm v1.18.0
-	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260918031913-37248044ed5c
+	github.com/twmb/franz-go v1.22.0
+	github.com/twmb/franz-go/pkg/kadm v1.19.0
+	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260918054303-01f206a7e32c
 	github.com/twmb/franz-go/pkg/kmsg v1.14.0
 	github.com/twmb/franz-go/pkg/sr v1.8.0
 	golang.org/x/crypto v0.57.0
