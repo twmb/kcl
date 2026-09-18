@@ -25,7 +25,7 @@ Unlike the small size of [kcat][1] (formerly kafkacat), this binary is
 producing formatting options, and a complete Kafka administration
 interface that tracks the upstream protocol closely.
 
-[1]: https://github.com/confluentinc/kcat
+[1]: https://github.com/edenhill/kcat
 
 ## Getting Started
 
