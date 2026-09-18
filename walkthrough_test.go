@@ -258,7 +258,7 @@ var walkthroughHeaders = map[string]string{
 	"cluster.describe-quorum --section observers": "TOPIC\tPARTITION\tLEADER\tLEADER-EPOCH\tHIGH-WATERMARK\tROLE\tREPLICA\tLOG-END-OFFSET\tLAST-FETCH-TIMESTAMP\tLAST-CAUGHT-UP-TIMESTAMP\tERROR\tMESSAGE",
 	"cluster.describe-quorum --section voters":    "TOPIC\tPARTITION\tLEADER\tLEADER-EPOCH\tHIGH-WATERMARK\tROLE\tREPLICA\tLOG-END-OFFSET\tLAST-FETCH-TIMESTAMP\tLAST-CAUGHT-UP-TIMESTAMP\tERROR\tMESSAGE",
 	"cluster.elect-leaders":                       "TOPIC\tPARTITION\tERROR\tMESSAGE",
-	"cluster.features.describe":                   "KIND\tNAME\tMIN-VERSION\tMAX-VERSION",
+	"cluster.features.describe":                   "FEATURE\tSUPPORTED-MIN\tSUPPORTED-MAX\tFINALIZED\tEPOCH\tDESCRIPTION",
 	"cluster.metadata":                            "TOPIC\tTOPIC-ID\tPARTITIONS\tREPLICATION\tERROR",
 	"cluster.metadata --section brokers":          "ID\tHOST\tPORT\tRACK",
 	"cluster.metadata --section cluster":          "CLUSTER-ID\tCONTROLLER",
@@ -354,7 +354,7 @@ var walkthroughKeys = map[string]string{
 	"cluster.describe-quorum --section voters":    ".: _command _version code error",
 	"cluster.describe-quorum":                     ".: _command _version code error",
 	"cluster.elect-leaders":                       ".: _command _version dry_run results; results[]: error message partition topic",
-	"cluster.features.describe":                   ".: _command _version features; features[]: kind max_version min_version name",
+	"cluster.features.describe":                   ".: _command _version features; features[]: description epoch feature finalized supported_max supported_min",
 	"cluster.metadata --section brokers":          ".: _command _version brokers; brokers[]: host id port rack",
 	"cluster.metadata --section cluster":          ".: _command _version cluster_id controller_id",
 	"cluster.metadata --section topics":           ".: _command _version topics; topics[]: error internal partition_count replication_factor topic topic_id",
@@ -1165,6 +1165,7 @@ func (w *walkthrough) checkAWK(t *testing.T, path, text string, r runResult, hea
 // other field is one word with no bracket, so that a script splitting on
 // whitespace reads the columns it counted and a list is comma joined.
 var walkthroughFreeText = map[string][]string{
+	"cluster.features.describe": {"DESCRIPTION"},
 	"misc.errcode":              {"DESCRIPTION"},
 	"misc.errtext":              {"DESCRIPTION"},
 	"registry.schema.get":       {"SCHEMA"},

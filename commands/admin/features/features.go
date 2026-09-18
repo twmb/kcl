@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -12,6 +11,7 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kversion"
 
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/out"
@@ -28,7 +28,7 @@ func Command(cl *client.Client) *cobra.Command {
 }
 
 var (
-	describeHeaders = []string{"KIND", "NAME", "MIN-VERSION", "MAX-VERSION"}
+	describeHeaders = []string{"FEATURE", "SUPPORTED-MIN", "SUPPORTED-MAX", "FINALIZED", "EPOCH", "DESCRIPTION"}
 	updateHeaders   = []string{"FEATURE", "ERROR", "MESSAGE"}
 )
 
@@ -38,12 +38,18 @@ func describeCommand(cl *client.Client) *cobra.Command {
 		Short: "Describe cluster feature flags (Kafka 3.3+).",
 		Long: `Describe cluster feature flags (Kafka 3.3+).
 
-This command uses the ApiVersions response to print supported feature
-version ranges and finalized feature version ranges. SUPPORTED rows come
-first, then FINALIZED, each sorted by name.
+This command asks one broker for its ApiVersions and prints one row per
+feature: the lowest and highest level the broker supports, the level the
+cluster has finalized, the epoch the finalized levels were read at, and
+what the finalized level means, with the KIP to search for.
+
+FINALIZED is 0 for a feature the cluster has not enabled. Both FINALIZED and
+EPOCH are unknown when the broker has not learned the cluster's finalized
+features yet. DESCRIPTION is kcl's own wording and may change.
 
 EXAMPLES:
   kcl cluster features describe
+  kcl cluster features describe --format json
 
 SEE ALSO:
   kcl cluster features update    update finalized feature versions
@@ -64,26 +70,15 @@ SEE ALSO:
 				return fmt.Errorf("%v", err)
 			}
 
-			supported := slices.Clone(resp.SupportedFeatures)
-			slices.SortFunc(supported, func(a, b kmsg.ApiVersionsResponseSupportedFeature) int {
-				return strings.Compare(a.Name, b.Name)
-			})
-			finalized := slices.Clone(resp.FinalizedFeatures)
-			slices.SortFunc(finalized, func(a, b kmsg.ApiVersionsResponseFinalizedFeature) int {
-				return strings.Compare(a.Name, b.Name)
-			})
 			table := out.NewFormattedTable(cl.Format(), cl.Command(), 1, "features", describeHeaders...)
-			for _, f := range supported {
-				table.Row("SUPPORTED", f.Name, f.MinVersion, f.MaxVersion)
-			}
-			for _, f := range finalized {
-				table.Row("FINALIZED", f.Name, f.MinVersionLevel, f.MaxVersionLevel)
+			for _, row := range describeRows(resp) {
+				table.Row(row...)
 			}
 			if err := table.Flush(); err != nil {
 				return err
 			}
 
-			if len(supported) == 0 && len(finalized) == 0 && cl.Format() == out.FormatText {
+			if len(resp.SupportedFeatures) == 0 && cl.Format() == out.FormatText {
 				fmt.Fprintln(os.Stderr, "No feature flags found.")
 			}
 			return nil
@@ -91,6 +86,30 @@ SEE ALSO:
 	}
 	out.Columns(cmd, describeHeaders...)
 	return cmd
+}
+
+// describeRows is one row per supported feature, in name order. A feature
+// the cluster has not finalized is at level 0 once the broker knows the
+// cluster's levels at all; before that, the level and epoch are unknown.
+func describeRows(resp *kmsg.ApiVersionsResponse) [][]any {
+	vs := kversion.FromApiVersionsResponse(resp)
+	finalized := make(map[string]int16)
+	vs.EachFinalizedFeature(func(name string, level int16) {
+		finalized[name] = level
+	})
+	known := resp.FinalizedFeaturesEpoch >= 0
+
+	var rows [][]any
+	vs.EachSupportedFeature(func(name string, min, max int16) {
+		var level, epoch, description any = out.Unknown, out.Unknown, out.Unknown
+		if known {
+			level = finalized[name]
+			epoch = resp.FinalizedFeaturesEpoch
+			description = kversion.FeatureLevelDescription(name, finalized[name])
+		}
+		rows = append(rows, []any{name, min, max, level, epoch, description})
+	})
+	return rows
 }
 
 func updateCommand(cl *client.Client) *cobra.Command {
