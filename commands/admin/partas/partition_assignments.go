@@ -25,6 +25,7 @@ func Command(cl *client.Client) *cobra.Command {
 	cmd.AddCommand(listPartitionReassignments(cl))
 	cmd.AddCommand(alterPartitionAssignments(cl))
 	cmd.AddCommand(cancelPartitionReassignments(cl))
+	cmd.AddCommand(verifyPartitionReassignments(cl))
 	return cmd
 }
 
@@ -92,14 +93,9 @@ requested, leader.replication.throttled.rate and
 follower.replication.throttled.rate are set to BYTES on every broker the
 move touches, and leader.replication.throttled.replicas and
 follower.replication.throttled.replicas are set on every topic to the
-partition:broker pairs moving out of and into each broker. Kafka's tool
-clears these when its --verify sees the move complete; kcl has no --verify,
-so the configs stay until you clear them:
-
-  kcl config alter -tb ID --delete leader.replication.throttled.rate --delete follower.replication.throttled.rate
-  kcl config alter -tt TOPIC --delete leader.replication.throttled.replicas --delete follower.replication.throttled.replicas
-
-"kcl reassign list" says when the move is done.
+partition:broker pairs moving out of and into each broker. The configs stay
+until "kcl reassign verify" sees every partition of the plan complete and
+clears them, the way Kafka's --verify does.
 
 The result prints one row per partition with ERROR and MESSAGE.
 
@@ -108,6 +104,7 @@ EXAMPLES:
   kcl reassign alter 'foo:0->2,3' --throttle 10485760    # move at 10MB/s
 
 SEE ALSO:
+  kcl reassign verify    check the plan landed, and clear its throttle
   kcl reassign list      list reassignments in progress
   kcl reassign cancel    cancel reassignments in progress
 `,
@@ -128,7 +125,7 @@ SEE ALSO:
 					for _, b := range m.brokers() {
 						brokers = append(brokers, strconv.FormatInt(int64(b), 10))
 					}
-					fmt.Fprintf(os.Stderr, "Replication throttled to %d bytes/s on brokers %s; clear the throttle configs when the move completes.\n", throttle, strings.Join(brokers, ","))
+					fmt.Fprintf(os.Stderr, "Replication throttled to %d bytes/s on brokers %s; \"kcl reassign verify\" clears it when the move completes.\n", throttle, strings.Join(brokers, ","))
 				}
 			}
 

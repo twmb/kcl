@@ -752,6 +752,42 @@ func TestDryRun(t *testing.T) {
 	}
 }
 
+// TestSetField pins that a field lands at the top level of the JSON document
+// only, and that a key the document already carries panics.
+func TestSetField(t *testing.T) {
+	table := func(format string) string {
+		return captureStdout(func() {
+			table := NewFormattedTable(format, "reassign.verify", 1, "results", "TOPIC", "STATUS")
+			table.SetField("throttles_cleared", map[string]any{"brokers": []int32{0, 1}})
+			table.Row("a", "complete")
+			table.Flush()
+		})
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(table("json")), &doc); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if got := doc["throttles_cleared"]; fmt.Sprint(got) != "map[brokers:[0 1]]" {
+		t.Errorf("throttles_cleared = %v", got)
+	}
+	if got := table("awk"); got != "a\tcomplete\n" {
+		t.Errorf("awk = %q", got)
+	}
+	if got := table("text"); strings.Contains(got, "throttles") {
+		t.Errorf("text = %q", got)
+	}
+	for _, key := range []string{"_command", "_version", "dry_run", "results"} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("SetField(%q) did not panic", key)
+				}
+			}()
+			NewFormattedTable("json", "x", 1, "results", "A").SetField(key, 1)
+		}()
+	}
+}
+
 // TestRowWidth pins that a row must have one cell per header: under go test
 // a short or long row panics, since a script counts on every column.
 func TestRowWidth(t *testing.T) {

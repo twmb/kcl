@@ -12,6 +12,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kversion"
 
 	"github.com/twmb/kcl/client"
 	"github.com/twmb/kcl/out"
@@ -41,21 +42,29 @@ type resultsDoc struct {
 	DryRun  bool   `json:"dry_run"`
 	Results []struct {
 		Feature string `json:"feature"`
+		From    *int16 `json:"from"`
+		To      int16  `json:"to"`
 		Error   string `json:"error"`
 		Message string `json:"message"`
 	} `json:"results"`
 }
 
-// TestUpdate pins the update against kfake, which answers UpdateFeatures v2:
-// a good update prints one OK row per feature, a dry run is marked and
-// changes nothing, and a bad feature is a request-wide error, exit 1.
-func TestUpdate(t *testing.T) {
-	c, err := kfake.NewCluster(kfake.NumBrokers(1))
+func newCluster(t *testing.T) string {
+	t.Helper()
+	c, err := kfake.NewCluster(kfake.NumBrokers(1), kfake.MaxVersions(kversion.FromString("4.4")))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
-	addr := c.ListenAddrs()[0]
+	t.Cleanup(c.Close)
+	return c.ListenAddrs()[0]
+}
+
+// TestUpdate pins the update against kfake, which answers UpdateFeatures v2:
+// a good update prints one OK row per feature with the level the cluster is
+// at and the level asked for, a dry run is marked and changes nothing, and
+// a bad feature is a request-wide error, exit 1.
+func TestUpdate(t *testing.T) {
+	addr := newCluster(t)
 
 	raw, err := runFeatures(t, addr, "json", "update", "transaction.version=1", "--upgrade-type", "safe-downgrade", "--dry-run")
 	if err != nil {
@@ -68,6 +77,9 @@ func TestUpdate(t *testing.T) {
 	if doc.Command != "cluster.features.update" || !doc.DryRun || len(doc.Results) != 1 || doc.Results[0].Feature != "transaction.version" || doc.Results[0].Error != "" {
 		t.Errorf("dry run doc = %+v", doc)
 	}
+	if r := doc.Results[0]; r.From == nil || *r.From != 2 || r.To != 1 {
+		t.Errorf("dry run row = %+v, want from 2 to 1", r)
+	}
 	if desc, _ := runFeatures(t, addr, "awk", "describe"); !strings.Contains(desc, "transaction.version\t0\t2\t2\t") {
 		t.Errorf("the dry run changed the finalized level:\n%s", desc)
 	}
@@ -76,7 +88,7 @@ func TestUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update: %v\n%s", err, raw)
 	}
-	if got := strings.TrimSuffix(raw, "\n"); got != "transaction.version\t-\t-" {
+	if got := strings.TrimSuffix(raw, "\n"); got != "transaction.version\t2\t1\t-\t-" {
 		t.Errorf("awk row = %q", got)
 	}
 	if desc, _ := runFeatures(t, addr, "awk", "describe"); !strings.Contains(desc, "transaction.version\t0\t2\t1\t") {
@@ -89,14 +101,57 @@ func TestUpdate(t *testing.T) {
 	}
 
 	for _, args := range [][]string{
+		{"update"},
 		{"update", "noequals"},
 		{"update", "f=notanumber"},
 		{"update", "f=1", "--upgrade-type", "sideways"},
+		{"update", "f=1", "--release-version", "4.4"},
+		{"update", "--release-version", "3.2"},
 	} {
 		_, err := runFeatures(t, addr, "json", args...)
 		if code := out.ExitCode(err); err == nil || code != out.ExitUsage {
 			t.Errorf("%v: err = %v (exit %d), want exit 2", args, err, code)
 		}
+	}
+}
+
+// TestUpdateReleaseVersion pins --release-version against a 4.4 fake: 4.1
+// expands to one row per feature 4.1 finalizes, FROM the fake's level and
+// TO the 4.1 level, and a release kversion does not know is exit 2 naming
+// the newest it does.
+func TestUpdateReleaseVersion(t *testing.T) {
+	addr := newCluster(t)
+
+	raw, err := runFeatures(t, addr, "json", "update", "--release-version", "4.1", "--upgrade-type", "safe-downgrade", "--dry-run")
+	if err != nil {
+		t.Fatalf("dry run: %v\n%s", err, raw)
+	}
+	var doc resultsDoc
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, raw)
+	}
+	want := make(map[string]int16)
+	kversion.FromString("4.1").EachFinalizedFeature(func(name string, level int16) { want[name] = level })
+	from := make(map[string]int16)
+	kversion.FromString("4.4").EachFinalizedFeature(func(name string, level int16) { from[name] = level })
+	if !doc.DryRun || len(doc.Results) != len(want) {
+		t.Fatalf("doc = %+v, want %d dry run rows", doc, len(want))
+	}
+	for _, r := range doc.Results {
+		if r.Error != "" || r.To != want[r.Feature] || r.From == nil || *r.From != from[r.Feature] {
+			t.Errorf("row %+v, want from %d to %d", r, from[r.Feature], want[r.Feature])
+		}
+	}
+	if desc, _ := runFeatures(t, addr, "awk", "describe"); !strings.Contains(desc, "metadata.version\t7\t33\t33\t") {
+		t.Errorf("the dry run changed the finalized level:\n%s", desc)
+	}
+
+	_, err = runFeatures(t, addr, "json", "update", "--release-version", "9.9")
+	if code := out.ExitCode(err); err == nil || code != out.ExitUsage || !strings.Contains(err.Error(), "the newest kcl knows is "+newestRelease()) {
+		t.Errorf("9.9: err = %v (exit %d), want exit 2 naming %s", err, code, newestRelease())
+	}
+	if got := newestRelease(); kversion.FromString(got) == nil || strings.HasPrefix(got, "v") {
+		t.Errorf("newestRelease() = %q, want a release FromString parses, without the v", got)
 	}
 }
 
@@ -109,16 +164,20 @@ func TestResultRowsV1(t *testing.T) {
 		{Feature: "a"},
 		{Feature: "b", ErrorCode: kerr.InvalidUpdateVersion.Code, ErrorMessage: &msg},
 	}}
-	rows := resultRows(req, resp)
-	if len(rows) != 2 || rows[0][1] != "" || rows[1][1] != "INVALID_UPDATE_VERSION" || rows[1][2] != msg {
+	req.FeatureUpdates[1].MaxVersionLevel = 3
+	rows := resultRows(req, resp, map[string]int16{"a": 1})
+	if len(rows) != 2 || rows[0][3] != "" || rows[1][3] != "INVALID_UPDATE_VERSION" || rows[1][4] != msg {
 		t.Errorf("rows = %v", rows)
+	}
+	if rows[0][1] != int16(1) || rows[0][2] != int16(0) || rows[1][1] != int16(0) || rows[1][2] != int16(3) {
+		t.Errorf("rows = %v, want a from 1 to 0 and b from 0 to 3", rows)
 	}
 
 	resp.Version = 2
 	resp.Results = nil
-	rows = resultRows(req, resp)
-	if len(rows) != 2 || rows[0][0] != "a" || rows[1][0] != "b" || rows[0][1] != "" {
-		t.Errorf("v2 rows = %v, want one OK row per requested feature", rows)
+	rows = resultRows(req, resp, nil)
+	if len(rows) != 2 || rows[0][0] != "a" || rows[1][0] != "b" || rows[0][3] != "" || rows[0][1] != out.Unknown || rows[1][2] != int16(3) {
+		t.Errorf("v2 rows = %v, want one OK row per requested feature with an unknown FROM", rows)
 	}
 }
 

@@ -51,9 +51,10 @@ type FormattedTable struct {
 	jsonKeys []string
 	rows     [][]any
 	dryRun   bool
-	errCol   int  // the ERROR column under ResultColumns or ErrorColumn, else -1
-	msgCol   int  // the MESSAGE column after errCol, else -1
-	okText   bool // ResultColumns: text prints OK for a "" ERROR
+	fields   map[string]any // SetField: top-level JSON keys beside the rows
+	errCol   int            // the ERROR column under ResultColumns or ErrorColumn, else -1
+	msgCol   int            // the MESSAGE column after errCol, else -1
+	okText   bool           // ResultColumns: text prints OK for a "" ERROR
 }
 
 // NewFormattedTable creates a table that outputs in the specified format.
@@ -145,6 +146,22 @@ func (t *FormattedTable) ErrorColumn() *FormattedTable {
 // prints. awk is unchanged.
 func (t *FormattedTable) SetDryRun(dry bool) {
 	t.dryRun = dry
+}
+
+// SetField adds a top-level key to the JSON document, next to the rows and
+// _command: what the command did beyond its rows, as reassign verify names
+// the throttles it cleared. Text and awk print nothing for it; a command
+// says it in text on stderr itself. A key the document already carries is a
+// programming error and panics.
+func (t *FormattedTable) SetField(key string, v any) {
+	switch key {
+	case "_command", "_version", dryRunKey, t.jsonKey:
+		panic(fmt.Sprintf("out: SetField names %q, which the document already carries", key))
+	}
+	if t.fields == nil {
+		t.fields = make(map[string]any)
+	}
+	t.fields[key] = v
 }
 
 // Row adds a row of values to the table, one per header. Under ResultColumns
@@ -300,6 +317,7 @@ func (t *FormattedTable) flushJSON() {
 	if t.dryRun {
 		doc[dryRunKey] = true
 	}
+	maps.Copy(doc, t.fields)
 	writeJSON(doc)
 }
 

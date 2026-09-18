@@ -42,21 +42,21 @@ type resultsDoc struct {
 	} `json:"results"`
 }
 
-func newCluster(t *testing.T) string {
+func newCluster(t *testing.T) (*kfake.Cluster, string) {
 	t.Helper()
 	c, err := kfake.NewCluster(kfake.NumBrokers(1), kfake.SeedTopics(2, "foo"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(c.Close)
-	return c.ListenAddrs()[0]
+	return c, c.ListenAddrs()[0]
 }
 
 // TestAlterCancelResults pins the result shape and the exit code: a clean
 // partition exits 0, an unknown one or a cancel with nothing to cancel
 // exits 1 after its row prints, and rows sort by partition.
 func TestAlterCancelResults(t *testing.T) {
-	addr := newCluster(t)
+	_, addr := newCluster(t)
 
 	raw, err := runReassign(t, addr, "json", "reassign", "alter", "foo:1->0;0->0")
 	if err != nil {
@@ -99,6 +99,8 @@ func TestParseErrorsExitUsage(t *testing.T) {
 		{"reassign", "cancel", "foo:x"},
 		{"reassign", "cancel", "foo"},
 		{"reassign", "list", "foo"},
+		{"reassign", "verify", "foo:0:1"},
+		{"reassign", "verify", "foo:0->"},
 	} {
 		_, err := runReassign(t, "localhost:1", "text", args...)
 		if code := out.ExitCode(err); err == nil || code != out.ExitUsage {
@@ -107,46 +109,49 @@ func TestParseErrorsExitUsage(t *testing.T) {
 	}
 }
 
+// dynamicConfigs is the dynamic configs of a resource, by key, as config
+// describe prints them.
+func dynamicConfigs(t *testing.T, addr string, args ...string) map[string]string {
+	t.Helper()
+	raw, err := runReassign(t, addr, "json", append([]string{"config", "describe"}, args...)...)
+	if err != nil {
+		t.Fatalf("config describe %v: %v", args, err)
+	}
+	var doc struct {
+		Configs []struct {
+			Key    string `json:"key"`
+			Value  string `json:"value"`
+			Source string `json:"source"`
+		} `json:"configs"`
+	}
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, raw)
+	}
+	got := make(map[string]string)
+	for _, c := range doc.Configs {
+		if strings.HasPrefix(c.Source, "DYNAMIC") {
+			got[c.Key] = c.Value
+		}
+	}
+	return got
+}
+
 // TestAlterThrottle pins that --throttle sets the broker rates and the topic
 // replica lists before the reassignment, on a one-broker cluster where the
 // only broker is both the source and the destination.
 func TestAlterThrottle(t *testing.T) {
-	addr := newCluster(t)
+	_, addr := newCluster(t)
 
 	raw, err := runReassign(t, addr, "json", "reassign", "alter", "foo:0->0", "--throttle", "5000")
 	if err != nil {
 		t.Fatalf("alter --throttle: %v\n%s", err, raw)
 	}
 
-	configsOf := func(args ...string) map[string]string {
-		t.Helper()
-		raw, err := runReassign(t, addr, "json", append([]string{"config", "describe"}, args...)...)
-		if err != nil {
-			t.Fatalf("config describe %v: %v", args, err)
-		}
-		var doc struct {
-			Configs []struct {
-				Key    string `json:"key"`
-				Value  string `json:"value"`
-				Source string `json:"source"`
-			} `json:"configs"`
-		}
-		if err := json.Unmarshal([]byte(raw), &doc); err != nil {
-			t.Fatalf("not JSON: %v\n%s", err, raw)
-		}
-		got := make(map[string]string)
-		for _, c := range doc.Configs {
-			if strings.HasPrefix(c.Source, "DYNAMIC") {
-				got[c.Key] = c.Value
-			}
-		}
-		return got
-	}
-	broker := configsOf("0", "-tb")
+	broker := dynamicConfigs(t, addr, "0", "-tb")
 	if broker[brokerLeaderThrottle] != "5000" || broker[brokerFollowerThrottle] != "5000" {
 		t.Errorf("broker 0 dynamic configs = %v, want both rates at 5000", broker)
 	}
-	topic := configsOf("foo", "-tt")
+	topic := dynamicConfigs(t, addr, "foo", "-tt")
 	if topic[topicLeaderThrottle] != "0:0" || topic[topicFollowerThrottle] != "" {
 		t.Errorf("foo dynamic configs = %v, want leader 0:0 and follower empty", topic)
 	}
