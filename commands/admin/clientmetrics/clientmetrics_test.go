@@ -32,9 +32,9 @@ func runClientMetrics(t *testing.T, addr, format string, args ...string) (string
 	return string(b), err
 }
 
-// TestAlterDeleteResults pins the result shape of alter and delete and the
-// exit on a failed row. kfake answers INVALID_REQUEST for a client metrics
-// config resource, which is the failure.
+// TestAlterDeleteResults pins the result shape of alter and delete, the
+// exit on a failed row, and that describe and list see what alter wrote.
+// A bad interval is the failure: kfake validates it as Kafka does.
 func TestAlterDeleteResults(t *testing.T) {
 	c, err := kfake.NewCluster(kfake.NumBrokers(1))
 	if err != nil {
@@ -43,32 +43,51 @@ func TestAlterDeleteResults(t *testing.T) {
 	defer c.Close()
 	addr := c.ListenAddrs()[0]
 
-	for _, args := range [][]string{
-		{"alter", "sub1", "-s", "interval.ms=1000"},
-		{"delete", "sub1"},
-	} {
+	type doc struct {
+		Results []struct {
+			Name    string `json:"name"`
+			Error   string `json:"error"`
+			Message string `json:"message"`
+		} `json:"results"`
+	}
+	run := func(args ...string) (doc, error) {
+		t.Helper()
 		raw, err := runClientMetrics(t, addr, "json", args...)
-		if code := out.ExitCode(err); err == nil || code != out.ExitError {
-			t.Fatalf("%v: err = %v (exit %d), want a silent exit 1\n%s", args, err, code, raw)
+		var d doc
+		if jerr := json.Unmarshal([]byte(raw), &d); jerr != nil {
+			t.Fatalf("%v: not JSON: %v\n%s", args, jerr, raw)
 		}
-		var doc struct {
-			Results []struct {
-				Name    string `json:"name"`
-				Error   string `json:"error"`
-				Message string `json:"message"`
-			} `json:"results"`
-		}
-		if err := json.Unmarshal([]byte(raw), &doc); err != nil {
-			t.Fatalf("%v: not JSON: %v\n%s", args, err, raw)
-		}
-		if len(doc.Results) != 1 || doc.Results[0].Name != "sub1" || doc.Results[0].Error != "INVALID_REQUEST" {
-			t.Errorf("%v: doc = %+v, want one INVALID_REQUEST row for sub1", args, doc)
-		}
+		return d, err
+	}
 
-		awk, _ := runClientMetrics(t, addr, "awk", args...)
-		if fields := strings.Split(strings.TrimSuffix(awk, "\n"), "\t"); len(fields) != len(resultHeaders) {
-			t.Errorf("%v: awk row = %q, want %d fields", args, awk, len(resultHeaders))
-		}
+	d, err := run("alter", "sub1", "-s", "interval.ms=1000")
+	if err != nil || len(d.Results) != 1 || d.Results[0].Name != "sub1" || d.Results[0].Error != "" {
+		t.Fatalf("alter: err = %v, doc = %+v, want one OK row for sub1", err, d)
+	}
+	if list, _ := runClientMetrics(t, addr, "awk", "list"); list != "sub1\n" {
+		t.Errorf("list after alter = %q, want sub1", list)
+	}
+	if desc, _ := runClientMetrics(t, addr, "awk", "describe", "sub1"); !strings.Contains(desc, "interval.ms\t1000\t") {
+		t.Errorf("describe after alter:\n%s", desc)
+	}
+
+	d, err = run("alter", "sub1", "-s", "interval.ms=1")
+	if code := out.ExitCode(err); err == nil || code != out.ExitError {
+		t.Fatalf("bad interval: err = %v (exit %d), want a silent exit 1", err, code)
+	}
+	if len(d.Results) != 1 || d.Results[0].Error != "INVALID_REQUEST" {
+		t.Errorf("bad interval doc = %+v, want one INVALID_REQUEST row", d)
+	}
+	if awk, _ := runClientMetrics(t, addr, "awk", "alter", "sub1", "-s", "interval.ms=1"); len(strings.Split(strings.TrimSuffix(awk, "\n"), "\t")) != len(resultHeaders) {
+		t.Errorf("awk row = %q, want %d fields", awk, len(resultHeaders))
+	}
+
+	d, err = run("delete", "sub1")
+	if err != nil || len(d.Results) != 1 || d.Results[0].Error != "" {
+		t.Fatalf("delete: err = %v, doc = %+v, want one OK row", err, d)
+	}
+	if list, _ := runClientMetrics(t, addr, "awk", "list"); list != "" {
+		t.Errorf("list after delete = %q, want nothing", list)
 	}
 
 	if _, err := runClientMetrics(t, addr, "json", "alter", "sub1", "-s", "novalue"); out.ExitCode(err) != out.ExitUsage {

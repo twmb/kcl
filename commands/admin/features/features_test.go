@@ -68,7 +68,7 @@ func TestUpdate(t *testing.T) {
 	if doc.Command != "cluster.features.update" || !doc.DryRun || len(doc.Results) != 1 || doc.Results[0].Feature != "transaction.version" || doc.Results[0].Error != "" {
 		t.Errorf("dry run doc = %+v", doc)
 	}
-	if desc, _ := runFeatures(t, addr, "awk", "describe"); !strings.Contains(desc, "FINALIZED\ttransaction.version\t0\t2\n") {
+	if desc, _ := runFeatures(t, addr, "awk", "describe"); !strings.Contains(desc, "transaction.version\t0\t2\t2\t") {
 		t.Errorf("the dry run changed the finalized level:\n%s", desc)
 	}
 
@@ -79,7 +79,7 @@ func TestUpdate(t *testing.T) {
 	if got := strings.TrimSuffix(raw, "\n"); got != "transaction.version\t-\t-" {
 		t.Errorf("awk row = %q", got)
 	}
-	if desc, _ := runFeatures(t, addr, "awk", "describe"); !strings.Contains(desc, "FINALIZED\ttransaction.version\t0\t1\n") {
+	if desc, _ := runFeatures(t, addr, "awk", "describe"); !strings.Contains(desc, "transaction.version\t0\t2\t1\t") {
 		t.Errorf("the update did not change the finalized level:\n%s", desc)
 	}
 
@@ -119,5 +119,41 @@ func TestResultRowsV1(t *testing.T) {
 	rows = resultRows(req, resp)
 	if len(rows) != 2 || rows[0][0] != "a" || rows[1][0] != "b" || rows[0][1] != "" {
 		t.Errorf("v2 rows = %v, want one OK row per requested feature", rows)
+	}
+}
+
+// TestDescribeRows pins the shape of a describe row against the response
+// shapes a broker sends: a finalized level with its description, a supported
+// feature the cluster has not finalized at level 0, and unknown finalized
+// levels and epoch when the broker has not learned them (epoch -1).
+func TestDescribeRows(t *testing.T) {
+	resp := &kmsg.ApiVersionsResponse{
+		Version:                3,
+		FinalizedFeaturesEpoch: 5,
+		SupportedFeatures: []kmsg.ApiVersionsResponseSupportedFeature{
+			{Name: "metadata.version", MinVersion: 7, MaxVersion: 27},
+			{Name: "share.version", MinVersion: 0, MaxVersion: 1},
+		},
+		FinalizedFeatures: []kmsg.ApiVersionsResponseFinalizedFeature{
+			{Name: "metadata.version", MinVersionLevel: 27, MaxVersionLevel: 27},
+		},
+	}
+	rows := describeRows(resp)
+	if len(rows) != 2 {
+		t.Fatalf("rows = %v", rows)
+	}
+	if got := rows[0]; got[0] != "metadata.version" || got[3] != int16(27) || got[4] != int64(5) || got[5] != "4.1-IV1: replica fetcher sends Fetch v18 (KIP-1166)" {
+		t.Errorf("finalized row = %v", got)
+	}
+	if got := rows[1]; got[0] != "share.version" || got[3] != int16(0) || got[5] != "share groups off" {
+		t.Errorf("unfinalized row = %v", got)
+	}
+
+	resp.FinalizedFeaturesEpoch = -1
+	resp.FinalizedFeatures = nil
+	for _, got := range describeRows(resp) {
+		if got[3] != out.Unknown || got[4] != out.Unknown || got[5] != out.Unknown {
+			t.Errorf("epoch -1 row = %v, want unknown finalized, epoch, and description", got)
+		}
 	}
 }
