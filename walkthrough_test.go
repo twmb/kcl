@@ -974,6 +974,10 @@ func (w *walkthrough) runArgs(t *testing.T, stdin string, full []string) runResu
 		}
 	}
 	cmd.Env = append(cmd.Env, walkthroughEnv+"="+string(enc))
+	// Under -race the runtime sleeps a second at exit so a last report can
+	// be written (atexit_sleep_ms); a child that ran one command has no
+	// report coming, and two hundred of them made the walk take minutes.
+	cmd.Env = append(cmd.Env, "GORACE=atexit_sleep_ms=0")
 	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
