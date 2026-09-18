@@ -191,6 +191,7 @@ var walkthroughSkips = []struct{ path, why string }{
 	{"produce", "reads records from stdin and writes them to the cluster"},
 	{"reassign.alter", "reassigns partitions"},
 	{"reassign.cancel", "cancels a reassignment"},
+	{"reassign.verify", "deletes the throttle configs once a plan has landed, and has no dry run"},
 	{"registry.compatibility.set", "sets a compatibility level"},
 	{"registry.context.delete", "deletes a context"},
 	{"registry.schema.delete", "deletes a schema version, and has no dry run"},

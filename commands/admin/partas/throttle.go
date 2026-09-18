@@ -171,6 +171,77 @@ func (m moves) throttleRequest(bytesPerSec int64) *kmsg.IncrementalAlterConfigsR
 	return req
 }
 
+// clearThrottleRequest is the IncrementalAlterConfigs that removes what
+// throttleRequest set: the two rates on each broker and the two replica
+// lists on each topic, one DELETE per config, brokers before topics and
+// each sorted.
+func clearThrottleRequest(brokers []int32, topics []string) *kmsg.IncrementalAlterConfigsRequest {
+	req := kmsg.NewPtrIncrementalAlterConfigsRequest()
+	del := func(name string) kmsg.IncrementalAlterConfigsRequestResourceConfig {
+		c := kmsg.NewIncrementalAlterConfigsRequestResourceConfig()
+		c.Name = name
+		c.Op = kmsg.IncrementalAlterConfigOpDelete
+		return c
+	}
+	for _, broker := range sortedSet(brokers) {
+		r := kmsg.NewIncrementalAlterConfigsRequestResource()
+		r.ResourceType = kmsg.ConfigResourceTypeBroker
+		r.ResourceName = strconv.FormatInt(int64(broker), 10)
+		r.Configs = append(r.Configs, del(brokerLeaderThrottle), del(brokerFollowerThrottle))
+		req.Resources = append(req.Resources, r)
+	}
+	topics = slices.Clone(topics)
+	slices.Sort(topics)
+	for _, topic := range slices.Compact(topics) {
+		r := kmsg.NewIncrementalAlterConfigsRequestResource()
+		r.ResourceType = kmsg.ConfigResourceTypeTopic
+		r.ResourceName = topic
+		r.Configs = append(r.Configs, del(topicLeaderThrottle), del(topicFollowerThrottle))
+		req.Resources = append(req.Resources, r)
+	}
+	return req
+}
+
+// cleared is what clearThrottle removed the throttle from.
+type cleared struct {
+	brokers []int32
+	topics  []string
+}
+
+// clearThrottle removes the replication throttle from the brokers and
+// topics, the way Kafka's tool does once its --verify sees a move complete.
+// It returns the brokers and topics that were cleared, and an error naming
+// each resource that was not: the request alters each resource on its own,
+// so one that fails leaves the others cleared.
+func clearThrottle(cl *client.Client, brokers []int32, topics []string) (cleared, error) {
+	var c cleared
+	resp, err := clearThrottleRequest(brokers, topics).RequestWith(context.Background(), cl.Client())
+	if err != nil {
+		return c, fmt.Errorf("unable to clear the replication throttle: %v", err)
+	}
+	var errs []string
+	for _, r := range resp.Resources {
+		if err := kerr.ErrorForCode(r.ErrorCode); err != nil {
+			errs = append(errs, fmt.Sprintf("%s %s: %v", strings.ToLower(r.ResourceType.String()), r.ResourceName, out.BrokerErr(err, r.ErrorMessage)))
+			continue
+		}
+		switch r.ResourceType {
+		case kmsg.ConfigResourceTypeBroker:
+			if id, err := strconv.ParseInt(r.ResourceName, 10, 32); err == nil {
+				c.brokers = append(c.brokers, int32(id))
+			}
+		case kmsg.ConfigResourceTypeTopic:
+			c.topics = append(c.topics, r.ResourceName)
+		}
+	}
+	c.brokers = sortedSet(c.brokers)
+	slices.Sort(c.topics)
+	if len(errs) > 0 {
+		return c, fmt.Errorf("unable to clear the replication throttle on %s", strings.Join(errs, "; "))
+	}
+	return c, nil
+}
+
 // applyThrottle sets the replication throttle for the proposed reassignment
 // before it is requested, the way Kafka's tool does: it reads the
 // reassignments in progress and the current replicas, works out which

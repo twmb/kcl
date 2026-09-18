@@ -334,7 +334,7 @@ kcl
  produce        -- produce records
  profile        -- manage connection profiles / config
  quota          -- alter/describe/resolve client quotas
- reassign       -- alter/list partition reassignments
+ reassign       -- alter/list/verify partition reassignments
  registry       -- schema registry: schemas, subjects, compatibility, mode
  share-group    -- share group operations (KIP-932)
  topic          -- list/create/describe/delete/add-partitions/trim-prefix/list-offsets
