@@ -11,6 +11,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -36,6 +37,7 @@ const defaultBrokerPort = 9092
 func Command() *cobra.Command {
 	var (
 		ports        []int
+		listen       string
 		logLevel     string
 		dataDir      string
 		syncWrites   bool
@@ -94,6 +96,7 @@ EXAMPLES:
   kcl fake                                        # three brokers on 9092,9093,9094
   kcl fake --ports 19092,19093,19094              # specific ports; the count is the broker count
   kcl fake --ports 9092                           # a single broker
+  kcl fake --ports 19092 --listen unix:/tmp/kfake  # a Unix socket /tmp/kfake/19092.sock
   kcl fake -d /tmp/kfake --sync                   # persistent across restarts
   kcl fake --as-version 3.9                       # cap advertised API versions at Kafka 3.9
   kcl fake --seed-topic foo:10 --seed-topic bar:3 # seed topics at startup
@@ -184,6 +187,11 @@ SEE ALSO:
 			}
 			if dataDir != "" {
 				opts = append(opts, kfake.DataDir(dataDir))
+			}
+			if listenFn, err := parseListen(listen, ports); err != nil {
+				return out.Errf(out.ExitUsage, "%v", err)
+			} else if listenFn != nil {
+				opts = append(opts, kfake.ListenFn(listenFn))
 			}
 			if syncWrites {
 				opts = append(opts, kfake.SyncWrites())
@@ -334,6 +342,7 @@ SEE ALSO:
 		},
 	}
 
+	cmd.Flags().StringVar(&listen, "listen", "tcp", "how brokers listen: tcp (127.0.0.1:<port>), or unix:DIR (a Unix socket DIR/<port>.sock per --ports entry, still advertised as 127.0.0.1:<port>)")
 	cmd.Flags().IntSliceVar(&ports, "ports", []int{9092, 9093, 9094}, "ports for brokers (repeatable and/or comma-separated; broker count = number of ports)")
 	cmd.Flags().StringVarP(&logLevel, "log-level", "l", "none", "kfake log level: none, error, warn, info, debug")
 	cmd.Flags().StringVarP(&dataDir, "data-dir", "d", "", "persist state under this directory across restarts (default: in-memory only)")
@@ -551,3 +560,50 @@ func parseSASLUsers(list []string) ([]saslUser, error) {
 	}
 	return out, nil
 }
+
+// parseListen parses --listen, returning nil for the default TCP listener.
+func parseListen(listen string, ports []int) (func(network, address string) (net.Listener, error), error) {
+	switch {
+	case listen == "tcp":
+		return nil, nil
+	case strings.HasPrefix(listen, "unix:") && len(listen) > len("unix:"):
+		if slices.Contains(ports, 0) {
+			return nil, errors.New("--listen unix:DIR needs explicit --ports, not 0")
+		}
+		return unixListenFn(strings.TrimPrefix(listen, "unix:")), nil
+	}
+	return nil, fmt.Errorf("invalid --listen %q: want tcp or unix:DIR", listen)
+}
+
+// unixListenFn listens on dir/<port>.sock for each broker. kfake derives a
+// broker's advertised host and port from its listener's address, so the
+// listener reports the TCP address it was asked for.
+func unixListenFn(dir string) func(network, address string) (net.Listener, error) {
+	return func(_, address string) (net.Listener, error) {
+		tcp, err := net.ResolveTCPAddr("tcp", address)
+		if err != nil {
+			return nil, err
+		}
+		path := filepath.Join(dir, strconv.Itoa(tcp.Port)+".sock")
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		ln, err := net.Listen("unix", path)
+		if err != nil {
+			// macOS limits a socket path to 103 bytes and Linux to 107,
+			// and both fail a longer one with a bare "invalid argument".
+			if len(path) > 103 {
+				return nil, fmt.Errorf("%w (the socket path is %d bytes; macOS allows 103, try a shorter --listen directory)", err, len(path))
+			}
+			return nil, err
+		}
+		return &unixListener{ln, tcp}, nil
+	}
+}
+
+type unixListener struct {
+	net.Listener
+	addr *net.TCPAddr
+}
+
+func (l *unixListener) Addr() net.Addr { return l.addr }
