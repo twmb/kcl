@@ -479,7 +479,7 @@ func TestFakeAddressesPrintLast(t *testing.T) {
 	cmd := Command()
 	cmd.SetArgs([]string{
 		"--ports", "0",
-		"--control=127.0.0.1:" + strconv.Itoa(control),
+		"--control=" + strconv.Itoa(control),
 		"--registry-port", strconv.Itoa(registry),
 		"--seed-demo",
 	})

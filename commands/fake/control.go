@@ -16,8 +16,12 @@ import (
 	"github.com/twmb/franz-go/pkg/kfake"
 )
 
-// defaultControlAddr is where --control listens when given no address.
-const defaultControlAddr = "127.0.0.1:9099"
+// defaultControlPort is where --control listens when given no port, and
+// defaultControlAddr is where kcl fake control looks for it.
+const (
+	defaultControlPort = 9099
+	defaultControlAddr = "127.0.0.1:9099"
+)
 
 // controlSkip are methods we never expose. Close would kill the cluster out
 // from under the process. The other three are documented as valid only from

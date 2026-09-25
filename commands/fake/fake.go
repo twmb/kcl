@@ -11,6 +11,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -36,6 +37,7 @@ const defaultBrokerPort = 9092
 func Command() *cobra.Command {
 	var (
 		ports        []int
+		listen       string
 		logLevel     string
 		dataDir      string
 		syncWrites   bool
@@ -46,7 +48,7 @@ func Command() *cobra.Command {
 		acls         bool
 		saslUsers    []string
 		pprofAddr    string
-		controlAddr  string
+		controlPort  int
 		registry     bool
 		registryPort int
 		seedDemoFlag bool
@@ -94,6 +96,7 @@ EXAMPLES:
   kcl fake                                        # three brokers on 9092,9093,9094
   kcl fake --ports 19092,19093,19094              # specific ports; the count is the broker count
   kcl fake --ports 9092                           # a single broker
+  kcl fake --ports 19092 --listen unix:/tmp/kfake  # a Unix socket /tmp/kfake/19092.sock
   kcl fake -d /tmp/kfake --sync                   # persistent across restarts
   kcl fake --as-version 3.9                       # cap advertised API versions at Kafka 3.9
   kcl fake --seed-topic foo:10 --seed-topic bar:3 # seed topics at startup
@@ -108,7 +111,7 @@ EXAMPLES:
   kcl consume demo-avro -o start --decode=value   # read a demo topic, decoded
   kcl consume demo-plain -o start
   kcl fake --control                              # a control endpoint on 127.0.0.1:9099
-  kcl fake --control=19099                        # a port, or HOST:PORT
+  kcl fake --control=19099                        # a different port
   kcl fake -l debug                               # kfake's own logging
 
 SEE ALSO:
@@ -121,9 +124,9 @@ SEE ALSO:
 				return nil
 			}
 			// --control has an optional value, so pflag only takes it with
-			// an equals sign; "--control ADDR" leaves ADDR sitting here.
-			if _, err := strconv.Atoi(args[0]); err == nil || strings.Contains(args[0], ":") {
-				return out.Errf(out.ExitUsage, "unexpected argument %q: --control takes its address with an equals sign, as --control=%s", args[0], args[0])
+			// an equals sign; "--control PORT" leaves PORT sitting here.
+			if _, err := strconv.Atoi(args[0]); err == nil {
+				return out.Errf(out.ExitUsage, "unexpected argument %q: --control takes its port with an equals sign, as --control=%s", args[0], args[0])
 			}
 			return out.Errf(out.ExitUsage, "unexpected argument %q: kcl fake takes no positional arguments", args[0])
 		},
@@ -155,20 +158,12 @@ SEE ALSO:
 			// Normalize --control before anything binds, so a port clash
 			// with a broker is a usage error rather than a bind failure
 			// after the cluster is already up.
-			if controlAddr != "" {
-				if !strings.Contains(controlAddr, ":") {
-					controlAddr = "127.0.0.1:" + controlAddr
+			if controlPort != 0 {
+				if controlPort < 0 || controlPort > 65535 {
+					return out.Errf(out.ExitUsage, "invalid --control port %d", controlPort)
 				}
-				_, sport, err := net.SplitHostPort(controlAddr)
-				if err != nil {
-					return out.Errf(out.ExitUsage, "invalid --control address %q: %v", controlAddr, err)
-				}
-				port, err := strconv.Atoi(sport)
-				if err != nil {
-					return out.Errf(out.ExitUsage, "invalid --control port %q: %v", sport, err)
-				}
-				if slices.Contains(ports, port) {
-					return out.Errf(out.ExitUsage, "--control port %d is also a broker port", port)
+				if slices.Contains(ports, controlPort) {
+					return out.Errf(out.ExitUsage, "--control port %d is also a broker port", controlPort)
 				}
 			}
 
@@ -192,6 +187,11 @@ SEE ALSO:
 			}
 			if dataDir != "" {
 				opts = append(opts, kfake.DataDir(dataDir))
+			}
+			if listenFn, err := parseListen(listen, ports); err != nil {
+				return out.Errf(out.ExitUsage, "%v", err)
+			} else if listenFn != nil {
+				opts = append(opts, kfake.ListenFn(listenFn))
 			}
 			if syncWrites {
 				opts = append(opts, kfake.SyncWrites())
@@ -247,10 +247,11 @@ SEE ALSO:
 				return fmt.Errorf("unable to start fake cluster: %v", err)
 			}
 
-			if controlAddr != "" {
-				ln, err := net.Listen("tcp", controlAddr)
+			if controlPort != 0 {
+				addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(controlPort))
+				ln, err := net.Listen("tcp", addr)
 				if err != nil {
-					return fmt.Errorf("unable to listen for the control endpoint on %s: %v", controlAddr, err)
+					return fmt.Errorf("unable to listen for the control endpoint on %s: %v", addr, err)
 				}
 				srv := &http.Server{Handler: controlHandler(c)}
 				defer srv.Close()
@@ -341,6 +342,7 @@ SEE ALSO:
 		},
 	}
 
+	cmd.Flags().StringVar(&listen, "listen", "tcp", "how brokers listen: tcp (127.0.0.1:<port>), or unix:DIR (a Unix socket DIR/<port>.sock per --ports entry, still advertised as 127.0.0.1:<port>)")
 	cmd.Flags().IntSliceVar(&ports, "ports", []int{9092, 9093, 9094}, "ports for brokers (repeatable and/or comma-separated; broker count = number of ports)")
 	cmd.Flags().StringVarP(&logLevel, "log-level", "l", "none", "kfake log level: none, error, warn, info, debug")
 	cmd.Flags().StringVarP(&dataDir, "data-dir", "d", "", "persist state under this directory across restarts (default: in-memory only)")
@@ -355,8 +357,8 @@ SEE ALSO:
 	cmd.Flags().BoolVar(&acls, "acls", false, "enable ACL enforcement (requires --sasl superusers to get through the deny-by-default)")
 	cmd.Flags().StringArrayVar(&saslUsers, "sasl", nil, "add a SASL superuser as MECHANISM:USER:PASS (repeatable; enables SASL). Mechanisms: plain, scram-sha-256, scram-sha-512")
 	cmd.Flags().StringVar(&pprofAddr, "pprof", "", "if set, serve pprof on this addr (e.g. :6060 or 127.0.0.1:6060)")
-	cmd.Flags().StringVar(&controlAddr, "control", "", "serve a control endpoint for driving the cluster remotely (bare --control uses "+defaultControlAddr+", or --control=ADDR)")
-	cmd.Flags().Lookup("control").NoOptDefVal = defaultControlAddr
+	cmd.Flags().IntVar(&controlPort, "control", 0, "serve a control endpoint on 127.0.0.1 for driving the cluster remotely (bare --control uses port "+strconv.Itoa(defaultControlPort)+", or --control=PORT)")
+	cmd.Flags().Lookup("control").NoOptDefVal = strconv.Itoa(defaultControlPort)
 	cmd.Flags().BoolVar(&registry, "registry", true, "serve an in-memory Schema Registry (srfake) for schema-aware produce/consume (disable with --registry=false)")
 	cmd.Flags().IntVar(&registryPort, "registry-port", defaultRegistryPort, "port for the fake schema registry")
 	cmd.Flags().BoolVar(&seedDemoFlag, "seed-demo", false, "seed demo-avro/demo-proto/demo-json (schema-encoded) and demo-plain topics with sample records (implies --registry)")
@@ -558,3 +560,50 @@ func parseSASLUsers(list []string) ([]saslUser, error) {
 	}
 	return out, nil
 }
+
+// parseListen parses --listen, returning nil for the default TCP listener.
+func parseListen(listen string, ports []int) (func(network, address string) (net.Listener, error), error) {
+	switch {
+	case listen == "tcp":
+		return nil, nil
+	case strings.HasPrefix(listen, "unix:") && len(listen) > len("unix:"):
+		if slices.Contains(ports, 0) {
+			return nil, errors.New("--listen unix:DIR needs explicit --ports, not 0")
+		}
+		return unixListenFn(strings.TrimPrefix(listen, "unix:")), nil
+	}
+	return nil, fmt.Errorf("invalid --listen %q: want tcp or unix:DIR", listen)
+}
+
+// unixListenFn listens on dir/<port>.sock for each broker. kfake derives a
+// broker's advertised host and port from its listener's address, so the
+// listener reports the TCP address it was asked for.
+func unixListenFn(dir string) func(network, address string) (net.Listener, error) {
+	return func(_, address string) (net.Listener, error) {
+		tcp, err := net.ResolveTCPAddr("tcp", address)
+		if err != nil {
+			return nil, err
+		}
+		path := filepath.Join(dir, strconv.Itoa(tcp.Port)+".sock")
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		ln, err := net.Listen("unix", path)
+		if err != nil {
+			// macOS limits a socket path to 103 bytes and Linux to 107,
+			// and both fail a longer one with a bare "invalid argument".
+			if len(path) > 103 {
+				return nil, fmt.Errorf("%w (the socket path is %d bytes; macOS allows 103, try a shorter --listen directory)", err, len(path))
+			}
+			return nil, err
+		}
+		return &unixListener{ln, tcp}, nil
+	}
+}
+
+type unixListener struct {
+	net.Listener
+	addr *net.TCPAddr
+}
+
+func (l *unixListener) Addr() net.Addr { return l.addr }
