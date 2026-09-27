@@ -37,14 +37,14 @@ type:
   nodes       broker IDs the request arrived at
   topic       topic name
   topic_id    topic uuid, e.g. a stale ID a client still uses; matches
-              only requests that carry a topic ID
+              requests that name the topic by name or by ID
   partitions  partition numbers
   group       group ID
   txn_id      transactional ID
   resource    a config resource, quota entity, SCRAM user, log dir,
               feature, member, or ACL name
   top_level   fault the response's top-level error code rather than
-              its entities
+              its entities; selects only on group and txn_id
   error       error name or code, default UNKNOWN_SERVER_ERROR
   count       requests to fault, default 1, -1 until removed
   observe     count matching requests rather than faulting them, so a

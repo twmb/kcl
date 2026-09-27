@@ -105,7 +105,6 @@ func TestRuleFault(t *testing.T) {
 		Group:      "g",
 		TxnID:      "t",
 		Resource:   "r",
-		TopLevel:   true,
 		Error:      "UNKNOWN_TOPIC_ID",
 		Count:      -1,
 	}
@@ -123,8 +122,32 @@ func TestRuleFault(t *testing.T) {
 	if f.Err != kerr.UnknownTopicID {
 		t.Errorf("Err = %v, want UNKNOWN_TOPIC_ID", f.Err)
 	}
-	if f.Topic != "foo" || f.Group != "g" || f.TxnID != "t" || f.Resource != "r" || !f.TopLevel || f.Count != -1 {
+	if f.Topic != "foo" || f.Group != "g" || f.TxnID != "t" || f.Resource != "r" || f.Count != -1 {
 		t.Errorf("fault did not carry the rule through: %+v", f)
+	}
+
+	// kfake panics on a top-level fault that selects on anything but a
+	// group or transactional ID, so we reject it before handing it over.
+	f, err = Rule{Group: "g", TxnID: "t", TopLevel: true}.fault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.TopLevel || f.Group != "g" || f.TxnID != "t" {
+		t.Errorf("fault did not carry the top-level rule through: %+v", f)
+	}
+	// A zero topic ID is kfake's "all topics", which it takes.
+	if _, err := (Rule{TopLevel: true, TopicID: "00000000-0000-0000-0000-000000000000"}).fault(); err != nil {
+		t.Errorf("zero topic_id with top_level: %v", err)
+	}
+	for _, r := range []Rule{
+		{TopLevel: true, Topic: "foo"},
+		{TopLevel: true, TopicID: "465a97c5-9919-152e-1827-030ce374ec71"},
+		{TopLevel: true, Partitions: []int32{0}},
+		{TopLevel: true, Resource: "r"},
+	} {
+		if _, err := r.fault(); err == nil {
+			t.Errorf("%+v: want an error", r)
+		}
 	}
 
 	// An unset error leaves kfake its own default.
@@ -381,8 +404,10 @@ func TestFaultPairsAndJSONInstallTheSame(t *testing.T) {
 		}
 	}
 
-	install(t, "keys=fetch,keys=produce,topic=foo,partitions=0,error=NOT_LEADER_OR_FOLLOWER,count=3,top_level")
-	install(t, `{"keys":["fetch","produce"],"topic":"foo","partitions":[0],"top_level":true,"error":"NOT_LEADER_OR_FOLLOWER","count":3}`)
+	install(t, "keys=fetch,keys=produce,topic=foo,partitions=0,error=NOT_LEADER_OR_FOLLOWER,count=3")
+	install(t, `{"keys":["fetch","produce"],"topic":"foo","partitions":[0],"error":"NOT_LEADER_OR_FOLLOWER","count":3}`)
+	install(t, "keys=joingroup,group=g,top_level,error=COORDINATOR_NOT_AVAILABLE")
+	install(t, `{"keys":["joingroup"],"group":"g","top_level":true,"error":"COORDINATOR_NOT_AVAILABLE"}`)
 
 	resp, err := http.Get(srv.URL + "/faults")
 	if err != nil {
@@ -395,11 +420,13 @@ func TestFaultPairsAndJSONInstallTheSame(t *testing.T) {
 	if err := json.UnmarshalRead(resp.Body, &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Faults) != 2 {
-		t.Fatalf("faults = %+v, want two", got.Faults)
+	if len(got.Faults) != 4 {
+		t.Fatalf("faults = %+v, want four", got.Faults)
 	}
-	if !reflect.DeepEqual(got.Faults[0].Rules, got.Faults[1].Rules) {
-		t.Errorf("pairs installed %+v, JSON installed %+v", got.Faults[0].Rules, got.Faults[1].Rules)
+	for i := 0; i < 4; i += 2 {
+		if !reflect.DeepEqual(got.Faults[i].Rules, got.Faults[i+1].Rules) {
+			t.Errorf("pairs installed %+v, JSON installed %+v", got.Faults[i].Rules, got.Faults[i+1].Rules)
+		}
 	}
 }
 
@@ -653,10 +680,10 @@ func TestFaults(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) == 0 {
+		if len(resp.Topics) != 1 {
 			t.Fatalf("unexpected response shape %+v", resp)
 		}
-		if code := resp.Topics[0].Partitions[0].ErrorCode; code != 17 {
+		if code := resp.Topics[0].ErrorCode; code != 17 {
 			t.Errorf("metadata faulted by topic ID returned %d, want 17", code)
 		}
 	})
@@ -666,6 +693,7 @@ func TestFaults(t *testing.T) {
 			{"rules": []Rule{{Error: "NOT_AN_ERROR"}}},
 			{"rules": []Rule{{Keys: []string{"nope"}}}},
 			{"rules": []Rule{}},
+			{"rules": []Rule{{Topic: "foo", TopLevel: true}}},
 		} {
 			code, got := do(t, http.MethodPost, "/faults", body)
 			if code != http.StatusBadRequest {
