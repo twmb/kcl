@@ -66,6 +66,10 @@ func (r Rule) fault() (kfake.Fault, error) {
 		}
 		f.TopicID = id
 	}
+	// kfake panics on this rather than returning an error.
+	if f.TopLevel && (f.Topic != "" || f.TopicID != [16]byte{} || f.Partitions != nil || f.Resource != "") {
+		return f, errors.New("top_level selects only on group and txn_id")
+	}
 	if r.Error != "" {
 		e, err := parseErrorCode(r.Error)
 		if err != nil {
