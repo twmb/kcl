@@ -61,8 +61,11 @@ func parseAvroRefs(cache *avro.SchemaCache, refs []sr.SchemaReference, fetch ref
 }
 
 func (c *avroCodec) encode(jsonIn []byte, _ []int) ([]byte, error) {
+	// TaggedUnions keeps the branch DecodeJSON reads for each union value,
+	// the branch a tagged value names or the first branch a bare value fits,
+	// so Encode writes that branch rather than picking one from the Go value.
 	var native any
-	if err := c.schema.DecodeJSON(jsonIn, &native); err != nil {
+	if err := c.schema.DecodeJSON(jsonIn, &native, avro.TaggedUnions()); err != nil {
 		return nil, fmt.Errorf("input does not match avro schema: %w", err)
 	}
 	body, err := c.schema.Encode(native)
@@ -73,8 +76,11 @@ func (c *avroCodec) encode(jsonIn []byte, _ []int) ([]byte, error) {
 }
 
 func (c *avroCodec) decode(body []byte, _ []int) ([]byte, error) {
+	// TaggedUnions keeps the branch of each union value, so EncodeJSON writes
+	// each value as the branch it was written with rather than as a branch it
+	// picks from the Go value.
 	var native any
-	if _, err := c.schema.Decode(body, &native); err != nil {
+	if _, err := c.schema.Decode(body, &native, avro.TaggedUnions()); err != nil {
 		return nil, fmt.Errorf("unable to decode avro binary: %w", err)
 	}
 	jsonOut, err := c.schema.EncodeJSON(native)

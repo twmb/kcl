@@ -85,6 +85,15 @@ func TestAvroRoundTrip(t *testing.T) {
 		name, schema, in, want string
 	}{
 		{"record", user, `{"id":"a","age":7}`, `{"id":"a","age":7}`},
+		// A tagged union value is written as the branch it names, and
+		// printed as that branch, even when the value also fits an earlier
+		// branch.
+		{
+			"union-of-two-records",
+			`{"type":"record","name":"Event","fields":[{"name":"e","type":["null",{"type":"record","name":"A","fields":[{"name":"id","type":"string"}]},{"type":"record","name":"B","fields":[{"name":"id","type":"string"},{"name":"n","type":"int"}]}]}]}`,
+			`{"e":{"B":{"id":"x","n":1}}}`,
+			`{"e":{"id":"x","n":1}}`,
+		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			id := register(t, cl, "avro-"+c.name+"-value", sr.Schema{Type: sr.TypeAvro, Schema: c.schema})
