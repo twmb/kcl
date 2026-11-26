@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/twmb/avro"
 	"github.com/twmb/franz-go/pkg/sr"
 )
 
@@ -16,7 +15,6 @@ type Decoder struct {
 	cl    *sr.Client
 	fetch refFetcher
 	mu    sync.Mutex
-	avro  avro.SchemaCache
 	byID  map[int]*decEntry
 }
 
@@ -76,14 +74,14 @@ func (d *Decoder) entryFor(id int) (*decEntry, error) {
 
 	// Fetch the schema and build the codec without holding the lock, so a
 	// concurrent decode of a different id is not blocked on network I/O (the
-	// fetch can recurse into transitive reference fetches). This is safe:
-	// avro.SchemaCache is itself concurrency-safe, and the reference fetcher
-	// talks to the sr client directly rather than re-entering the Decoder.
+	// fetch can recurse into transitive reference fetches). This is safe: the
+	// reference fetcher talks to the sr client directly rather than
+	// re-entering the Decoder.
 	schema, err := d.cl.SchemaByID(context.Background(), id)
 	if err != nil {
 		return nil, fmt.Errorf("unable to fetch schema id %d from registry: %w", id, err)
 	}
-	c, err := buildCodec(&d.avro, schema, d.fetch)
+	c, err := buildCodec(schema, d.fetch)
 	if err != nil {
 		return nil, fmt.Errorf("schema id %d: %w", id, err)
 	}

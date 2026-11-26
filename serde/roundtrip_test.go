@@ -49,16 +49,23 @@ func register(t *testing.T, cl *sr.Client, subject string, s sr.Schema) int {
 	return ss.ID
 }
 
-func roundTrip(t *testing.T, cl *sr.Client, id int, in string) []byte {
+// encode encodes in with the schema of id and returns the wire bytes.
+func encode(t *testing.T, cl *sr.Client, id int, in string) []byte {
 	t.Helper()
 	enc, err := serde.NewEncoder(cl, "", false, serde.Spec{ID: id})
 	if err != nil {
-		t.Fatalf("unable to build encoder: %v", err)
+		t.Fatalf("schema id %d: unable to build encoder: %v", id, err)
 	}
 	wire, err := enc.Encode(nil, []byte(in))
 	if err != nil {
-		t.Fatalf("unable to encode: %v", err)
+		t.Fatalf("schema id %d: unable to encode: %v", id, err)
 	}
+	return wire
+}
+
+func roundTrip(t *testing.T, cl *sr.Client, id int, in string) []byte {
+	t.Helper()
+	wire := encode(t, cl, id, in)
 	// The wire bytes must start with the magic 0 byte and the 4-byte id.
 	if len(wire) < 5 || wire[0] != 0 {
 		t.Fatalf("encoded bytes missing SR header: %x", wire)
@@ -73,13 +80,36 @@ func roundTrip(t *testing.T, cl *sr.Client, id int, in string) []byte {
 
 func TestAvroRoundTrip(t *testing.T) {
 	cl, _ := newClient(t)
-	id := register(t, cl, "avro-value", sr.Schema{
+	const user = `{"type":"record","name":"User","fields":[{"name":"id","type":"string"},{"name":"age","type":"int"}]}`
+	for _, c := range []struct {
+		name, schema, in, want string
+	}{
+		{"record", user, `{"id":"a","age":7}`, `{"id":"a","age":7}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			id := register(t, cl, "avro-"+c.name+"-value", sr.Schema{Type: sr.TypeAvro, Schema: c.schema})
+			jsonEqual(t, []byte(c.want), roundTrip(t, cl, id, c.in))
+		})
+	}
+
+	// One Decoder decodes both versions of an evolved subject, which define
+	// the same record name.
+	id1 := register(t, cl, "avro-value", sr.Schema{Type: sr.TypeAvro, Schema: user})
+	id2 := register(t, cl, "avro-value", sr.Schema{
 		Type:   sr.TypeAvro,
-		Schema: `{"type":"record","name":"User","fields":[{"name":"id","type":"string"},{"name":"age","type":"int"}]}`,
+		Schema: `{"type":"record","name":"User","fields":[{"name":"id","type":"string"},{"name":"age","type":"int"},{"name":"email","type":"string","default":""}]}`,
 	})
-	const in = `{"id":"a","age":7}`
-	out := roundTrip(t, cl, id, in)
-	jsonEqual(t, []byte(in), out)
+	dec := serde.NewDecoder(cl)
+	for _, c := range []struct {
+		id int
+		in string
+	}{{id1, `{"id":"a","age":7}`}, {id2, `{"id":"b","age":8,"email":"e"}`}} {
+		out, err := dec.Decode(encode(t, cl, c.id, c.in))
+		if err != nil {
+			t.Fatalf("schema id %d: unable to decode with the shared Decoder: %v", c.id, err)
+		}
+		jsonEqual(t, []byte(c.in), out)
+	}
 }
 
 func TestJSONSchemaRoundTrip(t *testing.T) {

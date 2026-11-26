@@ -16,11 +16,17 @@ type avroCodec struct {
 	schema *avro.Schema
 }
 
-func newAvroCodec(cache *avro.SchemaCache, schemaText string, refs []sr.SchemaReference, fetch refFetcher) (*avroCodec, error) {
+func newAvroCodec(schemaText string, refs []sr.SchemaReference, fetch refFetcher) (*avroCodec, error) {
+	// Each codec parses into a cache of its own. A cache refuses a second
+	// schema that defines a name the cache already has, even with the same
+	// definition, and two schemas from one registry often define the same
+	// name, such as two versions of one subject.
+	//
 	// Referenced schemas define named types this schema uses. They must be
-	// parsed into the shared cache (dependencies first) before this schema so
-	// the named types resolve.
-	if err := parseAvroRefs(cache, refs, fetch, map[string]bool{}); err != nil {
+	// parsed into the cache (dependencies first) before this schema so the
+	// named types resolve.
+	var cache avro.SchemaCache
+	if err := parseAvroRefs(&cache, refs, fetch, map[string]bool{}); err != nil {
 		return nil, err
 	}
 	schema, err := cache.Parse(schemaText)
