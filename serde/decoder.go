@@ -21,6 +21,7 @@ type Decoder struct {
 type decEntry struct {
 	typ   sr.SchemaType
 	codec codec
+	err   error // the schema did not build; every record with this id fails
 }
 
 // NewDecoder returns a Decoder that resolves schemas via cl.
@@ -69,6 +70,9 @@ func (d *Decoder) entryFor(id int) (*decEntry, error) {
 	e, ok := d.byID[id]
 	d.mu.Unlock()
 	if ok {
+		if e.err != nil {
+			return nil, e.err
+		}
 		return e, nil
 	}
 
@@ -81,11 +85,24 @@ func (d *Decoder) entryFor(id int) (*decEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("unable to fetch schema id %d from registry: %w", id, err)
 	}
-	c, err := buildCodec(schema, d.fetch)
+	// A schema that fails to build fails the same way for every record with
+	// its id, so we remember the error. A failed fetch can succeed on a later
+	// record, so we do not.
+	var fetchFailed bool
+	c, err := buildCodec(schema, func(subject string, version int) (sr.Schema, error) {
+		rs, err := d.fetch(subject, version)
+		fetchFailed = fetchFailed || err != nil
+		return rs, err
+	})
 	if err != nil {
-		return nil, fmt.Errorf("schema id %d: %w", id, err)
+		err = fmt.Errorf("schema id %d: %w", id, err)
+		if fetchFailed {
+			return nil, err
+		}
+		e = &decEntry{err: err}
+	} else {
+		e = &decEntry{typ: schema.Type, codec: c}
 	}
-	e = &decEntry{typ: schema.Type, codec: c}
 
 	// Cache it, deferring to a concurrent insert of the same id.
 	d.mu.Lock()
@@ -95,5 +112,8 @@ func (d *Decoder) entryFor(id int) (*decEntry, error) {
 		d.byID[id] = e
 	}
 	d.mu.Unlock()
+	if e.err != nil {
+		return nil, e.err
+	}
 	return e, nil
 }

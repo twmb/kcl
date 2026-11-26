@@ -3,7 +3,9 @@ package serde_test
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"reflect"
+	"sync/atomic"
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/sr"
@@ -79,7 +81,7 @@ func roundTrip(t *testing.T, cl *sr.Client, id int, in string) []byte {
 }
 
 func TestAvroRoundTrip(t *testing.T) {
-	cl, _ := newClient(t)
+	cl, reg := newClient(t)
 	const user = `{"type":"record","name":"User","fields":[{"name":"id","type":"string"},{"name":"age","type":"int"}]}`
 	for _, c := range []struct {
 		name, schema, in, want string
@@ -118,6 +120,28 @@ func TestAvroRoundTrip(t *testing.T) {
 			t.Fatalf("schema id %d: unable to decode with the shared Decoder: %v", c.id, err)
 		}
 		jsonEqual(t, []byte(c.in), out)
+	}
+
+	// The Decoder fetches a schema id that fails to parse once, not once per
+	// record.
+	reg.SeedSchema("avro-bad-value", 1, 100, sr.Schema{
+		Type:   sr.TypeAvro,
+		Schema: `{"type":"record","name":"Bad","fields":[{"name":"a","type":"nope"}]}`,
+	})
+	var fetches atomic.Int32
+	reg.Intercept(func(_ http.ResponseWriter, r *http.Request) bool {
+		if r.URL.Path == "/schemas/ids/100" {
+			fetches.Add(1)
+		}
+		return false
+	})
+	for range 2 {
+		if _, err := dec.Decode([]byte{0, 0, 0, 0, 100, 0}); err == nil {
+			t.Fatal("decoding with a schema that does not parse: got no error")
+		}
+	}
+	if n := fetches.Load(); n != 1 {
+		t.Errorf("a schema id that fails to parse was fetched %d times for two records, want 1", n)
 	}
 }
 
