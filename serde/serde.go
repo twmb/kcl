@@ -44,10 +44,10 @@ type refFetcher func(subject string, version int) (sr.Schema, error)
 // fetched from the registry and fed to the parser (Avro named types, Protobuf
 // imports, JSON Schema $refs) so a schema that references others can encode and
 // decode. fetch may be nil only for schemas with no references.
-func buildCodec(schema sr.Schema, fetch refFetcher) (codec, error) {
+func buildCodec(schema sr.Schema, fetch refFetcher, tagAvroUnions bool) (codec, error) {
 	switch schema.Type {
 	case sr.TypeAvro:
-		return newAvroCodec(schema.Schema, schema.References, fetch)
+		return newAvroCodec(schema.Schema, schema.References, fetch, tagAvroUnions)
 	case sr.TypeJSON:
 		return newJSONCodec(schema.Schema, schema.References, fetch)
 	case sr.TypeProtobuf:

@@ -14,9 +14,11 @@ import (
 // reverse, decoding Avro binary into a native value and encoding it as JSON.
 type avroCodec struct {
 	schema *avro.Schema
+	// tagUnions has decode print each union value as {"branch": value}.
+	tagUnions bool
 }
 
-func newAvroCodec(schemaText string, refs []sr.SchemaReference, fetch refFetcher) (*avroCodec, error) {
+func newAvroCodec(schemaText string, refs []sr.SchemaReference, fetch refFetcher, tagUnions bool) (*avroCodec, error) {
 	// Each codec parses into a cache of its own. A cache refuses a second
 	// schema that defines a name the cache already has, even with the same
 	// definition, and two schemas from one registry often define the same
@@ -33,7 +35,7 @@ func newAvroCodec(schemaText string, refs []sr.SchemaReference, fetch refFetcher
 	if err != nil {
 		return nil, fmt.Errorf("unable to parse avro schema: %w", err)
 	}
-	return &avroCodec{schema: schema}, nil
+	return &avroCodec{schema: schema, tagUnions: tagUnions}, nil
 }
 
 func parseAvroRefs(cache *avro.SchemaCache, refs []sr.SchemaReference, fetch refFetcher, seen map[string]bool) error {
@@ -83,7 +85,11 @@ func (c *avroCodec) decode(body []byte, _ []int) ([]byte, error) {
 	if _, err := c.schema.Decode(body, &native, avro.TaggedUnions()); err != nil {
 		return nil, fmt.Errorf("unable to decode avro binary: %w", err)
 	}
-	jsonOut, err := c.schema.EncodeJSON(native)
+	var opts []avro.Opt
+	if c.tagUnions {
+		opts = append(opts, avro.TaggedUnions())
+	}
+	jsonOut, err := c.schema.EncodeJSON(native, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("unable to encode avro value as JSON: %w", err)
 	}

@@ -12,10 +12,11 @@ import (
 // caches schemas by id from the registry as it encounters them, so a single
 // Decoder can decode a stream of records referencing many schemas.
 type Decoder struct {
-	cl    *sr.Client
-	fetch refFetcher
-	mu    sync.Mutex
-	byID  map[int]*decEntry
+	cl            *sr.Client
+	fetch         refFetcher
+	tagAvroUnions bool
+	mu            sync.Mutex
+	byID          map[int]*decEntry
 }
 
 type decEntry struct {
@@ -24,12 +25,15 @@ type decEntry struct {
 	err   error // the schema did not build; every record with this id fails
 }
 
-// NewDecoder returns a Decoder that resolves schemas via cl.
-func NewDecoder(cl *sr.Client) *Decoder {
+// NewDecoder returns a Decoder that resolves schemas via cl. With
+// tagAvroUnions, the Decoder prints each Avro union value in the Avro spec's
+// tagged JSON form, {"branch": value}, which names the branch.
+func NewDecoder(cl *sr.Client, tagAvroUnions bool) *Decoder {
 	return &Decoder{
-		cl:    cl,
-		fetch: clientRefFetcher(cl),
-		byID:  make(map[int]*decEntry),
+		cl:            cl,
+		fetch:         clientRefFetcher(cl),
+		tagAvroUnions: tagAvroUnions,
+		byID:          make(map[int]*decEntry),
 	}
 }
 
@@ -93,7 +97,7 @@ func (d *Decoder) entryFor(id int) (*decEntry, error) {
 		rs, err := d.fetch(subject, version)
 		fetchFailed = fetchFailed || err != nil
 		return rs, err
-	})
+	}, d.tagAvroUnions)
 	if err != nil {
 		err = fmt.Errorf("schema id %d: %w", id, err)
 		if fetchFailed {

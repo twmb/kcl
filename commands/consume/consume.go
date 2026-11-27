@@ -67,6 +67,8 @@ type consumption struct {
 	protoMessage string
 
 	decode []string // schema-registry decode: "key" and/or "value"
+
+	avroTaggedUnions bool // with decode: print Avro union values tagged
 }
 
 // Command returns a consume command.
@@ -336,12 +338,15 @@ func (c *consumption) run(topics []string) error {
 			return out.Errf(out.ExitUsage, "invalid --decode %q: want key or value", d)
 		}
 	}
+	if c.avroTaggedUnions && !decodeValue && !decodeKey {
+		return out.Errf(out.ExitUsage, "--avro-tagged-unions is only valid with --decode")
+	}
 	if decodeValue || decodeKey {
 		scl, err := c.cl.SchemaRegistryClient()
 		if err != nil {
 			return out.Errf(out.ExitUsage, "%v", err)
 		}
-		co.dec = serde.NewDecoder(scl)
+		co.dec = serde.NewDecoder(scl, c.avroTaggedUnions)
 		co.decodeValue = decodeValue
 		co.decodeKey = decodeKey
 	}

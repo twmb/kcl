@@ -72,7 +72,7 @@ func roundTrip(t *testing.T, cl *sr.Client, id int, in string) []byte {
 	if len(wire) < 5 || wire[0] != 0 {
 		t.Fatalf("encoded bytes missing SR header: %x", wire)
 	}
-	dec := serde.NewDecoder(cl)
+	dec := serde.NewDecoder(cl, false)
 	out, err := dec.Decode(wire)
 	if err != nil {
 		t.Fatalf("unable to decode: %v", err)
@@ -83,23 +83,25 @@ func roundTrip(t *testing.T, cl *sr.Client, id int, in string) []byte {
 func TestAvroRoundTrip(t *testing.T) {
 	cl, reg := newClient(t)
 	const user = `{"type":"record","name":"User","fields":[{"name":"id","type":"string"},{"name":"age","type":"int"}]}`
+	const event = `{"type":"record","name":"Event","fields":[{"name":"e","type":["null",{"type":"record","name":"A","fields":[{"name":"id","type":"string"}]},{"type":"record","name":"B","fields":[{"name":"id","type":"string"},{"name":"n","type":"int"}]}]}]}`
 	for _, c := range []struct {
 		name, schema, in, want string
+		tagged                 bool // the Decoder prints union values tagged
 	}{
-		{"record", user, `{"id":"a","age":7}`, `{"id":"a","age":7}`},
+		{"record", user, `{"id":"a","age":7}`, `{"id":"a","age":7}`, false},
 		// A tagged union value is written as the branch it names, and
 		// printed as that branch, even when the value also fits an earlier
 		// branch.
-		{
-			"union-of-two-records",
-			`{"type":"record","name":"Event","fields":[{"name":"e","type":["null",{"type":"record","name":"A","fields":[{"name":"id","type":"string"}]},{"type":"record","name":"B","fields":[{"name":"id","type":"string"},{"name":"n","type":"int"}]}]}]}`,
-			`{"e":{"B":{"id":"x","n":1}}}`,
-			`{"e":{"id":"x","n":1}}`,
-		},
+		{"union-of-two-records", event, `{"e":{"B":{"id":"x","n":1}}}`, `{"e":{"id":"x","n":1}}`, false},
+		{"union-of-two-records-tagged", event, `{"e":{"B":{"id":"x","n":1}}}`, `{"e":{"B":{"id":"x","n":1}}}`, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			id := register(t, cl, "avro-"+c.name+"-value", sr.Schema{Type: sr.TypeAvro, Schema: c.schema})
-			jsonEqual(t, []byte(c.want), roundTrip(t, cl, id, c.in))
+			out, err := serde.NewDecoder(cl, c.tagged).Decode(encode(t, cl, id, c.in))
+			if err != nil {
+				t.Fatalf("unable to decode: %v", err)
+			}
+			jsonEqual(t, []byte(c.want), out)
 		})
 	}
 
@@ -110,7 +112,7 @@ func TestAvroRoundTrip(t *testing.T) {
 		Type:   sr.TypeAvro,
 		Schema: `{"type":"record","name":"User","fields":[{"name":"id","type":"string"},{"name":"age","type":"int"},{"name":"email","type":"string","default":""}]}`,
 	})
-	dec := serde.NewDecoder(cl)
+	dec := serde.NewDecoder(cl, false)
 	for _, c := range []struct {
 		id int
 		in string
@@ -219,7 +221,7 @@ func TestProtobufReferences(t *testing.T) {
 
 func TestDecodeNonSRBytesReturnsBadHeader(t *testing.T) {
 	cl, _ := newClient(t)
-	dec := serde.NewDecoder(cl)
+	dec := serde.NewDecoder(cl, false)
 	if _, err := dec.Decode([]byte("not sr framed")); err == nil {
 		t.Fatal("expected an error decoding non-SR bytes")
 	}
@@ -242,7 +244,7 @@ func TestProtobufMessageByName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	out, err := serde.NewDecoder(cl).Decode(wire)
+	out, err := serde.NewDecoder(cl, false).Decode(wire)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -318,7 +320,7 @@ func TestEncodeBySubjectVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	dec := serde.NewDecoder(cl)
+	dec := serde.NewDecoder(cl, false)
 	out, err := dec.Decode(wire)
 	if err != nil {
 		t.Fatalf("decode: %v", err)

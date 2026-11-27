@@ -95,7 +95,7 @@ func NewEncoder(cl *sr.Client, topic string, isKey bool, spec Spec) (*Encoder, e
 		id, schema = ss.ID, ss.Schema
 	}
 
-	c, err := buildCodec(schema, clientRefFetcher(cl))
+	c, err := buildCodec(schema, clientRefFetcher(cl), false)
 	if err != nil {
 		return nil, err
 	}
