@@ -50,7 +50,7 @@ func (c *consumption) command() *cobra.Command {
 	cmd.Flags().StringVar(&c.protoMessage, "proto-message", "", "the proto.message structure in --proto-file to use for decoding, requires --proto-file")
 	cmd.Flags().StringSliceVar(&c.decode, "decode", nil, "decode key and/or value from the Schema Registry wire format to JSON; bare --decode does both, or --decode=key / --decode=value (uses -R/--registry)")
 	cmd.Flags().Lookup("decode").NoOptDefVal = "key,value"
-	cmd.Flags().BoolVar(&c.avroTaggedUnions, "avro-tagged-unions", false, "with --decode, print each Avro union value as {\"branch\": value}, which names the branch so kcl produce writes the same branch back; the default prints the bare value")
+	cmd.Flags().BoolVar(&c.tagUnions, "tag-unions", false, "with --decode, print each Avro union value as {\"branch\": value}, which names the branch so kcl produce writes the same branch back; the default prints the bare value")
 	cmd.MarkFlagsRequiredTogether("proto-file", "proto-message")
 	return cmd
 }
@@ -244,8 +244,8 @@ verbs, so all the usual formatting still applies:
   kcl consume mytopic --decode=value -f '%k -> %v\n'
 
 An Avro union value prints bare by default: "x" for a ["null","string"] value.
---avro-tagged-unions prints it in the Avro spec's tagged form, {"string":"x"},
-which names the branch, so kcl produce writes back the same branch.
+--tag-unions prints it in the Avro spec's tagged form, {"string":"x"}, which
+names the branch, so kcl produce writes back the same branch.
 
 
 REMARKS
