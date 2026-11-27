@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/twmb/avro"
 	"github.com/twmb/franz-go/pkg/sr"
 )
 
@@ -13,24 +12,28 @@ import (
 // caches schemas by id from the registry as it encounters them, so a single
 // Decoder can decode a stream of records referencing many schemas.
 type Decoder struct {
-	cl    *sr.Client
-	fetch refFetcher
-	mu    sync.Mutex
-	avro  avro.SchemaCache
-	byID  map[int]*decEntry
+	cl            *sr.Client
+	fetch         refFetcher
+	tagAvroUnions bool
+	mu            sync.Mutex
+	byID          map[int]*decEntry
 }
 
 type decEntry struct {
 	typ   sr.SchemaType
 	codec codec
+	err   error // the schema did not build; every record with this id fails
 }
 
-// NewDecoder returns a Decoder that resolves schemas via cl.
-func NewDecoder(cl *sr.Client) *Decoder {
+// NewDecoder returns a Decoder that resolves schemas via cl. With
+// tagAvroUnions, the Decoder prints each Avro union value in the Avro spec's
+// tagged JSON form, {"branch": value}, which names the branch.
+func NewDecoder(cl *sr.Client, tagAvroUnions bool) *Decoder {
 	return &Decoder{
-		cl:    cl,
-		fetch: clientRefFetcher(cl),
-		byID:  make(map[int]*decEntry),
+		cl:            cl,
+		fetch:         clientRefFetcher(cl),
+		tagAvroUnions: tagAvroUnions,
+		byID:          make(map[int]*decEntry),
 	}
 }
 
@@ -71,23 +74,39 @@ func (d *Decoder) entryFor(id int) (*decEntry, error) {
 	e, ok := d.byID[id]
 	d.mu.Unlock()
 	if ok {
+		if e.err != nil {
+			return nil, e.err
+		}
 		return e, nil
 	}
 
 	// Fetch the schema and build the codec without holding the lock, so a
 	// concurrent decode of a different id is not blocked on network I/O (the
-	// fetch can recurse into transitive reference fetches). This is safe:
-	// avro.SchemaCache is itself concurrency-safe, and the reference fetcher
-	// talks to the sr client directly rather than re-entering the Decoder.
+	// fetch can recurse into transitive reference fetches). This is safe: the
+	// reference fetcher talks to the sr client directly rather than
+	// re-entering the Decoder.
 	schema, err := d.cl.SchemaByID(context.Background(), id)
 	if err != nil {
 		return nil, fmt.Errorf("unable to fetch schema id %d from registry: %w", id, err)
 	}
-	c, err := buildCodec(&d.avro, schema, d.fetch)
+	// A schema that fails to build fails the same way for every record with
+	// its id, so we remember the error. A failed fetch can succeed on a later
+	// record, so we do not.
+	var fetchFailed bool
+	c, err := buildCodec(schema, func(subject string, version int) (sr.Schema, error) {
+		rs, err := d.fetch(subject, version)
+		fetchFailed = fetchFailed || err != nil
+		return rs, err
+	}, d.tagAvroUnions)
 	if err != nil {
-		return nil, fmt.Errorf("schema id %d: %w", id, err)
+		err = fmt.Errorf("schema id %d: %w", id, err)
+		if fetchFailed {
+			return nil, err
+		}
+		e = &decEntry{err: err}
+	} else {
+		e = &decEntry{typ: schema.Type, codec: c}
 	}
-	e = &decEntry{typ: schema.Type, codec: c}
 
 	// Cache it, deferring to a concurrent insert of the same id.
 	d.mu.Lock()
@@ -97,5 +116,8 @@ func (d *Decoder) entryFor(id int) (*decEntry, error) {
 		d.byID[id] = e
 	}
 	d.mu.Unlock()
+	if e.err != nil {
+		return nil, e.err
+	}
 	return e, nil
 }

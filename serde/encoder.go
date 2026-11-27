@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/twmb/avro"
 	"github.com/twmb/franz-go/pkg/sr"
 )
 
@@ -49,7 +48,6 @@ type Encoder struct {
 // is given; isKey selects "-key" vs "-value".
 func NewEncoder(cl *sr.Client, topic string, isKey bool, spec Spec) (*Encoder, error) {
 	ctx := context.Background()
-	var cache avro.SchemaCache
 
 	// Exactly one resolution path: id, explicit subject, or topic strategy.
 	set := 0
@@ -97,7 +95,7 @@ func NewEncoder(cl *sr.Client, topic string, isKey bool, spec Spec) (*Encoder, e
 		id, schema = ss.ID, ss.Schema
 	}
 
-	c, err := buildCodec(&cache, schema, clientRefFetcher(cl))
+	c, err := buildCodec(schema, clientRefFetcher(cl), false)
 	if err != nil {
 		return nil, err
 	}

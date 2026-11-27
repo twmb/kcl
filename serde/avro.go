@@ -14,20 +14,28 @@ import (
 // reverse, decoding Avro binary into a native value and encoding it as JSON.
 type avroCodec struct {
 	schema *avro.Schema
+	// tagUnions has decode print each union value as {"branch": value}.
+	tagUnions bool
 }
 
-func newAvroCodec(cache *avro.SchemaCache, schemaText string, refs []sr.SchemaReference, fetch refFetcher) (*avroCodec, error) {
+func newAvroCodec(schemaText string, refs []sr.SchemaReference, fetch refFetcher, tagUnions bool) (*avroCodec, error) {
+	// Each codec parses into a cache of its own. A cache refuses a second
+	// schema that defines a name the cache already has, even with the same
+	// definition, and two schemas from one registry often define the same
+	// name, such as two versions of one subject.
+	//
 	// Referenced schemas define named types this schema uses. They must be
-	// parsed into the shared cache (dependencies first) before this schema so
-	// the named types resolve.
-	if err := parseAvroRefs(cache, refs, fetch, map[string]bool{}); err != nil {
+	// parsed into the cache (dependencies first) before this schema so the
+	// named types resolve.
+	var cache avro.SchemaCache
+	if err := parseAvroRefs(&cache, refs, fetch, map[string]bool{}); err != nil {
 		return nil, err
 	}
 	schema, err := cache.Parse(schemaText)
 	if err != nil {
 		return nil, fmt.Errorf("unable to parse avro schema: %w", err)
 	}
-	return &avroCodec{schema: schema}, nil
+	return &avroCodec{schema: schema, tagUnions: tagUnions}, nil
 }
 
 func parseAvroRefs(cache *avro.SchemaCache, refs []sr.SchemaReference, fetch refFetcher, seen map[string]bool) error {
@@ -55,8 +63,11 @@ func parseAvroRefs(cache *avro.SchemaCache, refs []sr.SchemaReference, fetch ref
 }
 
 func (c *avroCodec) encode(jsonIn []byte, _ []int) ([]byte, error) {
+	// TaggedUnions keeps the branch DecodeJSON reads for each union value,
+	// the branch a tagged value names or the first branch a bare value fits,
+	// so Encode writes that branch rather than picking one from the Go value.
 	var native any
-	if err := c.schema.DecodeJSON(jsonIn, &native); err != nil {
+	if err := c.schema.DecodeJSON(jsonIn, &native, avro.TaggedUnions()); err != nil {
 		return nil, fmt.Errorf("input does not match avro schema: %w", err)
 	}
 	body, err := c.schema.Encode(native)
@@ -67,11 +78,18 @@ func (c *avroCodec) encode(jsonIn []byte, _ []int) ([]byte, error) {
 }
 
 func (c *avroCodec) decode(body []byte, _ []int) ([]byte, error) {
+	// TaggedUnions keeps the branch of each union value, so EncodeJSON writes
+	// each value as the branch it was written with rather than as a branch it
+	// picks from the Go value.
 	var native any
-	if _, err := c.schema.Decode(body, &native); err != nil {
+	if _, err := c.schema.Decode(body, &native, avro.TaggedUnions()); err != nil {
 		return nil, fmt.Errorf("unable to decode avro binary: %w", err)
 	}
-	jsonOut, err := c.schema.EncodeJSON(native)
+	var opts []avro.Opt
+	if c.tagUnions {
+		opts = append(opts, avro.TaggedUnions())
+	}
+	jsonOut, err := c.schema.EncodeJSON(native, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("unable to encode avro value as JSON: %w", err)
 	}

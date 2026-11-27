@@ -3,7 +3,9 @@ package serde_test
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"reflect"
+	"sync/atomic"
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/sr"
@@ -49,21 +51,28 @@ func register(t *testing.T, cl *sr.Client, subject string, s sr.Schema) int {
 	return ss.ID
 }
 
-func roundTrip(t *testing.T, cl *sr.Client, id int, in string) []byte {
+// encode encodes in with the schema of id and returns the wire bytes.
+func encode(t *testing.T, cl *sr.Client, id int, in string) []byte {
 	t.Helper()
 	enc, err := serde.NewEncoder(cl, "", false, serde.Spec{ID: id})
 	if err != nil {
-		t.Fatalf("unable to build encoder: %v", err)
+		t.Fatalf("schema id %d: unable to build encoder: %v", id, err)
 	}
 	wire, err := enc.Encode(nil, []byte(in))
 	if err != nil {
-		t.Fatalf("unable to encode: %v", err)
+		t.Fatalf("schema id %d: unable to encode: %v", id, err)
 	}
+	return wire
+}
+
+func roundTrip(t *testing.T, cl *sr.Client, id int, in string) []byte {
+	t.Helper()
+	wire := encode(t, cl, id, in)
 	// The wire bytes must start with the magic 0 byte and the 4-byte id.
 	if len(wire) < 5 || wire[0] != 0 {
 		t.Fatalf("encoded bytes missing SR header: %x", wire)
 	}
-	dec := serde.NewDecoder(cl)
+	dec := serde.NewDecoder(cl, false)
 	out, err := dec.Decode(wire)
 	if err != nil {
 		t.Fatalf("unable to decode: %v", err)
@@ -72,14 +81,70 @@ func roundTrip(t *testing.T, cl *sr.Client, id int, in string) []byte {
 }
 
 func TestAvroRoundTrip(t *testing.T) {
-	cl, _ := newClient(t)
-	id := register(t, cl, "avro-value", sr.Schema{
+	cl, reg := newClient(t)
+	const user = `{"type":"record","name":"User","fields":[{"name":"id","type":"string"},{"name":"age","type":"int"}]}`
+	const event = `{"type":"record","name":"Event","fields":[{"name":"e","type":["null",{"type":"record","name":"A","fields":[{"name":"id","type":"string"}]},{"type":"record","name":"B","fields":[{"name":"id","type":"string"},{"name":"n","type":"int"}]}]}]}`
+	for _, c := range []struct {
+		name, schema, in, want string
+		tagged                 bool // the Decoder prints union values tagged
+	}{
+		{"record", user, `{"id":"a","age":7}`, `{"id":"a","age":7}`, false},
+		// A tagged union value is written as the branch it names, and
+		// printed as that branch, even when the value also fits an earlier
+		// branch.
+		{"union-of-two-records", event, `{"e":{"B":{"id":"x","n":1}}}`, `{"e":{"id":"x","n":1}}`, false},
+		{"union-of-two-records-tagged", event, `{"e":{"B":{"id":"x","n":1}}}`, `{"e":{"B":{"id":"x","n":1}}}`, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			id := register(t, cl, "avro-"+c.name+"-value", sr.Schema{Type: sr.TypeAvro, Schema: c.schema})
+			out, err := serde.NewDecoder(cl, c.tagged).Decode(encode(t, cl, id, c.in))
+			if err != nil {
+				t.Fatalf("unable to decode: %v", err)
+			}
+			jsonEqual(t, []byte(c.want), out)
+		})
+	}
+
+	// One Decoder decodes both versions of an evolved subject, which define
+	// the same record name.
+	id1 := register(t, cl, "avro-value", sr.Schema{Type: sr.TypeAvro, Schema: user})
+	id2 := register(t, cl, "avro-value", sr.Schema{
 		Type:   sr.TypeAvro,
-		Schema: `{"type":"record","name":"User","fields":[{"name":"id","type":"string"},{"name":"age","type":"int"}]}`,
+		Schema: `{"type":"record","name":"User","fields":[{"name":"id","type":"string"},{"name":"age","type":"int"},{"name":"email","type":"string","default":""}]}`,
 	})
-	const in = `{"id":"a","age":7}`
-	out := roundTrip(t, cl, id, in)
-	jsonEqual(t, []byte(in), out)
+	dec := serde.NewDecoder(cl, false)
+	for _, c := range []struct {
+		id int
+		in string
+	}{{id1, `{"id":"a","age":7}`}, {id2, `{"id":"b","age":8,"email":"e"}`}} {
+		out, err := dec.Decode(encode(t, cl, c.id, c.in))
+		if err != nil {
+			t.Fatalf("schema id %d: unable to decode with the shared Decoder: %v", c.id, err)
+		}
+		jsonEqual(t, []byte(c.in), out)
+	}
+
+	// The Decoder fetches a schema id that fails to parse once, not once per
+	// record.
+	reg.SeedSchema("avro-bad-value", 1, 100, sr.Schema{
+		Type:   sr.TypeAvro,
+		Schema: `{"type":"record","name":"Bad","fields":[{"name":"a","type":"nope"}]}`,
+	})
+	var fetches atomic.Int32
+	reg.Intercept(func(_ http.ResponseWriter, r *http.Request) bool {
+		if r.URL.Path == "/schemas/ids/100" {
+			fetches.Add(1)
+		}
+		return false
+	})
+	for range 2 {
+		if _, err := dec.Decode([]byte{0, 0, 0, 0, 100, 0}); err == nil {
+			t.Fatal("decoding with a schema that does not parse: got no error")
+		}
+	}
+	if n := fetches.Load(); n != 1 {
+		t.Errorf("a schema id that fails to parse was fetched %d times for two records, want 1", n)
+	}
 }
 
 func TestJSONSchemaRoundTrip(t *testing.T) {
@@ -156,7 +221,7 @@ func TestProtobufReferences(t *testing.T) {
 
 func TestDecodeNonSRBytesReturnsBadHeader(t *testing.T) {
 	cl, _ := newClient(t)
-	dec := serde.NewDecoder(cl)
+	dec := serde.NewDecoder(cl, false)
 	if _, err := dec.Decode([]byte("not sr framed")); err == nil {
 		t.Fatal("expected an error decoding non-SR bytes")
 	}
@@ -179,7 +244,7 @@ func TestProtobufMessageByName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	out, err := serde.NewDecoder(cl).Decode(wire)
+	out, err := serde.NewDecoder(cl, false).Decode(wire)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -255,7 +320,7 @@ func TestEncodeBySubjectVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	dec := serde.NewDecoder(cl)
+	dec := serde.NewDecoder(cl, false)
 	out, err := dec.Decode(wire)
 	if err != nil {
 		t.Fatalf("decode: %v", err)

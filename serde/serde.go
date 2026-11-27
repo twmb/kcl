@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/twmb/avro"
 	"github.com/twmb/franz-go/pkg/sr"
 )
 
@@ -39,16 +38,16 @@ type codec interface {
 type refFetcher func(subject string, version int) (sr.Schema, error)
 
 // buildCodec constructs a codec for a schema fetched from (or destined for)
-// the registry. The Avro cache is shared so repeated schemas parse once.
+// the registry.
 //
 // schema.References are resolved transitively via fetch: referenced schemas are
 // fetched from the registry and fed to the parser (Avro named types, Protobuf
 // imports, JSON Schema $refs) so a schema that references others can encode and
 // decode. fetch may be nil only for schemas with no references.
-func buildCodec(cache *avro.SchemaCache, schema sr.Schema, fetch refFetcher) (codec, error) {
+func buildCodec(schema sr.Schema, fetch refFetcher, tagAvroUnions bool) (codec, error) {
 	switch schema.Type {
 	case sr.TypeAvro:
-		return newAvroCodec(cache, schema.Schema, schema.References, fetch)
+		return newAvroCodec(schema.Schema, schema.References, fetch, tagAvroUnions)
 	case sr.TypeJSON:
 		return newJSONCodec(schema.Schema, schema.References, fetch)
 	case sr.TypeProtobuf:
